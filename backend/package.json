@@ -1,0 +1,32 @@
+{
+  "name": "@slyxup-motion/backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test 'test/*.test.ts'",
+    "skills:sync": "node scripts/sync-remotion-skills.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^2.0.131",
+    "@hono/zod-validator": "^0.9.1",
+    "@slyxup/core": "^3.0.1",
+    "ai": "^5.0.269",
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.13.9",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260927.1",
+    "drizzle-kit": "^0.31.11",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.128.0"
+  }
+}

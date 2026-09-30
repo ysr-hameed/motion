@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "slyxup-motion-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "AI_PROVIDER": "gateway",
+    "AI_MODEL": "alibaba/qwen3.7-flash",
+    "AUTH_API_URL": "https://auth-slyxup-com.auth-0f4.workers.dev",
+    "ALLOW_ANON": "true"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "slyxup-motion-db",
+      "database_id": "local-dev-only",
+      "migrations_dir": "drizzle"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "REFS",
+      "bucket_name": "slyxup-motion-refs"
+    }
+  ]
+}

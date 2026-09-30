@@ -1,0 +1,21 @@
+{
+  "name": "@slyxup-motion/motion",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c magenta,cyan \"pnpm run dev:backend\" \"pnpm run dev:frontend\"",
+    "dev:backend": "pnpm -C backend dev",
+    "dev:frontend": "pnpm -C frontend dev",
+    "build": "pnpm -C frontend build",
+    "lint": "pnpm -C frontend lint",
+    "check": "pnpm -C backend check",
+    "types": "pnpm -C backend types",
+    "db:generate": "pnpm -C backend db:generate",
+    "db:migrate:local": "pnpm -C backend db:migrate:local",
+    "db:migrate:remote": "pnpm -C backend db:migrate:remote"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
