@@ -20,7 +20,7 @@ import { zoomInOut } from "@remotion/transitions/zoom-in-out"
 import { crossZoom } from "@remotion/transitions/cross-zoom"
 import * as Shapes from "@remotion/shapes"
 import * as Paths from "@remotion/paths"
-import { Trail } from "@remotion/motion-blur"
+import { CameraMotionBlur, HtmlInCanvasMotionBlur, Trail } from "@remotion/motion-blur"
 import * as Noise from "@remotion/noise"
 import * as Lucide from "lucide-react"
 
@@ -74,6 +74,8 @@ export const SCOPE: Record<string, unknown> = {
   Freeze: Remotion.Freeze,
   IFrame: Remotion.IFrame,
   Img: Remotion.Img,
+  CanvasImage: Remotion.CanvasImage,
+  HtmlInCanvas: Remotion.HtmlInCanvas,
   Video: Remotion.Video,
   OffthreadVideo: Remotion.OffthreadVideo,
   Audio: Remotion.Audio,
@@ -142,6 +144,8 @@ export const SCOPE: Record<string, unknown> = {
 
   // Motion blur
   Trail,
+  CameraMotionBlur,
+  HtmlInCanvasMotionBlur,
 
   // Noise
   ...Noise,

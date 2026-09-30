@@ -7,6 +7,7 @@ export interface Env {
     AI_GATEWAY_API_KEY?: string
     AUTH_API_URL: string
     ALLOW_ANON?: string
+    CORS_ORIGINS?: string
   }
   Variables: {
     user: { id: string; email: string }

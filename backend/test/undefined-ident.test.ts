@@ -56,6 +56,31 @@ export default () => {
   assert.deepEqual(free(code), [])
 })
 
+test("newly supported runtime names are not free", () => {
+  const code = `import { HtmlInCanvas, CanvasImage, IFrame, Solid, createEffect, measureSpring } from "remotion"
+import { CameraMotionBlur, HtmlInCanvasMotionBlur } from "@remotion/motion-blur"
+export default () => {
+  const effect = createEffect
+  const measured = measureSpring({ fps: 30 })
+  return (
+    <div>
+      <HtmlInCanvas width={10} height={10}>
+        <CanvasImage src="image.png" width={10} height={10} />
+      </HtmlInCanvas>
+      <IFrame src="https://example.com" />
+      <Solid color="red" />
+      <CameraMotionBlur />
+      <HtmlInCanvasMotionBlur width={10} height={10}>
+        <div />
+      </HtmlInCanvasMotionBlur>
+      {String(effect !== undefined && measured !== undefined)}
+    </div>
+  )
+}
+`
+  assert.deepEqual(free(code), [])
+})
+
 test("locally declared helpers, params and destructuring are fine", () => {
   const code = `const Bar = ({ v, i }) => <div key={i}>{v}</div>
 const wrap = (x) => [x]

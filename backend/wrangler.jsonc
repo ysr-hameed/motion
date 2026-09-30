@@ -12,13 +12,14 @@
     "AI_PROVIDER": "gateway",
     "AI_MODEL": "alibaba/qwen3.7-flash",
     "AUTH_API_URL": "https://auth-slyxup-com.auth-0f4.workers.dev",
-    "ALLOW_ANON": "true"
+    "ALLOW_ANON": "true",
+    "CORS_ORIGINS": "https://motion-frontend.pages.dev"
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "slyxup-motion-db",
-      "database_id": "local-dev-only",
+      "database_id": "5873882e-b3fe-4cb2-acd1-4a779473ca00",
       "migrations_dir": "drizzle"
     }
   ],

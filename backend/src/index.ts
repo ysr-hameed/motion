@@ -12,20 +12,24 @@ import type { Env } from "./env"
 const app = new Hono<Env>()
 
 app.use(logger())
-app.use(
-  "/api/*",
-  cors({
+app.use("/api/*", async (c, next) => {
+  const extra = (c.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean)
+  return cors({
     origin: [
       "http://localhost:5173",
       "http://localhost:5174",
       "http://127.0.0.1:5173",
       "http://127.0.0.1:5174",
+      ...extra,
     ],
     allowHeaders: ["Content-Type", "Authorization"],
     allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     credentials: true,
-  })
-)
+  })(c, next)
+})
 
 app.get("/api/health", (c) => {
   const chain = (c.env.AI_MODEL || "")

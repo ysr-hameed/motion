@@ -28,7 +28,43 @@ interface Optional {
   /** Source patterns that should trigger the load. */
   match: RegExp
   /** How to fold the module into the scope. */
-  apply: (mod: Record<string, unknown>) => Record<string, unknown>
+  apply: (mod: Record<string, unknown>, source: string) => Record<string, unknown>
+}
+
+/**
+ * Reads the names a composition explicitly requested from `@remotion/media`.
+ *
+ * Imports are stripped before compilation, so the scope builder must retain
+ * their provenance: `Video` from `@remotion/media` and `Video` from
+ * `remotion` are different components and only the source text knows which
+ * one the model meant.
+ */
+function mediaImportAliases(source: string): Record<string, string> {
+  const aliases: Record<string, string> = {}
+  const importPattern =
+    /import\s+(?!type\b)([\s\S]*?)\s+from\s*["']@remotion\/media["']/g
+  let match: RegExpExecArray | null
+  while ((match = importPattern.exec(source)) !== null) {
+    const clause = match[1]!.trim()
+    const namespace = /^\*\s*as\s+([A-Za-z_$][\w$]*)$/.exec(clause)
+    if (namespace) {
+      aliases[namespace[1]!] = "*"
+      continue
+    }
+    const named = /\{([\s\S]*)\}/.exec(clause)?.[1]
+    if (!named) continue
+    for (const entry of named.split(",")) {
+      const name = entry.trim()
+      if (!name || name.startsWith("type ")) continue
+      const parts = name.split(/\s+as\s+/)
+      const exported = parts[0]!.trim()
+      const local = (parts[1] ?? exported).trim()
+      if (/^[A-Za-z_$][\w$]*$/.test(exported) && /^[A-Za-z_$][\w$]*$/.test(local)) {
+        aliases[local] = exported
+      }
+    }
+  }
+  return aliases
 }
 
 const mediaPkg = () =>
@@ -45,11 +81,24 @@ export const OPTIONAL: Optional[] = [
       ])
       return { ...media, parseMedia: parser.parseMedia }
     },
-    apply: (m) => ({
-      MediaVideo: m.Video as unknown,
-      MediaAudio: m.Audio as unknown,
-      parseMedia: m.parseMedia,
-    }),
+    apply: (m, source) => {
+      const scope: Record<string, unknown> = {
+        MediaVideo: m.Video as unknown,
+        MediaAudio: m.Audio as unknown,
+        parseMedia: m.parseMedia,
+      }
+      // Honor the package the model actually named. Without this, `Video`
+      // imported from `@remotion/media` would silently resolve to Remotion
+      // core's `Video`, dropping media-only props such as `trimBefore`.
+      for (const [local, exported] of Object.entries(mediaImportAliases(source))) {
+        if (exported === "*") {
+          scope[local] = m
+        } else if (exported in m) {
+          scope[local] = m[exported]
+        }
+      }
+      return scope
+    },
   },
   {
     match: /from\s*["']@remotion\/lottie["']|\bLottie\b|getLottieMetadata/,
@@ -106,7 +155,7 @@ export async function buildOptionalScope(
   const out: Record<string, unknown> = {}
   settled.forEach((r, i) => {
     if (r.status !== "fulfilled") return
-    Object.assign(out, needed[i]!.apply(r.value))
+    Object.assign(out, needed[i]!.apply(r.value, source))
   })
   return out
 }

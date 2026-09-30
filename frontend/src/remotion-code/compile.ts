@@ -180,7 +180,9 @@ export async function compile(source: string): Promise<CompiledComposition> {
   // optional package or face degrades to a ReferenceError the model can
   // repair, which beats a blank canvas.
   const [optional, fonts] = await Promise.all([
-    buildOptionalScope(withoutImports),
+    // Use the original source here: import provenance tells the scope
+    // whether `Video` means Remotion core or `@remotion/media`.
+    buildOptionalScope(source),
     loadFontsFor(withoutImports).then(() => ({ Fonts: FONTS })),
   ])
 

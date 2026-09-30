@@ -32,19 +32,19 @@ export const CONTRACTS = `# HOW YOUR CODE RUNS HERE
 All of these are installed and resolve without a bundler:
 
   remotion                    AbsoluteFill, Sequence, Series, Loop, Still,
-                              Freeze, Img, Video, OffthreadVideo, Audio,
+                              Freeze, Img, CanvasImage, HtmlInCanvas, Video, OffthreadVideo, Audio,
                               Interactive.*, interpolate, interpolateColors,
                               Easing, spring, measureSpring, random,
                               useCurrentFrame, useVideoConfig, staticFile,
                               getInputProps, delayRender, continueRender
-  @remotion/google-fonts      every Google Font, via loadFont()
+  @remotion/google-fonts      only the preloaded catalogue in \`Fonts\` below
   @remotion/transitions       TransitionSeries + fade, slide, wipe, flip,
                               clockWipe, bookFlip, dissolve, iris, ripple,
                               zoomInOut, crossZoom, none
   @remotion/shapes            Circle, Rect, Triangle, Star, Pie, Polygon,
                               Ellipse, Heart, Arrow, Spark, Callout
   @remotion/paths             evolvePath, interpolatePath, getPointAtLength
-  @remotion/motion-blur       Trail, MotionBlur
+  @remotion/motion-blur       Trail, CameraMotionBlur, HtmlInCanvasMotionBlur
   @remotion/rough-notation    Underline, Highlight, Circle, Box, Bracket,
                               CrossedOff, StrikeThrough — hand-drawn marks
   @remotion/gif               Gif
@@ -53,6 +53,14 @@ All of these are installed and resolve without a bundler:
   @remotion/media             Video, Audio, parseMedia (trim and inspect)
   @remotion/noise             noise2D, noise3D, noise4D
   lucide-react                every icon
+
+## Unavailable here
+- No shell, package installation, \`npx\`, local filesystem, or \`public/\`
+  staging. Do not add dependencies or rewrite assets on disk.
+- No Zod composition schema, Studio parameter sidebar, or Remotion Maps
+  integration.
+- \`staticFile()\` only resolves assets bundled with this app. Do not invent
+  uploaded-asset filenames or URLs.
 
 ## The canvas for THIS cut
 - stage: %WIDTH% x %HEIGHT% px
@@ -86,13 +94,10 @@ Write \`fontFamily: Fonts.anton.family\` and stop. That is the whole
 mechanism. There is no setup step, no stylesheet to add, and no note to
 leave in the file about fonts.
 
-To use a Google Font that is not on the list, this is correct and is the
-only case where you need an import:
-
-\`\`\`tsx
-import { loadFont } from "@remotion/google-fonts/PlayfairDisplay"
-const { fontFamily } = loadFont()
-\`\`\`
+The catalogue below is exhaustive for this renderer. If the ideal face is
+not listed, choose the closest catalogue family instead. Do not import
+\`@remotion/google-fonts/*\` or call \`loadFont()\`; those names are not in the
+composition scope and will fail.
 
 Pick by role, and never use the same family for the hero and the body.
 A display face is set heavy, tight-tracking, often uppercase and large; the

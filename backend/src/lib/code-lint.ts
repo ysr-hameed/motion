@@ -35,14 +35,14 @@ const GLOBALS = new Set([
   "React", "createElement", "Fragment", "jsx", "jsxs", "jsxDEV", "useMemo",
   "useCallback", "useState", "useRef", "useEffect", "useLayoutEffect",
   "useContext", "createContext", "forwardRef", "memo", "Children", "isValidElement",
-  "AbsoluteFill", "Sequence", "Img", "Video", "Audio_", "Audio_Impl", "Audio",
+  "AbsoluteFill", "Sequence", "Img", "CanvasImage", "HtmlInCanvas", "IFrame", "Solid", "Video", "Audio_", "Audio_Impl", "Audio",
   "Still", "Series", "Loop", "Freeze", "Interpolate", "spring", "interpolate",
-  "Easing", "random", "noise", "noise2D", "noise3D", "noise4D", "wrap",
+  "Easing", "random", "createEffect", "measureSpring", "noise", "noise2D", "noise3D", "noise4D", "wrap",
   "useCurrentFrame", "useVideoConfig", "continueRender", "delayRender",
   "staticFile", "getInputProps", "calculateMetadata", "registerRoot",
   "Composition", "Folder", "Audio", "OffthreadVideo", "MediaPlayer",
   "Icons", "Fonts", "TransitionSeries", "Transition", "shapes", "paths",
-  "motionBlur", "MediaVideo", "MediaAudio", "Lottie", "Gif", "AnimatedImage",
+  "motionBlur", "Trail", "CameraMotionBlur", "HtmlInCanvasMotionBlur", "MediaVideo", "MediaAudio", "Lottie", "Gif", "AnimatedImage",
   "Img", "Media", "Rough", "RoughLine", "RoughRect", "RoughCircle", "RoughText",
   "RoughDiamond", "RoughEllipse", "RoughPath", "RoughPolygon",
   "RoughTriangle", "RoughArrow", "RoughSketch", "RoughBox", "RoughSequence",
@@ -74,12 +74,15 @@ const GLOBALS = new Set([
  * scanning does not trip over prose.
  */
 function codeOnly(code: string): string {
+  // Mask strings and template bodies before comments: otherwise the `//` in
+  // a URL such as `src="https://…"` looks like a line comment, eats the
+  // closing quote, and produces phantom undefined identifiers downstream.
   const stripped = code
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/\/\/[^\n]*/g, " ")
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
     .replace(/`(?:[^`\\]|\\.)*`/g, "``")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ")
     // Type generics before the JSX-text strip: `Array<string>` is a type,
     // not a tag — without this, `<string>` opens a "tag" and the strip
     // below eats everything up to the next `<`, including declarations.
@@ -262,10 +265,24 @@ function declaredNames(code: string): Set<string> {
       if (/^[A-Za-z_$][\w$]*$/.test(name)) out.add(name)
     }
   }
-  for (const m of src.matchAll(/\bfunction\b[^(]*\(\s*([A-Za-z_$][\w$]*)/g))
-    // matchAll requires a global regex — the pre-/g/ form threw on every
-    // named function that takes a parameter.
-    add(new RegExp(`^${m[1]!}$`, "g"), 0)
+  // Named function parameters: fn(a, b) / function f(a, b). Types are
+  // already stripped, so `function C(props: P)` reaches here as
+  // `function C(props)`.
+  for (const m of src.matchAll(/\bfunction\s*\*?\s*(?:[A-Za-z_$][\w$]*\s*)?\(([^()]*)\)/g)) {
+    for (const part of m[1]!.split(",")) {
+      const name = part.split("=")[0]!.trim().replace(/^\.\.\./, "")
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) out.add(name)
+    }
+  }
+  // Destructured function parameters: `function C({ a, b: c })` binds `a`
+  // and `c` — the alias after the colon, never the key before it.
+  for (const m of src.matchAll(/\bfunction\s*\*?\s*(?:[A-Za-z_$][\w$]*\s*)?\(\{([^}]*)\}/g)) {
+    for (const part of m[1]!.split(",")) {
+      const target = part.includes(":") ? part.split(":").slice(1).join(":") : part
+      const name = target.split("=")[0]!.trim().replace(/^\.\.\./, "")
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) out.add(name)
+    }
+  }
   return out
 }
 
@@ -530,12 +547,13 @@ export function lintComposition(
 function findUnclosedJsx(code: string): string | null {
   const stack: string[] = []
   // Drop comments, strings and template bodies so tags inside them don't count.
+  // Strings go first so `//` inside a quoted URL is not read as a comment.
   const clean = code
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\/\/[^\n]*/g, "")
     .replace(/`(?:\\.|[^`\\])*`/g, "``")
     .replace(/"(?:\\.|[^"\\])*"/g, '""')
     .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "")
   const re = /<\/?([A-Za-z][\w.]*)((?:[^<>'"]|"[^"]*"|'[^']*')*?)(\/?)>/g
   let m: RegExpExecArray | null
   while ((m = re.exec(clean))) {
