@@ -1,8 +1,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { dirname, join } from "node:path"
 
 import { lintComposition, blockingIssues, LINT_FULL_SIZE_LIMIT } from "../src/lib/code-lint"
-import { truncatedByLength, toUiParts } from "../src/lib/agent/nonstream-ui"
+import { truncatedByLength } from "../src/lib/agent/settled-parts"
 
 /**
  * Regression cover for the failure that burned a whole turn.
@@ -79,43 +82,31 @@ test("a non-base64 data URI is not flagged", () => {
   assert.equal(lintComposition(code).filter((i) => i.code === "data-uri").length, 0)
 })
 
-test("truncatedByLength only fires for a cut-off step with a pending call", () => {
-  const cut = [{ type: "tool-call", toolCallId: "c1", toolName: "write_composition", input: {} }]
+test("truncatedByLength: a length-capped step with a tool part is the failure", () => {
+  const cut = [{ type: "tool-write_composition", toolCallId: "c1", state: "output-error" }]
   assert.equal(truncatedByLength(cut, "length"), true)
-  // Every other finish reason is a normal step.
   for (const reason of ["stop", "tool-calls", "content-filter", undefined]) {
     assert.equal(truncatedByLength(cut, reason), false, `reason=${String(reason)}`)
   }
-  // A length-capped step with no tool call is not this failure.
+  // Capped, but the model was writing prose rather than a file.
   assert.equal(truncatedByLength([{ type: "text", text: "hi" }], "length"), false)
   assert.equal(truncatedByLength(null, "length"), false)
 })
 
-test("the truncation error names the real cause and forbids the same retry", () => {
-  const parts = toUiParts(
-    [{ type: "tool-call", toolCallId: "c1", toolName: "write_composition", input: {} }],
-    { finishReason: "length" }
+test("the route tells the model AND the user why a write was cut off", () => {
+  // The SDK discards a length-capped tool call WITHOUT running it and throws
+  // nothing, so without an explicit note the model re-sends the identical
+  // oversized payload — which is exactly what happened: six identical plans,
+  // six 16.2K-token responses, nothing saved. The note has to name the cause
+  // and forbid the identical retry, because it is the model's next input.
+  const route = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "src", "routes", "agent.ts"),
+    "utf8"
   )
-  const part = parts[0] as unknown as { state: string; errorText: string }
-  assert.equal(part.state, "output-error")
-  // This text is read by the model on its next step. It must carry the
-  // cause (inline binary) and an instruction, otherwise the loop repeats.
-  assert.match(part.errorText, /cut off/i)
-  assert.match(part.errorText, /base64|image/i)
-  assert.match(part.errorText, /noise2D/)
-  assert.match(part.errorText, /do NOT resend/i)
-})
-
-test("a real SDK tool-error still reaches the user verbatim", () => {
-  const parts = toUiParts([
-    { type: "tool-call", toolCallId: "c1", toolName: "write_composition", input: {} },
-    {
-      type: "tool-error",
-      toolCallId: "c1",
-      error: "Invalid input for tool write_composition: JSON parse error: Unterminated string",
-    },
-  ])
-  const part = parts[0] as unknown as { state: string; errorText: string }
-  assert.equal(part.state, "output-error")
-  assert.match(part.errorText, /Unterminated string/)
+  assert.match(route, /truncatedByLength\(/, "the route must detect truncation")
+  assert.match(route, /ran out before the file/, "the note says what happened")
+  assert.match(route, /noise2D/, "the note names the cheap fix")
+  assert.match(route, /won't resend it unchanged/, "the note forbids the retry loop")
+  // And it has to reach the model, which means the stored row — not just the wire.
+  assert.match(route, /parts\.push\(\{ type: "text", text: note \}/)
 })

@@ -123,13 +123,7 @@ import {
   resolveMode,
   stepsUsedOf,
 } from "../lib/agent/turns"
-import {
-  isEmptyParts,
-  toSseChunks,
-  toUiParts,
-  toolActivity,
-  truncatedByLength,
-} from "../lib/agent/nonstream-ui"
+import { isEmptyParts, toolActivity, truncatedByLength } from "../lib/agent/settled-parts"
 import { loadTurnPreamble } from "../lib/agent/preamble"
 
 /**
@@ -350,23 +344,23 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
     })
   )
 
-  // Stream setup itself must not 500 the turn: a gateway hiccup here
-  // becomes a retryable JSON error, not a dead SSE connection. Walk the
-  // chain — a queued primary falls through to the next model instead of
-  // The model call itself.
+  // The model is called with `stream()` and its chunks are RELAYED as they
+  // arrive, so the user watches the reply get written.
   //
-  // NOT streamed, deliberately. Streaming meant the Worker parsed every SSE
-  // frame the gateway emitted and re-serialized each one into a UIMessage
-  // part — measured at ~18.8ms of CPU for a 4,000-token answer, versus
-  // ~0.7ms for one `res.json()` on the finished body. On a CPU-capped plan
-  // that single difference decides whether the request survives, so the
-  // per-token cost is not affordable here.
+  // This used to be `generate()`, buffered until complete, then dumped as
+  // one burst. The cost was invisible in code and brutal in the UI: a single
+  // step takes 77–88s, and for every one of those seconds the client had
+  // received nothing but a `start` frame — so the assistant bubble rendered
+  // a bare "Thinking…" spinner with no text, no tool chips, no idea what was
+  // happening, until the very end. The model writes "On it —" and the plan
+  // FIRST, so streaming them lands them on screen in about two seconds.
   //
-  // What the user sees is unchanged: a hand-written SSE channel below emits
-  // real progress (stage + tool activity + elapsed time) as tools actually
-  // run, and the client reveals the finished text with a typewriter effect.
-  // The honesty rule holds — progress is reported from real events, never
-  // a timer that pretends work is happening.
+  // The old note here argued non-streaming on CPU grounds (~18.8ms of frame
+  // parsing versus ~0.7ms for one body read). That CPU ceiling is gone, and
+  // the comment was quietly describing a UX regression as an optimisation.
+  // The chain fallback survives: nothing is emitted until the first chunk
+  // arrives, so a model that fails to start still falls through to the next
+  // one in the same response.
   let activeModel = built.modelId
   const t0 = Date.now()
 
@@ -391,15 +385,13 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
     }
 
     try {
-      // Open the assistant message before the model answers, so the UI can
-      // show an activity card immediately instead of an empty bubble.
+      // The SDK emits `start` itself as the first chunk of the relayed
+      // stream. Emitting one here too gave the client two opens for the same
+      // message, which is how a bubble could end up empty and rendering a
+      // bare "Thinking…" after content had already been sent.
       const messageId = crypto.randomUUID()
-      await emit({ type: "start", messageId })
 
-      // Walk the model chain when a model fails to start (queued / gateway
-      // hiccup) rather than 502ing the turn: a queued primary falls through
-      // to the next model instead of stalling until the client gives up.
-      const runOn = async (id: string): Promise<Awaited<ReturnType<typeof built.agent.generate>>> => {
+      const openOn = (id: string) => {
         const retry = buildAgent(c.env, tools, {
           freshProject,
           canvasHint,
@@ -413,8 +405,7 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
           mode,
           // Real progress, from a real event: the tool is about to execute.
           // `transient` keeps it out of the persisted message — it is a
-          // live signal, not conversation content. This is what fills the
-          // client's activity card during a non-streaming run.
+          // live signal, not conversation content.
           onToolStart: (toolName: string) => {
             void emit({
               type: "data-toolstart",
@@ -424,82 +415,120 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
           },
         })
         activeModel = id
-        return retry.agent.generate({ messages: modelMessages })
+        return retry
       }
 
-      let result!: Awaited<ReturnType<typeof built.agent.generate>>
+      // Relay one model's chunks into the SSE as they arrive.
+      //
+      // `emitted` is what makes the model chain still work: nothing is
+      // written until the first chunk, so a model that fails to start (or a
+      // gateway that 5xxs) throws before the client has seen anything and
+      // the caller can fall through to the next model in the same response.
+      // Once a single chunk is out, the response is committed and an error
+      // has to surface as an error chunk.
+      // A holder object rather than a reassigned `let`: the write happens
+      // inside the SDK's onFinish callback, and narrowing a closure-assigned
+      // local narrows it to `never` after the loop.
+      const settled: { parts?: UIMessage["parts"]; finishReason?: string } = {}
+      const relay = async (id: string): Promise<boolean> => {
+        const agent = openOn(id).agent
+        let emitted = false
+        const chunks = agent
+          .stream({ messages: modelMessages })
+          .toUIMessageStream({
+            generateMessageId: () => messageId,
+            sendReasoning: true,
+            // The SDK closes the message with `finish`, but a cut-off write
+            // needs one more sentence AFTER the tool error — and nothing may
+            // be written after the terminator. Owning `finish` lets the
+            // correction land inside the stream the user is reading.
+            sendFinish: false,
+            // The SDK's default swallows the reason; we log it and show ours.
+            onError: (err) => {
+              console.error(JSON.stringify({ msg: "agent-chunk-error", model: id, err: String(err) }))
+              return "An error occurred."
+            },
+            onFinish: (event) => {
+              settled.parts = event.responseMessage?.parts
+              settled.finishReason = event.finishReason
+            },
+          })
+        for await (const chunk of chunks) {
+          // Written as it arrives — this loop is the whole fix. Collecting
+          // chunks and emitting after the loop restores the buffering bug
+          // while still looking like "streaming" in the diff.
+          await emit(chunk)
+          emitted = true
+        }
+        return emitted
+      }
+
+      let ok = false
       try {
-        result = await runOn(built.modelId)
+        ok = await relay(built.modelId)
       } catch (err) {
-        let recovered = false
+        console.error(JSON.stringify({ msg: "agent-model-failed", model: built.modelId, err: String(err) }))
+      }
+      if (!ok) {
+        // Nothing reached the client, so the step is still free to fall
+        // through to the next model without the user having seen a seam.
         for (const fallback of built.chain.slice(1)) {
           try {
-            result = await runOn(fallback)
-            console.log(JSON.stringify({ msg: "agent-model-fallback", to: fallback }))
-            recovered = true
-            break
+            if (await relay(fallback)) {
+              console.log(JSON.stringify({ msg: "agent-model-fallback", to: fallback }))
+              ok = true
+              break
+            }
           } catch (e2) {
-            console.error(
-              JSON.stringify({ msg: "agent-model-failed", model: fallback, err: String(e2) })
-            )
+            console.error(JSON.stringify({ msg: "agent-model-failed", model: fallback, err: String(e2) }))
           }
         }
-        if (!recovered) {
-          // Never reached a model — refund the credit it reserved.
-          c.executionCtx.waitUntil(
-            refund(getDb(c.env.DB), user.id, CHAT_TURN_COST, "agent-turn-failed", body.conversationId).catch(
-              () => {}
-            )
+      }
+
+      if (!ok) {
+        // Never reached a model — refund the credit it reserved.
+        c.executionCtx.waitUntil(
+          refund(getDb(c.env.DB), user.id, CHAT_TURN_COST, "agent-turn-failed", body.conversationId).catch(
+            () => {}
           )
-          return fail("The AI stumbled starting up — retry and I'll pick it up.")
-        }
+        )
+        await fail("The AI stumbled starting up — retry and I'll pick it up.")
+        return
       }
 
-      // One conversion, used for BOTH the live stream and the stored row, so
-      // a reload can never show a different conversation than the one the
-      // user just watched.
-      //
-      // finishReason travels with it: on "length" the response hit
-      // maxOutputTokens mid-call, so the SDK never executed the tool. That
-      // step still returns HTTP 200 and throws nothing, which is why it
-      // used to reach the user as an unexplained failure.
-      const parts = toUiParts(result.content, { finishReason: result.finishReason })
-      // A cut-off tool call is invisible to the model as a tool error: the
-      // SDK never ran it, so nothing in the tool vocabulary tells the model
-      // WHY. Left alone it re-issues the identical oversized write, hits the
-      // identical cap, and repeats — which is exactly what happened: six
-      // identical plans, six 16.2K-token responses, no progress.
-      //
-      // An assistant text part is the reliable channel: it is read by the
-      // model on the next step AND shown in the transcript, so the
-      // correction and the explanation are the same sentence.
-      const truncated = truncatedByLength(result.content, result.finishReason)
-      if (truncated) {
-        parts.push({
-          type: "text",
-          text:
-            "That write didn't complete — the response ran out before the file " +
-            "finished, so nothing was saved and I won't resend it unchanged. Rebuilding " +
-            "it leaner now (grain via noise2D instead of an embedded image, fewer lines).",
-        } as unknown as UIMessage["parts"][number])
-      }
-      const activity = toolActivity(parts)
-      const toolParts = activity.length
-      const elapsed = Date.now() - t0
-      const empty = isEmptyParts(parts)
-
-      if (!empty) {
-        for (const chunk of toSseChunks(parts, messageId)) {
-          await emit(chunk)
-        }
-      } else {
-        // A step that produced nothing still has to close the message, or
-        // the client waits forever for text that is never coming.
-        await emit({ type: "finish" })
-      }
       // Terminator. Without it the client's stream reader never sees
       // completion and the turn stays pending until it times out.
+      const parts = settled.parts ?? []
+      const finishReason = settled.finishReason
+
+      // A cut-off tool call is invisible to the model as a tool error: the
+      // SDK never ran it, so nothing in the tool vocabulary tells it WHY.
+      // Left alone the model re-issues the identical oversized write, hits
+      // the identical cap, and repeats — six identical plans, six 16.2K
+      // responses, nothing saved.
+      //
+      // An assistant text part is the reliable channel: the model reads it
+      // on its next step AND the user sees it, so the correction and the
+      // explanation are one sentence. It goes on the wire AND into the
+      // stored row, so a reload keeps it.
+      if (truncatedByLength(parts, finishReason)) {
+        const note =
+          "That write didn't complete — the response ran out before the file " +
+          "finished, so nothing was saved and I won't resend it unchanged. Rebuilding " +
+          "it leaner now (grain via noise2D instead of an embedded image, fewer lines)."
+        parts.push({ type: "text", text: note } as unknown as UIMessage["parts"][number])
+        const noteId = crypto.randomUUID()
+        await emit({ type: "text-start", id: noteId })
+        await emit({ type: "text-delta", id: noteId, delta: note })
+        await emit({ type: "text-end", id: noteId })
+      }
+
+      await emit({ type: "finish" })
       await done()
+
+      const empty = isEmptyParts(parts)
+      const toolParts = toolActivity(parts).length
+      const elapsed = Date.now() - t0
 
       console.log(
         JSON.stringify({
@@ -509,7 +538,7 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
           model: activeModel,
           ms: elapsed,
           toolParts,
-          status: result.finishReason,
+          status: finishReason,
         })
       )
 
