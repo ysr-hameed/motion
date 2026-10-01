@@ -3,10 +3,8 @@ import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai"
 import { useChat } from "@ai-sdk/react"
 import {
   Check,
-  ChevronDown,
   Loader2,
   Paperclip,
-  Plus,
   RectangleHorizontal,
   RectangleVertical,
   Send,
@@ -642,13 +640,21 @@ function AgentThread({
     onPromptSent()
   }, [initialPrompt, chat.messages.length, chat.status, chat, onPromptSent, filesFor])
 
+  // Stick-to-bottom, coalesced on animation frames: during fast
+  // streaming this effect fires per chunk, and a synchronous
+  // scrollHeight read each time forces layout mid-stream (jank).
+  const stickRaf = useRef(0)
   useEffect(() => {
     // Follows the stream chunk-by-chunk (messages identity changes per
     // chunk), not just per message — otherwise a long reply streams
     // below the fold while the user stares at stale content up top.
     if (!stickRef.current) return
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    cancelAnimationFrame(stickRaf.current)
+    stickRaf.current = requestAnimationFrame(() => {
+      const el = scrollRef.current
+      if (el && stickRef.current) el.scrollTop = el.scrollHeight
+    })
+    return () => cancelAnimationFrame(stickRaf.current)
   }, [chat.messages, pending])
 
   // Bridge published previews into the local version rail + player.
@@ -973,7 +979,7 @@ export function AgentChatCard({
 }) {
   const [sid, setSid] = useState<string | null>(serverProjectId)
   const [listed, setListed] = useState(false)
-  const [conversations, setConversations] = useState<AgentConversation[]>([])
+  const [, setConversations] = useState<AgentConversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [initial, setInitial] = useState<UIMessage[] | null>(null)
   const [bootError, setBootError] = useState<string | null>(null)
@@ -1105,18 +1111,6 @@ export function AgentChatCard({
    * Enter-then-click still sees the old value and starts a second
    * conversation.
    */
-  const openConversation = async (id: string) => {
-    if (!sid || id === activeId) return
-    setListWarning(null)
-    setActiveId(id)
-    setInitial(null)
-    try {
-      setInitial(await loadAgentMessages(sid, id))
-    } catch {
-      setInitial([])
-    }
-  }
-
   const creating = useRef(false)
 
   const createConversation = async (firstMessage?: string) => {
@@ -1208,40 +1202,6 @@ export function AgentChatCard({
             {pill.label}
           </span>
         )}
-        <div className="flex-1" />
-        {sid && conversations.length > 0 && (
-          <span className="relative flex items-center">
-            <select
-              aria-label="Conversation"
-              value={activeId ?? ""}
-              onChange={(e) => {
-                const v = e.target.value
-                if (v === "__new") void createConversation()
-                else void openConversation(v)
-              }}
-              className="h-7 max-w-36 cursor-pointer appearance-none truncate rounded-full border bg-background pl-2.5 pr-7 text-[11px] outline-none transition-colors hover:border-primary/50 focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              {conversations.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.title}
-                </option>
-              ))}
-              <option value="__new">+ New chat</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2 size-3 text-muted-foreground" />
-          </span>
-        )}
-        {sid && (
-          <button
-            type="button"
-            onClick={() => void createConversation()}
-            aria-label="New chat"
-            title="New chat"
-            className="flex size-7 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-all duration-200 hover:bg-accent hover:text-foreground active:scale-95"
-          >
-            <Plus className="size-3.5" />
-          </button>
-        )}
       </div>
 
       {bootError ? (
@@ -1320,7 +1280,19 @@ export function AgentChatCard({
             <StatusStrip label={ensuring ? "Preparing your project…" : "Loading chat…"} />
           )}
           {listWarning && <WarnStrip label={listWarning} />}
-          {hydrating ? (
+          {!bootError && handoffRef.current && !activeId ? (
+            // Studio handoff: the description is already on its way — asking
+            // for length/shape again here is a confusing duplicate input.
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+              <span className="flex size-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+                <Loader2 className="size-4 animate-spin" />
+              </span>
+              <p className="mt-1 text-sm font-semibold">Starting your clip…</p>
+              <p className="max-w-[26ch] text-[13px] leading-relaxed text-muted-foreground">
+                Sending your description over — the first version renders next door.
+              </p>
+            </div>
+          ) : hydrating ? (
             <ConversationSkeleton />
           ) : (
             <NewChatComposer sid={sid} onStart={createConversation} />

@@ -298,7 +298,7 @@ export function PlaygroundPage({
         </aside>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col overflow-x-clip">
         <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/90 px-3.5 backdrop-blur-xl sm:px-4">
           <Button
             variant="ghost"
@@ -363,7 +363,7 @@ export function PlaygroundPage({
           )}
         </header>
 
-        <main className="flex min-h-0 flex-1 flex-col p-2 sm:p-3">
+        <main className="flex min-h-0 flex-1 flex-col overflow-x-clip p-2 sm:p-3">
           {!active ? (
             <div className="flex flex-col items-center gap-1 rounded-2xl border border-dashed px-6 py-12 text-center">
               <span className="flex size-10 items-center justify-center rounded-xl bg-secondary">
@@ -427,7 +427,7 @@ export function PlaygroundPage({
                 aria-label="Chat"
                 className={cn(
                   "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card",
-                  "h-[calc(100dvh-10rem)] min-h-[420px]",
+                  "h-[calc(100dvh-11.5rem)] min-h-[320px]",
                   mobileTab === "chat" ? "flex flex-1" : "hidden",
                   "xl:flex xl:h-full xl:min-h-0 xl:w-[400px] xl:max-w-[440px] xl:flex-none"
                 )}
@@ -454,7 +454,7 @@ export function PlaygroundPage({
                 aria-label="Preview"
                 className={cn(
                   "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-950",
-                  "h-[calc(100dvh-10rem)] min-h-[420px]",
+                  "h-[calc(100dvh-11.5rem)] min-h-[320px]",
                   mobileTab === "preview" ? "flex flex-1" : "hidden",
                   "xl:flex xl:h-full xl:min-h-0 xl:flex-1"
                 )}
@@ -541,8 +541,8 @@ export function PlaygroundPage({
                         {active.spec?.format ?? "16:9"}
                       </span>
                       <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-5 text-center">
-                        <span className="flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
-                          <Clapperboard className="size-6" />
+                        <span className="flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+                          <Clapperboard className="size-5" />
                         </span>
                         <div className="flex flex-col items-center gap-1">
                           <p className="text-base font-semibold text-white">
