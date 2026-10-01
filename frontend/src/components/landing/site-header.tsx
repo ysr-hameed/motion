@@ -57,14 +57,20 @@ export function SiteHeader() {
           <Button
             variant="ghost"
             size="icon"
-            className="lg:hidden"
+            className="shrink-0 lg:hidden"
             onClick={() => setOpen(true)}
             aria-label="Open menu"
           >
             <PanelLeft />
           </Button>
 
-          <Logo />
+          {/* Icon-only below 420px: full wordmark + CTA + menu never fit 360px. */}
+          <span className="shrink-0 min-[420px]:hidden">
+            <Logo showText={false} />
+          </span>
+          <span className="hidden shrink-0 min-[420px]:block">
+            <Logo />
+          </span>
 
           <nav
             className="mx-auto hidden items-center gap-1 lg:flex"
@@ -83,20 +89,24 @@ export function SiteHeader() {
 
           <div className="flex-1 lg:hidden" />
 
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <a
               href="/login"
               className="hidden rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground interactive focus-ring hover:bg-muted hover:text-foreground sm:block"
             >
               Sign in
             </a>
-            <Button asChild>
+            <Button asChild className="px-3 sm:px-4">
               <a href="/studio">
-                Start creating
+                <span className="sm:hidden">Start</span>
+                <span className="hidden sm:inline">Start creating</span>
                 <ArrowRight />
               </a>
             </Button>
-            <UserButton />
+            {/* Logged-out avatar menu is hidden here: the header already
+                offers Sign in + Start, and the extra Log in button is what
+                overflowed 360px screens. */}
+            <UserButton hideLoginButton />
           </div>
         </div>
       </header>

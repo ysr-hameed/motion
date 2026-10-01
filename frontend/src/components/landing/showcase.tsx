@@ -58,10 +58,14 @@ export function Showcase() {
                     compositionWidth={1920}
                     compositionHeight={1080}
                     fps={30}
-                    controls
+                    // No controls / clickToPlay: the Player's own play
+                    // button would nest a <button> inside this card's
+                    // outer <button> (hydration error). The card itself
+                    // is the single interactive element.
+                    controls={false}
+                    clickToPlay={false}
                     autoPlay={!paused}
                     loop
-                    clickToPlay
                     acknowledgeRemotionLicense
                     errorFallback={() => (
                       <div className="flex h-full items-center justify-center text-xs text-zinc-400">

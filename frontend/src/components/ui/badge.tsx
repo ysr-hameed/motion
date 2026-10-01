@@ -33,4 +33,6 @@ function Badge({ className, variant, ...props }: BadgeProps) {
   )
 }
 
-export { Badge, badgeVariants }
+// `badgeVariants` stays module-private: nothing imports it, and exporting a
+// non-component from a component file breaks React Fast Refresh.
+export { Badge }

@@ -7,16 +7,20 @@ import { navigate } from "@/lib/router"
 export function UserButton({
   align = "right",
   side = "bottom",
+  hideLoginButton = false,
 }: {
   /** Horizontal edge of the avatar the menu aligns to. */
   align?: "left" | "right"
   /** Whether the menu opens below the avatar or above it. */
   side?: "top" | "bottom"
+  /** Return null when logged out (headers that already offer Sign in). */
+  hideLoginButton?: boolean
 }) {
   const user = useUser()
   const [open, setOpen] = useState(false)
 
   if (!user) {
+    if (hideLoginButton) return null
     return (
       <Button variant="ghost" onClick={() => navigate("/login")}>
         Log in

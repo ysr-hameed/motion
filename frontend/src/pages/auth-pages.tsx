@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { auth, authErrorMessage, isAuthConfigured } from "@/lib/auth"
 import { navigate } from "@/lib/router"
-import { cn } from "@/lib/utils"
 
 function GoogleIcon({ className }: { className?: string }) {
   return (
@@ -110,13 +109,9 @@ function AuthShell({
 }) {
   return (
     <div className="flex min-h-svh flex-col items-center justify-center bg-background px-4 py-12 text-foreground">
-      <a
-        href="/"
-        onClick={(e) => go(e, "/")}
-        aria-label="SlyxUp home"
-      >
-        <Logo />
-      </a>
+      {/* Logo already renders an <a href="/"> — wrapping it in another
+          anchor nests <a> inside <a> (hydration error). */}
+      <Logo />
       <div className="mt-8 w-full max-w-sm rounded-3xl border bg-card p-7">
         <h1 className="text-center text-xl font-bold">{title}</h1>
         <p className="mt-1 text-center text-sm text-muted-foreground">{sub}</p>
@@ -299,7 +294,6 @@ export function LoginPage() {
 export function SignupPage() {
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
-  const [plan, setPlan] = useState("Free plan")
 
   if (!isAuthConfigured()) {
     return (
@@ -362,41 +356,6 @@ export function SignupPage() {
               className="rounded-2xl"
               aria-label="Password (8 or more characters)"
             />
-          <div
-            className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2"
-            role="radiogroup"
-            aria-label="Plan — Free to start, Pro adds 4K and priority rendering"
-            onKeyDown={(e) => {
-              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
-              e.preventDefault()
-              setPlan((p) => (p === "Free plan" ? "Pro plan" : "Free plan"))
-            }}
-          >
-            {["Free plan", "Pro plan"].map((p) => {
-              const selected = plan === p
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  tabIndex={selected ? 0 : -1}
-                  onClick={() => setPlan(p)}
-                  className={cn(
-                    "min-h-[44px] rounded-2xl border px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
-                    selected
-                      ? "border-primary bg-primary/5 text-foreground"
-                      : "text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                  )}
-                >
-                  {p}
-                  <span className="block text-[11px] font-normal text-muted-foreground">
-                    {p === "Free plan" ? "$0 · 10 clips/mo" : "$19/mo · 7-day trial"}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <Button type="submit" variant="glow" className="w-full rounded-2xl" disabled={busy}>
             <UserPlus aria-hidden />

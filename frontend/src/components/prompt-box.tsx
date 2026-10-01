@@ -73,17 +73,17 @@ export function PromptBox({
 
   useEffect(autosize, [value])
 
+  // Placeholder visibility is DERIVED, so the typewriter effect never has to
+  // clear the animated text with a synchronous setState — that pattern
+  // cascaded an extra render pass and flashed stale text on every toggle.
+  const reducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  const showTyping =
+    !value && !focused && !typingPaused && !reducedMotion && examples.length > 0
+
   useEffect(() => {
-    if (
-      value ||
-      focused ||
-      typingPaused ||
-      examples.length === 0 ||
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      setTyped("")
-      return
-    }
+    if (!showTyping) return
     let word = 0
     let char = 0
     let deleting = false
@@ -105,6 +105,9 @@ export function PromptBox({
         if (char === 0) {
           deleting = false
           word = (word + 1) % examples.length
+          // Blank between examples so a resumed cycle never shows the
+          // previous word while it waits out the 400ms gap.
+          setTyped("")
           timer = setTimeout(tick, 400)
           return
         }
@@ -113,9 +116,8 @@ export function PromptBox({
     }
     timer = setTimeout(tick, 500)
     return () => clearTimeout(timer)
-  }, [value, focused, typingPaused, examples])
+  }, [showTyping, examples])
 
-  const showTyping = !value && !focused && examples.length > 0
   const canSubmit = value.trim().length > 0
 
   const submit = () => {

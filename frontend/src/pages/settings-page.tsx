@@ -38,7 +38,7 @@ import {
   getThemePref,
   setThemePref,
   type ThemePref,
-} from "@/components/theme-provider"
+} from "@/lib/theme"
 import {
   getNotifPrefs,
   getPlaybackPrefs,

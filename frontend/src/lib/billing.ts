@@ -15,7 +15,13 @@ let client: BillingClient | null = null
 export function getBillingClient(): BillingClient {
   if (!client) {
     client = new BillingClient({
-      apiUrl: authConfig.apiUrl,
+      // Billing is a SEPARATE worker from auth. Only forward an explicit
+      // override; otherwise let the SDK apply DEFAULT_BILLING_API_URL.
+      // Passing authConfig.apiUrl here pointed every /v1/billing/* call at
+      // the auth worker, which has no such routes and answers 404.
+      ...(authConfig.billingApiUrl.trim()
+        ? { apiUrl: authConfig.billingApiUrl.trim() }
+        : {}),
       publishableKey: authConfig.publishableKey,
       getToken: () => getAuthToken() ?? undefined,
     })
@@ -116,32 +122,38 @@ export interface BillingState extends BillingSnapshot {
  * stays usable with the free defaults when billing is unreachable.
  */
 export function useBilling(email: string | null): BillingState {
-  const [snap, setSnap] = useState<BillingSnapshot>({ plans: [], subscription: null, invoices: [] })
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
+  const [actionBusy, setActionBusy] = useState<string | null>(null)
+  // Tagged with the request that produced it, so `loading` is derived during
+  // render instead of being pushed by a synchronous setState in the effect.
+  const [result, setResult] = useState<{
+    key: string
+    snap: BillingSnapshot
+    error: string | null
+  }>({
+    key: "",
+    snap: { plans: [], subscription: null, invoices: [] },
+    error: null,
+  })
+
+  const enabled = !!email && isBillingConfigured()
+  const key = enabled ? `${email}:${tick}` : ""
 
   useEffect(() => {
+    if (!email || !isBillingConfigured()) return
     let live = true
-    if (!email || !isBillingConfigured()) {
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    setError(null)
+    const requestKey = `${email}:${tick}`
     loadSnapshot(email)
       .then((s) => {
-        if (live) {
-          setSnap(s)
-          setLoading(false)
-        }
+        if (live) setResult({ key: requestKey, snap: s, error: null })
       })
       .catch((e) => {
-        if (live) {
-          setError(e instanceof Error ? e.message : "Couldn't load billing.")
-          setLoading(false)
-        }
+        if (live)
+          setResult((prev) => ({
+            key: requestKey,
+            snap: prev.snap,
+            error: e instanceof Error ? e.message : "Couldn't load billing.",
+          }))
       })
     return () => {
       live = false
@@ -191,7 +203,17 @@ export function useBilling(email: string | null): BillingState {
     }
   }, [refresh])
 
-  return { ...snap, loading, error, refresh, checkout, cancel, resume, actionBusy }
+  const loading = enabled && result.key !== key
+  return {
+    ...result.snap,
+    loading,
+    error: loading ? null : result.error,
+    refresh,
+    checkout,
+    cancel,
+    resume,
+    actionBusy,
+  }
 }
 
 /** Plan display name for headers/sidebars (cached, silent fallback). */

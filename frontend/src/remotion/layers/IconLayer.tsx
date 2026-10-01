@@ -1,3 +1,4 @@
+import { createElement } from "react"
 import * as Lucide from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import type { LayerContext } from "./types"
@@ -66,7 +67,11 @@ export function IconLayer({ layer, ctx }: { layer: Layer; ctx: LayerContext }) {
         justifyContent: "center",
       }}
     >
-      <Icon size={size} color={color} strokeWidth={2} />
+      {/* createElement, not <Icon />: the glyph is resolved from a registry
+          at render time, and JSX would read as "component created during
+          render". The registry entries are module constants, so identity is
+          stable across frames either way. */}
+      {createElement(Icon, { size, color, strokeWidth: 2 })}
     </div>
   )
 }

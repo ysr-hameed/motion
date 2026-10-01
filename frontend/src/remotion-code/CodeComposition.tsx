@@ -45,11 +45,14 @@ export const CodeComposition: React.FC<Record<string, unknown>> = ({
   }, [handle])
 
   // Resolve on both paths: a failure has to reach the error boundary, and
-  // the render must be released before it can.
-  compiled.then(release, release)
-
-  // Unmounting mid-compile must still release, or the render hangs.
-  useEffect(() => release, [release])
+  // the render must be released before it can. Unmounting mid-compile must
+  // release too, or the render hangs — so cleanup is `release` itself.
+  // Both run in an effect, never during render: reading the ref inline
+  // would make render impure and re-arm the promise handler every pass.
+  useEffect(() => {
+    compiled.then(release, release)
+    return release
+  }, [compiled, release])
 
   return (
     <Suspense fallback={null}>
@@ -67,11 +70,4 @@ function Mount({
 }) {
   const { component: Component } = React.use(promise)
   return <Component {...(inputProps as Record<string, unknown>)} />
-}
-
-/** Compiles without mounting, for the export path and tests. */
-export async function compileForRender(code: string) {
-  const { component } = await compile(code)
-  await ensureFontsLoaded(code)
-  return component
 }

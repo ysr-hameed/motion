@@ -32,7 +32,10 @@ export function useVoiceInput(onText: (text: string) => void) {
   )
   const recRef = useRef<SpeechRecognitionInstance | null>(null)
   const cbRef = useRef(onText)
-  cbRef.current = onText
+  // Keep the latest callback without reading the ref during render.
+  useEffect(() => {
+    cbRef.current = onText
+  }, [onText])
 
   useEffect(
     () => () => {

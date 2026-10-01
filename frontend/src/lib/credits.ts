@@ -69,27 +69,31 @@ export interface CreditsState {
  * unreachable — credits never block the UI from rendering, only sends.
  */
 export function useCredits(): CreditsState {
-  const [snapshot, setSnapshot] = useState<CreditsSnapshot | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
+  // The result is tagged with the request that produced it, so `loading` is
+  // DERIVED during render rather than pushed by a synchronous setState inside
+  // the effect — that pattern cascades an extra render pass on every refetch.
+  const [result, setResult] = useState<{
+    key: number
+    snap: CreditsSnapshot | null
+    error: string | null
+  }>({ key: -1, snap: null, error: null })
 
   useEffect(() => {
     let live = true
-    setLoading(true)
     fetchSnapshot()
       .then((s) => {
-        if (live) {
-          setSnapshot(s)
-          setError(null)
-          setLoading(false)
-        }
+        if (live) setResult({ key: tick, snap: s, error: null })
       })
       .catch((e) => {
-        if (live) {
-          setError(e instanceof Error ? e.message : "Couldn't load credits")
-          setLoading(false)
-        }
+        // Keep the last good snapshot — a failed refresh must not blank a
+        // pill that was showing a real balance a moment ago.
+        if (live)
+          setResult((prev) => ({
+            key: tick,
+            snap: prev.snap,
+            error: e instanceof Error ? e.message : "Couldn't load credits",
+          }))
       })
     return () => {
       live = false
@@ -118,5 +122,12 @@ export function useCredits(): CreditsState {
     setTick((t) => t + 1)
   }, [])
 
-  return { snapshot, loading, error, refresh }
+  const loading = result.key !== tick
+  return {
+    snapshot: result.snap,
+    loading,
+    // An error is only meaningful once the request has settled.
+    error: loading ? null : result.error,
+    refresh,
+  }
 }

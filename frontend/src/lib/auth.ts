@@ -17,6 +17,13 @@ export const authConfig = {
   apiUrl:
     import.meta.env.VITE_SLYXUP_API_URL ||
     "https://auth-slyxup-com.auth-0f4.workers.dev",
+  /**
+   * Billing lives on its OWN worker, not the auth worker. Empty string means
+   * "use the SDK default" — pass nothing, so BillingClient resolves
+   * DEFAULT_BILLING_API_URL. Overriding this with the auth URL makes every
+   * /v1/billing/* call 404 (that worker never mounted those routes).
+   */
+  billingApiUrl: import.meta.env.VITE_SLYXUP_BILLING_API_URL || "",
   projectId: import.meta.env.VITE_SLYXUP_PROJECT_ID || "",
 }
 
@@ -204,6 +211,10 @@ export const auth = {
     const res = await getAuthClient().auth.completeOAuth()
     const user = (res as { user?: SessionUser } | null)?.user
     if (!user) return null
+    // Mirror the token to localStorage like email login does — the SDK
+    // only persists to sessionStorage, so without this a new tab (or a
+    // restored window) silently loses the session.
+    rememberToken()
     emit()
     return mapUser(user)
   },

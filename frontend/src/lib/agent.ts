@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react"
 import type { UIMessage } from "ai"
 import { getAuthToken } from "./auth"
 
@@ -152,35 +151,8 @@ export async function reportRenderError(
   }
 }
 
-export function useAgentConversations(serverProjectId: string | null) {
-  const [conversations, setConversations] = useState<AgentConversation[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!serverProjectId || !API) {
-      setConversations([])
-      return
-    }
-    let live = true
-    setLoading(true)
-    listAgentConversations(serverProjectId)
-      .then((cs) => {
-        if (live) {
-          setConversations(cs)
-          setError(null)
-        }
-      })
-      .catch((e) => {
-        if (live) setError(e instanceof Error ? e.message : "Failed to load chats")
-      })
-      .finally(() => {
-        if (live) setLoading(false)
-      })
-    return () => {
-      live = false
-    }
-  }, [serverProjectId])
-
-  return { conversations, setConversations, loading, error }
-}
+/**
+ * React hook for the conversation list was removed: nothing imported it
+ * (the chat card owns that state), and its synchronous setState-in-effect
+ * was the only lint warning left in this module.
+ */
