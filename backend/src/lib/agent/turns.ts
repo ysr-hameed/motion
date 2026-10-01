@@ -96,14 +96,20 @@ export const TURN_LIMITS: Record<TurnMode, TurnLimits> = {
 }
 
 /**
- * Lines a written composition should stay under so it fits one response.
- * Stated in the system prompt and the tool description: the model sizes
- * its own output far more reliably than a token ceiling it cannot see.
+ * Lines a written composition chunk should stay under.
  *
- * This is PER WRITE, not per composition — the whole file is assembled
- * from several of these.
+ * This is PER WRITE, not per composition — the whole file is assembled from
+ * several of these.
+ *
+ * Sized to the real response ceiling rather than guessed: at ~30 tokens per
+ * line of TSX, the 1,200-token budget is ~40 lines. 30 leaves headroom for
+ * the surrounding prose and the tool wrapper, so a chunk that "looks like"
+ * 30 lines reliably fits instead of landing on the cap and being cut off
+ * mid-file — which is the failure this whole ceiling was introduced to
+ * stop. Under-estimating here is what produced 22-line chunks the model
+ * ignored, then tried to write the whole file anyway.
  */
-export const COMPOSITION_LINE_BUDGET = 45
+export const COMPOSITION_LINE_BUDGET = 30
 
 export const DEFAULT_MODE: TurnMode = "standard"
 

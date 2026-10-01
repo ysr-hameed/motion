@@ -57,7 +57,7 @@ test("toolActivity: names without the tool- prefix, in order", () => {
   assert.deepEqual(toolActivity([{ type: "text", text: "no tools" }] as never), [])
 })
 
-test("truncatedByLength: only a length-capped step that was making a tool call", () => {
+test("truncatedByLength: a length-capped step, with or without a tool call", () => {
   // `finishReason: "length"` is the whole-file-write failure. The SDK
   // discards the call without running it, nothing throws, and without this
   // signal the model re-sends the identical oversized payload.
@@ -68,8 +68,15 @@ test("truncatedByLength: only a length-capped step that was making a tool call",
   for (const reason of ["stop", "tool-calls", "content-filter", undefined]) {
     assert.equal(truncatedByLength(parts, reason), false, `reason=${String(reason)}`)
   }
-  // Capped, but the model was writing prose rather than a file.
-  assert.equal(truncatedByLength([{ type: "text", text: "hi" }], "length"), false)
+  // Capped mid-narration, with no tool call: still worth telling the user.
+  // This is what a real transcript showed — the model was cut off saying
+  // "Let me write the full…" and the user got a bare "Interrupted
+  // mid-step" with no explanation, because the old check only looked for a
+  // tool part.
+  assert.equal(truncatedByLength([{ type: "text", text: "hi" }], "length"), true)
+  // Capped but genuinely empty: nothing was lost, so nothing to explain.
+  assert.equal(truncatedByLength([], "length"), false)
+  assert.equal(truncatedByLength([{ type: "text", text: "  " }], "length"), false)
   assert.equal(truncatedByLength(null, "length"), false)
 })
 

@@ -281,10 +281,12 @@ export function buildTools(ctx: AgentContext) {
         "You MUST call read_file first (keep imports, canvas shape and the default export valid). " +
         "The result is gated exactly like edit_file: default export + static lint must pass or the " +
         "write is rejected with reasons. " +
-        "IMPORTANT — a whole file travels inside THIS reply, so this call fails if the file is big. " +
+        "CRITICAL — the whole file travels inside THIS reply, and the reply is capped. " +
+        "Writing past the cap does not save your work: the response is cut off mid-file, " +
+        "nothing is stored, and you have to start the chunk again. " +
+        `So this call must stay under ${COMPOSITION_LINE_BUDGET} lines. That is the real ceiling, not a suggestion. ` +
         "Write the SKELETON here (imports, component shell, the first beat) and then call " +
-        "append_composition for every further beat. Never try to fit a whole large scene into one call. " +
-        `Keep this one under ~${COMPOSITION_LINE_BUDGET / 2} lines. ` +
+        "append_composition for every further beat. " +
         "When NOT to use: small tweaks (use edit_file), new side files (use create_file).",
       inputSchema: z.object({
         content: z
@@ -292,7 +294,7 @@ export function buildTools(ctx: AgentContext) {
           .min(200)
           .max(120000)
           .describe(
-            `New file content for src/Composition.tsx — the skeleton plus the first beat only (~${COMPOSITION_LINE_BUDGET / 2} lines max). Add more with append_composition.`
+            `src/Composition.tsx skeleton + first beat ONLY. Hard maximum ${COMPOSITION_LINE_BUDGET} lines — past that this reply is cut off and NOTHING is saved. Add every further beat with append_composition.`
           ),
       }),
       execute: async ({ content }) => {
@@ -358,15 +360,15 @@ export function buildTools(ctx: AgentContext) {
         "The code is inserted just above the splice marker at the end of the file, " +
         "so put only the new beat here — no imports, no default export, no wrapping " +
         "component. If your beat needs a new import, add it with edit_file first. " +
-        `Keep each call under ~${COMPOSITION_LINE_BUDGET / 2} lines. ` +
-        "The whole file is linted after the splice, so a broken beat is rejected with reasons.",
+        `Hard maximum ${COMPOSITION_LINE_BUDGET} lines per call; past that the reply is cut off and the beat is lost. ` +
+        "One beat per call. The whole file is linted after the splice, so a broken beat is rejected with reasons.",
       inputSchema: z.object({
         content: z
           .string()
           .min(40)
           .max(80000)
           .describe(
-            `One new beat for src/Composition.tsx — code only, spliced above the marker (~${COMPOSITION_LINE_BUDGET / 2} lines max)`
+            `One new beat for src/Composition.tsx — code only, spliced above the marker. Hard max ${COMPOSITION_LINE_BUDGET} lines; beyond that this beat is lost.`
           ),
       }),
       execute: async ({ content }) => {

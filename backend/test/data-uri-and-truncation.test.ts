@@ -88,9 +88,14 @@ test("truncatedByLength: a length-capped step with a tool part is the failure", 
   for (const reason of ["stop", "tool-calls", "content-filter", undefined]) {
     assert.equal(truncatedByLength(cut, reason), false, `reason=${String(reason)}`)
   }
-  // Capped, but the model was writing prose rather than a file.
-  assert.equal(truncatedByLength([{ type: "text", text: "hi" }], "length"), false)
+  // Capped mid-narration with no tool call: still reported. A real
+  // transcript showed the model cut off at "Let me write the full…" and the
+  // user got a bare "Interrupted mid-step" because the old check only
+  // looked for a tool part.
+  assert.equal(truncatedByLength([{ type: "text", text: "hi" }], "length"), true)
+  // Nothing was actually lost, so there is nothing to explain.
   assert.equal(truncatedByLength(null, "length"), false)
+  assert.equal(truncatedByLength([], "length"), false)
 })
 
 test("the route tells the model AND the user why a write was cut off", () => {

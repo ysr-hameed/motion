@@ -69,11 +69,29 @@ export function toolActivity(parts: UIMessage["parts"] | undefined): Array<{ nam
  *
  * On the streamed path the leftovers arrive as UI parts, so this looks for a
  * tool part rather than a raw `tool-call`.
+ *
+ * A `length` finish is treated as truncation EVEN WITH NO TOOL PART. That
+ * case is the model being cut off mid-sentence while narrating its intent
+ * ("Let me write the full…"), which is exactly what a user saw followed by
+ * a bare "Interrupted mid-step": nothing was saved and nothing explained
+ * why. A truncated response always warrants saying so, whatever it was
+ * carrying.
  */
 export function truncatedByLength(parts: unknown, finishReason?: string): boolean {
   if (finishReason !== "length") return false
   const list = Array.isArray(parts) ? (parts as SettledPart[]) : []
-  return list.some((p) => isRecord(p) && typeof p?.type === "string" && p.type.startsWith("tool-"))
+  const hasToolPart = list.some(
+    (p) => isRecord(p) && typeof p?.type === "string" && p.type.startsWith("tool-")
+  )
+  if (hasToolPart) return true
+  // No tool part: only worth reporting if it actually cut something short.
+  // An empty response is not a truncation the user needs explained.
+  return list.some(
+    (p) =>
+      isRecord(p) &&
+      ((p.type === "text" && typeof p.text === "string" && p.text.trim().length > 0) ||
+        (typeof p.type === "string" && p.type.startsWith("tool-")))
+  )
 }
 
 export { isRecord }
