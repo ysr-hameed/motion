@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 import { bodyLimit } from "hono/body-limit"
+import { streamSSE } from "hono/streaming"
 import { zValidator } from "@hono/zod-validator"
 import { z } from "zod"
 import {
@@ -13,7 +14,7 @@ import { and, eq } from "drizzle-orm"
 import { requireAuth } from "../lib/auth"
 import { AiNotConfiguredError } from "../lib/ai-types"
 import { getDb } from "../lib/db"
-import { conversations, messages, projects, renderErrors, versions } from "../db/schema"
+import { conversations, messages, projects, renderErrors } from "../db/schema"
 import { createAgentContext } from "../lib/agent/context"
 import { buildAgent } from "../lib/agent/agent"
 import { buildTools } from "../lib/agent/tools"
@@ -33,13 +34,19 @@ app.use("/*", requireAuth)
 
 /**
  * Reject oversize payloads before JSON parse + Zod walk burn Worker CPU.
- * The client sends at most the last 3 turns (≤3 downscaled images ≈ 2MB),
- * so anything past 6MB is junk or abuse — 413 immediately.
+ *
+ * The size is derived from what the client actually sends, not a guess:
+ * reference images are downscaled in the browser (1024px, JPEG) and only
+ * the newest message carries their bytes — older turns are already in D1
+ * and the server dedupes them by id. So a realistic turn is a few hundred
+ * KB of text plus at most 3 × ~700KB images. 2.5MB leaves headroom over
+ * that while still rejecting junk well before it reaches the parser, which
+ * matters most on CPU-capped plans where JSON.parse is the top cost.
  */
 app.use(
   "/*",
   bodyLimit({
-    maxSize: 6 * 1024 * 1024,
+    maxSize: 2.5 * 1024 * 1024,
     onError: (c) =>
       c.json(
         { error: "Request too large — remove reference images and retry." },
@@ -109,6 +116,8 @@ import { fontCatalogue } from "../lib/font-catalogue.generated"
 import { CHAT_TURN_COST, refund, spend } from "../lib/credits"
 
 import { MAX_STEPS_PER_TURN, isContinueMessage, stepsUsedOf } from "../lib/agent/turns"
+import { isEmptyParts, toSseChunks, toUiParts, toolActivity } from "../lib/agent/nonstream-ui"
+import { loadTurnPreamble } from "../lib/agent/preamble"
 
 /**
  * Agent chat (AI SDK UIMessage stream).
@@ -124,19 +133,24 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
   const user = c.get("user")
   const body = c.req.valid("json")
 
-  if (!(await ownedProject(c.env.DB, body.projectId, user.id))) {
-    return c.json({ error: "Not found" }, 404)
-  }
-  if (!(await ownedConversation(c.env.DB, body.conversationId, body.projectId, user.id))) {
-    return c.json({ error: "Conversation not found" }, 404)
-  }
-
   const ctx = createAgentContext({
     database: c.env.DB,
     userId: user.id,
     projectId: body.projectId,
     conversationId: body.conversationId,
   })
+
+  // Ownership + creation-mode in ONE round-trip (see lib/agent/preamble.ts).
+  // The canvas is NOT here — it lives in an R2 JSON file, so it stays a
+  // separate read below.
+  const pre = await loadTurnPreamble(c.env.DB, body.projectId, body.conversationId, user.id)
+  if (!pre.projectOk) {
+    return c.json({ error: "Not found" }, 404)
+  }
+  if (!pre.conversationOk) {
+    return c.json({ error: "Conversation not found" }, 404)
+  }
+  const freshProject = pre.freshProject
 
   // Persist any new user messages the client sent (dedupe by id).
   // Continuation tokens are NEVER persisted: they are transport, not
@@ -269,11 +283,11 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
       ? await convertToModelMessages(pruneForModel([last] as UIMessage[]))
       : []
   }
-  // Lean per-request grounding (context management): the canvas contract
-  // for THIS cut plus the typeface catalogue. The full Remotion skill
-  // reference is not re-sent — validate/repair tools close that loop.
-  // Passed via the `system` option (never as a system message inside
-  // `messages` — the SDK flags those as a prompt-injection risk).
+  // Grounding (context management): the canvas contract for THIS cut plus the
+  // typeface catalogue. The full Remotion skill reference is not re-sent —
+  // validate/repair tools close that loop. Passed via the `system` option
+  // (never as a system message inside `messages` — the SDK flags those as a
+  // prompt-injection risk). Advisory: a failed read still runs the turn.
   let canvasHint: string | undefined
   let systemPreamble: string | undefined
   try {
@@ -284,24 +298,6 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
     /* grounding is advisory — the run proceeds without it */
   }
   const tools = buildTools(ctx)
-  const t0 = Date.now()
-
-  // Fresh project (no versions yet) → creation mode: compose the full
-  // scene in one write instead of timid placeholder tweaks. One cheap
-  // indexed count query; advisory only.
-  let freshProject = false
-  try {
-    const db = getDb(c.env.DB)
-    const existing = await db
-      .select({ versionNo: versions.versionNo })
-      .from(versions)
-      .where(eq(versions.projectId, body.projectId))
-      .limit(1)
-      .all()
-    freshProject = existing.length === 0
-  } catch {
-    /* creation flag is advisory */
-  }
 
   console.log(
     JSON.stringify({
@@ -342,97 +338,157 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
   // Stream setup itself must not 500 the turn: a gateway hiccup here
   // becomes a retryable JSON error, not a dead SSE connection. Walk the
   // chain — a queued primary falls through to the next model instead of
-  // stalling until the client aborts.
-  let result: ReturnType<typeof built.agent.stream>
+  // The model call itself.
+  //
+  // NOT streamed, deliberately. Streaming meant the Worker parsed every SSE
+  // frame the gateway emitted and re-serialized each one into a UIMessage
+  // part — measured at ~18.8ms of CPU for a 4,000-token answer, versus
+  // ~0.7ms for one `res.json()` on the finished body. On a CPU-capped plan
+  // that single difference decides whether the request survives, so the
+  // per-token cost is not affordable here.
+  //
+  // What the user sees is unchanged: a hand-written SSE channel below emits
+  // real progress (stage + tool activity + elapsed time) as tools actually
+  // run, and the client reveals the finished text with a typewriter effect.
+  // The honesty rule holds — progress is reported from real events, never
+  // a timer that pretends work is happening.
   let activeModel = built.modelId
-  try {
-    result = built.agent.stream({
-      system: systemPreamble,
-      messages: modelMessages,
-    })
-  } catch (err) {
-    console.error(JSON.stringify({ msg: "agent-stream-failed", model: activeModel, err: String(err) }))
-    let recovered: ReturnType<typeof built.agent.stream> | null = null
-    for (const fallback of built.chain.slice(1)) {
-      try {
+  const t0 = Date.now()
+
+  return streamSSE(c, async (stream) => {
+    // SSE frames are the same wire format createUIMessageStream emits, so
+    // the client's existing useChat transport reads this unchanged.
+    // The AI SDK's UI message stream has a precise wire format: bare
+    // `data: {json}` frames terminated by `data: [DONE]`, with NO `event:`
+    // line. The client's parser ignores named events, so writing them here
+    // produced a stream the browser could not read at all — an empty chat
+    // with no error anywhere. Format verified against the SDK's own
+    // JsonToSseTransformStream.
+    const emit = (part: unknown) =>
+      stream.writeSSE({ data: JSON.stringify(part) })
+    const done = () => stream.writeSSE({ data: "[DONE]" })
+    const fail = async (message: string) => {
+      // The SDK's error chunk shape. Still terminated with [DONE] so the
+      // client settles the request instead of hanging on a half-open stream.
+      await emit({ type: "error", errorText: message })
+      await done()
+      console.error(JSON.stringify({ msg: "agent-failed", err: message }))
+    }
+
+    try {
+      // Open the assistant message before the model answers, so the UI can
+      // show an activity card immediately instead of an empty bubble.
+      const messageId = crypto.randomUUID()
+      await emit({ type: "start", messageId })
+
+      // Walk the model chain when a model fails to start (queued / gateway
+      // hiccup) rather than 502ing the turn: a queued primary falls through
+      // to the next model instead of stalling until the client gives up.
+      const runOn = async (id: string): Promise<Awaited<ReturnType<typeof built.agent.generate>>> => {
         const retry = buildAgent(c.env, tools, {
           freshProject,
           canvasHint,
-          modelId: fallback,
+          modelId: id,
+          // Real progress, from a real event: the tool is about to execute.
+          // `transient` keeps it out of the persisted message — it is a
+          // live signal, not conversation content. This is what fills the
+          // client's activity card during a non-streaming run.
+          onToolStart: (toolName: string) => {
+            void emit({
+              type: "data-toolstart",
+              data: { tool: toolName, at: Date.now() - t0 },
+              transient: true,
+            })
+          },
         })
-        recovered = retry.agent.stream({ system: systemPreamble, messages: modelMessages })
-        console.log(JSON.stringify({ msg: "agent-model-fallback", from: activeModel, to: fallback }))
-        activeModel = fallback
-        built = retry
-        break
-      } catch (e2) {
-        console.error(JSON.stringify({ msg: "agent-stream-failed", model: fallback, err: String(e2) }))
+        activeModel = id
+        return retry.agent.generate({
+          system: systemPreamble,
+          messages: modelMessages,
+        })
       }
-    }
-    if (!recovered) {
-      // The turn never reached the model — refund the credit it reserved.
-      try {
-        await refund(getDb(c.env.DB), user.id, CHAT_TURN_COST, "agent-turn-failed", body.conversationId)
-      } catch {
-        /* refund is best-effort */
-      }
-      return c.json({ error: "The AI stumbled starting up — retry and I'll pick it up." }, 502)
-    }
-    result = recovered
-  }
 
-  return result.toUIMessageStreamResponse<UIMessage>({
-    originalMessages: incoming,
-    onFinish: ({ responseMessage, isAborted, outcome }) => {
+      let result!: Awaited<ReturnType<typeof built.agent.generate>>
+      try {
+        result = await runOn(built.modelId)
+      } catch (err) {
+        let recovered = false
+        for (const fallback of built.chain.slice(1)) {
+          try {
+            result = await runOn(fallback)
+            console.log(JSON.stringify({ msg: "agent-model-fallback", to: fallback }))
+            recovered = true
+            break
+          } catch (e2) {
+            console.error(
+              JSON.stringify({ msg: "agent-model-failed", model: fallback, err: String(e2) })
+            )
+          }
+        }
+        if (!recovered) {
+          // Never reached a model — refund the credit it reserved.
+          c.executionCtx.waitUntil(
+            refund(getDb(c.env.DB), user.id, CHAT_TURN_COST, "agent-turn-failed", body.conversationId).catch(
+              () => {}
+            )
+          )
+          return fail("The AI stumbled starting up — retry and I'll pick it up.")
+        }
+      }
+
+      // One conversion, used for BOTH the live stream and the stored row, so
+      // a reload can never show a different conversation than the one the
+      // user just watched.
+      const parts = toUiParts(result.content)
+      const activity = toolActivity(parts)
+      const toolParts = activity.length
+      const elapsed = Date.now() - t0
+      const empty = isEmptyParts(parts)
+
+      if (!empty) {
+        for (const chunk of toSseChunks(parts, messageId)) {
+          await emit(chunk)
+        }
+      } else {
+        // A step that produced nothing still has to close the message, or
+        // the client waits forever for text that is never coming.
+        await emit({ type: "finish" })
+      }
+      // Terminator. Without it the client's stream reader never sees
+      // completion and the turn stays pending until it times out.
+      await done()
+
+      console.log(
+        JSON.stringify({
+          msg: "agent-finish",
+          projectId: body.projectId,
+          conversationId: body.conversationId,
+          model: activeModel,
+          ms: elapsed,
+          toolParts,
+          status: result.finishReason,
+        })
+      )
+
+      // Persistence is off the response path — the client already has the
+      // text, and waitUntil buys the 30s of headroom a D1 write needs.
       c.executionCtx.waitUntil(
         (async () => {
           try {
-            const parts = responseMessage.parts ?? []
-            // Persist partial progress ALWAYS — including user-aborted and
-            // errored runs. The old `!isAborted` guard is what made a
-            // refresh after Stop/499 show "only my message": the version
-            // snapshot (preview_composition) was already committed to the
-            // DB by the tool, but the chat row explaining it was thrown
-            // away, so reload showed the user turn with no reply and the
-            // preview had nothing to bridge to. Aborted parts may hold
-            // in-flight tool calls without results — pruneForModel already
-            // tolerates those on the next turn.
-            if (parts.length > 0) {
-              const finalParts = isAborted
-                ? [
-                    ...parts,
-                    {
-                      type: "text",
-                      text: "\n\n_That run was stopped before it finished — anything already saved stays saved. Press Retry or describe what to do next and I'll pick it up._",
-                    },
-                  ]
-                : parts
-              await appendMessage(ctx, {
-                role: "assistant",
-                parts: finalParts,
-              })
+            if (!empty) {
+              await appendMessage(ctx, { role: "assistant", parts })
             }
-            const toolParts = ((responseMessage.parts ?? []) as Array<{ type?: string }>).filter(
-              (p) => typeof p?.type === "string" && p.type.startsWith("tool-")
-            ).length
-            console.log(
-              JSON.stringify({
-                msg: "agent-finish",
-                projectId: body.projectId,
-                conversationId: body.conversationId,
-                model: activeModel,
-                ms: Date.now() - t0,
-                toolParts,
-                aborted: isAborted,
-                status: outcome.status,
-              })
-            )
           } catch (err) {
             console.error(JSON.stringify({ msg: "agent-persist-failed", err: String(err) }))
           }
         })()
       )
-    },
+    } catch (err) {
+      console.error(
+        JSON.stringify({ msg: "agent-failed", model: activeModel, ms: Date.now() - t0, err: String(err) })
+      )
+      await fail("Something broke mid-run — press Retry and I'll pick it up.")
+    }
   })
 })
 

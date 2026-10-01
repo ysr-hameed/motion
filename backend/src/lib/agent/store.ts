@@ -527,6 +527,25 @@ export function sanitizePartsForStorage(parts: unknown): unknown {
   return parts.map((p) => {
     if (typeof p !== "object" || p === null) return p
     const t = (p as { type?: unknown }).type
+    if (t === "file") {
+      // Reference images arrive as base64 data URLs (~700KB each, up to 3).
+      // Storing them verbatim meant every later turn re-read megabytes of
+      // base64 out of D1 and re-serialized it into the model context — a
+      // pure repeat of data the model has already seen, and one of the
+      // largest CPU items in the request.
+      //
+      // The image itself lives in R2 (the upload route) and the turn that
+      // introduced it already carries the bytes the model needed. Keeping a
+      // pointer keeps history truthful ("there was a reference image")
+      // while making stored size O(turns) instead of O(turns × image size).
+      const part = p as Record<string, unknown>
+      return {
+        ...part,
+        url: "",
+        mediaType: typeof part.mediaType === "string" ? part.mediaType : "image/jpeg",
+        storageNote: "reference image stored in R2 — bytes omitted from history",
+      }
+    }
     if (typeof t !== "string" || (!t.startsWith("tool-") && t !== "dynamic-tool")) return p
     const part = p as Record<string, unknown>
     const out = part.output as Record<string, unknown> | undefined

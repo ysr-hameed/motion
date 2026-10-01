@@ -1,6 +1,6 @@
 import { Hono } from "hono"
-import { skillIds, SKILLS_REMOTION_VERSION } from "../lib/remotion-skills"
-import { SKILLS } from "../lib/remotion-skills.generated"
+import { skillIds } from "../lib/remotion-skills"
+import { SKILLS_REMOTION_VERSION } from "../lib/remotion-skills-version"
 import { CONTRACTS } from "../lib/remotion-guide"
 import type { Env } from "../env"
 
@@ -45,9 +45,17 @@ app.get("/api", (c) =>
   })
 )
 
-/** One skill's markdown, for debugging what the model was told. */
-app.get("/skills/:id", (c) => {
+/**
+ * One skill's markdown, for debugging what the model was told.
+ *
+ * The 112KB skill map is imported lazily, inside the handler. A static
+ * import made every cold start construct the whole object even though only
+ * this debug route ever reads it — pure overhead on the chat path, which is
+ * the one that has to fit a CPU budget.
+ */
+app.get("/skills/:id", async (c) => {
   const id = c.req.param("id")
+  const { SKILLS } = await import("../lib/remotion-skills.generated")
   const content = SKILLS[id]
   if (!content) return c.json({ error: `Unknown skill "${id}"` }, 404)
   return c.json({ id, content })

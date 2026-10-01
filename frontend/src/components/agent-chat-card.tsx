@@ -139,6 +139,7 @@ function toolNameOf(p: ToolPart): string {
   return p.type.slice("tool-".length)
 }
 
+
 function shortResult(name: string, output: unknown): string | null {
   if (typeof output !== "object" || output === null) return null
   const o = output as Record<string, unknown>
@@ -864,11 +865,36 @@ function AgentThread({
           // NOTE: the returned body is sent AS-IS — the SDK does not merge
           // messages/trigger back in. Dropping them 400s the chat route
           // (Zod: messages required). Always forward them.
-          // The server rebuilds full history from storage (dedupe by id),
-          // so resending the whole thread — base64 images included — on
-          // every turn only burns request bytes and Worker parse/validate
-          // CPU. The last 3 turns carry everything the server needs.
-          const tail = Array.isArray(messages) ? messages.slice(-3) : messages
+          //
+          // The server rebuilds full history from D1 (dedupe by id), so any
+          // message it has already stored is re-sending bytes for nothing.
+          // That matters most for images: base64 data URLs are ~700KB each,
+          // and JSON.parse on them is the single largest CPU item in the
+          // request — enough on its own to blow a CPU-capped plan's budget
+          // and get the invocation killed mid-stream (the 499s).
+          //
+          // So: keep file payloads ONLY on the newest message (the one the
+          // server has not stored yet). Older turns are already in D1 with
+          // their images intact, and the server ignores the stripped copies
+          // it dedupes away. Result is identical context, a fraction of the
+          // bytes, and no UX change.
+          const all = Array.isArray(messages) ? messages : [messages]
+          const tail = all.slice(-3).map((m, i, arr) => {
+            if (i === arr.length - 1) return m
+            if (!Array.isArray(m?.parts)) return m
+            const hasFile = m.parts.some((p) => (p as { type?: string })?.type === "file")
+            if (!hasFile) return m
+            return {
+              ...m,
+              parts: m.parts.map((p) => {
+                const part = p as { type?: string; url?: string }
+                if (part?.type !== "file" || typeof part.url !== "string") return p
+                // Keep the shape, drop the bytes. The server has the real
+                // part in D1 and never reads this field for stored turns.
+                return { ...part, url: "" }
+              }),
+            }
+          })
           return {
             body: {
               projectId: serverProjectId,
@@ -1112,6 +1138,33 @@ function AgentThread({
   }, [pending])
 
   /**
+   * Tools the server has reported starting, for the live progress chips.
+   *
+   * The backend runs the model NON-streaming (it cannot afford to parse
+   * every SSE token on a CPU-capped plan), so there is no token stream to
+   * animate. Instead it emits a transient `data-toolstart` event as each
+   * tool actually executes. This is that signal — real events, in real
+   * order, so the progress shown is never invented.
+   */
+  const [liveTools, setLiveTools] = useState<string[]>([])
+  useEffect(() => {
+    if (!pending) {
+      setLiveTools([])
+      return
+    }
+    const seen: string[] = []
+    for (const part of chat.messages) {
+      for (const p of part.parts) {
+        const d = p as { type?: string; data?: { tool?: unknown } }
+        if (d?.type === "data-toolstart" && typeof d.data?.tool === "string") {
+          if (!seen.includes(d.data.tool)) seen.push(d.data.tool)
+        }
+      }
+    }
+    setLiveTools(seen)
+  }, [chat.messages, pending])
+
+  /**
    * Reference images, downscaled BEFORE send. The old code attached the
    * original data URLs (up to 2.5 MB → ~3.3 MB base64 each): they were
    * persisted to D1, re-sent every turn and re-serialized on every model
@@ -1336,21 +1389,35 @@ function AgentThread({
               key={m.id}
               className="msg-in max-w-[85%] self-end break-words rounded-2xl rounded-tr-md bg-primary px-3.5 py-2 text-sm text-primary-foreground"
             >
-              {m.parts.filter((p) => p.type === "file").length > 0 && (
-                <span className="mb-1.5 flex gap-1.5">
-                  {m.parts
-                    .filter((p) => p.type === "file")
-                    .slice(0, 3)
-                    .map((p, i) => (
+              {/* Only the newest turn carries its image bytes; older turns
+                  were sent (and stored) without them to keep the request
+                  payload small. Rendering an empty src would show a broken
+                  image icon, so those turns fall back to a count badge —
+                  the reference is still visible in the conversation. */}
+              {(() => {
+                const files = m.parts.filter((p) => p.type === "file") as Array<{ url?: string }>
+                if (files.length === 0) return null
+                const withBytes = files.filter((f) => typeof f.url === "string" && f.url.startsWith("data:"))
+                if (withBytes.length === 0) {
+                  return (
+                    <span className="mb-1.5 inline-flex items-center gap-1 rounded-lg bg-white/15 px-1.5 py-0.5 text-[11px] font-medium">
+                      {files.length === 1 ? "1 reference image" : `${files.length} reference images`}
+                    </span>
+                  )
+                }
+                return (
+                  <span className="mb-1.5 flex gap-1.5">
+                    {withBytes.slice(0, 3).map((f, i) => (
                       <img
                         key={i}
-                        src={(p as { url?: string }).url}
+                        src={f.url}
                         alt="Reference"
                         className="size-14 rounded-lg border border-white/20 object-cover"
                       />
                     ))}
-                </span>
-              )}
+                  </span>
+                )
+              })()}
               {m.parts
                 .filter((p) => p.type === "text")
                 .map((p, i, arr) => (
@@ -1376,11 +1443,25 @@ function AgentThread({
           (visibleMessages.length === 0 ||
             visibleMessages[visibleMessages.length - 1]?.role !== "assistant") && (
             <div
-              className="msg-in flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground"
+              className="msg-in flex flex-wrap items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground"
               aria-live="polite"
             >
               <Loader2 className="size-3 animate-spin text-primary" />
-              Thinking…
+              {/* Real progress, from real tool events the server emits while
+                  the model works. The server no longer streams tokens (it
+                  can't afford the CPU), so this card is the honest signal
+                  that work is happening — and which step it reached. */}
+              {liveTools.length > 0
+                ? liveTools.map((t, i) => (
+                    <span
+                      key={`${t}-${i}`}
+                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] text-foreground/80"
+                    >
+                      <Check className="size-2.5 text-primary" aria-hidden />
+                      {toolLabel(t)}
+                    </span>
+                  ))
+                : "Thinking…"}
               <Elapsed className="ml-auto text-[10px]" />
             </div>
           )}

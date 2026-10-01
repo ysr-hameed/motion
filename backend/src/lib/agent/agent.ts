@@ -92,7 +92,17 @@ export function buildAgent(
     AI_GATEWAY_API_KEY?: string
   },
   tools: AgentTools,
-  opts?: { freshProject?: boolean; canvasHint?: string; modelId?: string }
+  opts?: {
+    freshProject?: boolean
+    canvasHint?: string
+    modelId?: string
+    /**
+     * Called as each tool begins. Non-streaming runs get no token events,
+     * so this is what keeps the client's activity card live and honest —
+     * every entry corresponds to a tool that genuinely ran.
+     */
+    onToolStart?: (toolName: string) => void
+  }
 ): AgentBuild {
   const key = env.AI_GATEWAY_API_KEY
   if (!key) throw new Error("AI provider is not configured (missing API key)")
@@ -102,6 +112,7 @@ export function buildAgent(
   const creation =
     `\n\n${CREATION_MODE}` +
     (opts?.canvasHint ? `\nCurrent canvas: ${opts.canvasHint}.` : "")
+  const onToolStart = opts?.onToolStart
   const agent = new ToolLoopAgent({
     model: openai.chat(modelId),
     system: opts?.freshProject ? `${SYSTEM}\n\n${DESIGN_BAR}${creation}` : `${SYSTEM}\n\n${DESIGN_BAR}`,
@@ -114,6 +125,27 @@ export function buildAgent(
     stopWhen: stepCountIs(1),
     maxOutputTokens: 8000,
     temperature: 0.5,
+    // Wraps each tool so progress can be reported without streaming tokens.
+    // Tools are otherwise untouched — same schemas, same execute functions.
+    // The cast is unavoidable here: rebuilding the ToolSet dynamically
+    // erases the per-tool literal types the SDK infers, and nothing about
+    // the runtime shape changes.
+    ...(onToolStart
+      ? {
+          tools: Object.fromEntries(
+            Object.entries(tools as Record<string, unknown>).map(([name, t]) => [
+              name,
+              {
+                ...(t as object),
+                execute: async (args: unknown, opts2: unknown) => {
+                  onToolStart(name)
+                  return (t as { execute: (a: unknown, o: unknown) => unknown }).execute(args, opts2)
+                },
+              },
+            ])
+          ) as unknown as AgentTools,
+        }
+      : {}),
   })
   return { agent, modelId, chain }
 }
