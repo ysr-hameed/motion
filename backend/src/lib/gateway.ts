@@ -1,7 +1,7 @@
 import type { AiProvider, RepairRequest, DirectorEventHandler } from "./ai-types"
 import { AiNotConfiguredError } from "./ai-types"
 import { MAX_FRAMES, type Canvas } from "./artifact"
-import { blockingIssues, describeIssues, lintComposition } from "./code-lint"
+import { blockingIssues, describeIssues, lintCompositionCached as lintComposition } from "./code-lint"
 import { resolveModels } from "./models"
 import { runRepairer } from "./agents/repairer"
 

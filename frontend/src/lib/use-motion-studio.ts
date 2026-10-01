@@ -376,6 +376,64 @@ export function useMotionStudio() {
   }
 
   /**
+   * Recover server snapshots the live stream never delivered. A Stop /
+   * 499 / refresh mid-run leaves the version row committed (the tool
+   * writes it before replying) but the local rail empty — the stage then
+   * says "No preview yet" while the server holds the cut. Merge anything
+   * missing locally, oldest first, deduped by code. Silent: no legacy
+   * thread spam, just the rail + player + spec.
+   */
+  const syncServerVersions = async (serverId: string): Promise<void> => {
+    const target = projectsRef.current.find((p) => p.serverId === serverId)
+    if (!target) return
+    let rows: Array<{ versionNo: number; reply?: string | null; motionJson: unknown }>
+    try {
+      const { loadServerVersions } = await import("./agent")
+      rows = await loadServerVersions(serverId)
+    } catch {
+      return
+    }
+    if (!rows || rows.length === 0) return
+    const cur = projectRef(target.id)
+    if (!cur) return
+    const keyOf = (a: Artifact) =>
+      a.kind === "code" ? `code:${a.code}` : `json:${JSON.stringify(a)}`
+    const known = new Set(Object.values(cur.artifacts ?? {}).map(keyOf))
+    const missing: Artifact[] = []
+    for (const r of [...rows].sort((a, b) => a.versionNo - b.versionNo)) {
+      const art = asArtifact(r.motionJson)
+      if (!art) continue
+      if (known.has(keyOf(art))) continue
+      known.add(keyOf(art))
+      missing.push(art)
+    }
+    if (missing.length === 0) return
+    for (const art of missing) {
+      commitVersion(target.id, art, "agent")
+    }
+    const after = projectRef(target.id)
+    if (after && !after.spec) {
+      const newest = after.artifacts[after.versions]
+      if (newest?.kind === "code") {
+        const secs = Math.min(30, Math.max(3, Math.round(newest.durationInFrames / (newest.fps || 30))))
+        const ratio = newest.width / newest.height
+        const format = ratio > 1.2 ? "16:9" : ratio < 0.85 ? "9:16" : "1:1"
+        patchProject(target.id, {
+          spec: {
+            prompt: after.name,
+            format,
+            style: "Auto",
+            duration: `00:${String(secs).padStart(2, "0")}`,
+          },
+          phase: "ready",
+        })
+        return
+      }
+    }
+    patchProject(target.id, { phase: "ready" })
+  }
+
+  /**
    * Commits a version. No fake output: without an artifact there is
    * nothing to show, and the chat says so instead of inventing a cut.
    */
@@ -551,7 +609,17 @@ export function useMotionStudio() {
     }
     // Agent-driven creation: shell project now, the agent composes via
     // tools once the playground mounts (prompt handed off, not generated here).
+    // The picked length/shape are EXPLICIT (prompt-box pickers) and win over
+    // parseSpec's guess — the old code let a prompt without a number ("epic
+    // sale promo") silently reset a picked 10s to 5s, so the playground
+    // showed the default instead of the choice.
     const s = parseSpec(pendingPrompt.prompt, pendingPrompt.format)
+    const pickedSecs = Math.min(
+      15,
+      Math.max(3, Math.round(pendingPrompt.secs ?? DEFAULT_DURATION))
+    )
+    s.format = pendingPrompt.format
+    s.duration = `00:${String(pickedSecs).padStart(2, "0")}`
     const id = projectId.current++
     commit((ps) => [
       {
@@ -592,6 +660,7 @@ export function useMotionStudio() {
     stopGeneration,
     repairVersion,
     ensureServerProject,
+    syncServerVersions,
     commitAgentResult,
     restoreVersion,
     selectProject,

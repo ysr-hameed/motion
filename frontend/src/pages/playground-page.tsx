@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AgentChatCard } from "@/components/agent-chat-card"
+import { CreditsPill } from "@/components/credits-pill"
 import { ClipPlayer } from "@/components/studio/clip-player"
 import { ExportMenu } from "@/components/studio/export-menu"
 import { StudioSidebar } from "@/components/studio/studio-sidebar"
@@ -41,10 +42,13 @@ function GeneratingCard({
   format,
   onStop,
   progress,
+  working,
 }: {
   format: string
   onStop: () => void
   progress?: RunProgress | null
+  /** True while the agent stream is live (progress only tracks repair runs). */
+  working?: boolean
 }) {
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
@@ -57,6 +61,12 @@ function GeneratingCard({
   }, [])
 
   const line = liveStatus(progress)
+  // Agent runs never write genProgress (only repair does), so a null line
+  // used to read "Starting" for minutes while the chat said "Composing".
+  // While the stream is live, label the stage honestly instead.
+  const text = line?.text ?? (working ? "Composing the scene" : "Starting")
+  const detail = line?.detail ?? (working && elapsed >= 5 ? "the first version takes a minute" : null)
+  const pct = line?.pct ?? (working ? Math.min(90, 8 + elapsed * 2) : 4)
 
   return (
     <div
@@ -79,28 +89,32 @@ function GeneratingCard({
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
         <div className="flex flex-col items-center gap-1">
           <p className="text-sm font-medium tabular-nums text-white" aria-live="polite">
-            {line?.text ?? "Starting"}
-            {line?.detail ? ` — ${line.detail}` : ""}
+            {text}
+            {detail ? ` — ${detail}` : ""}
           </p>
-          <p className="text-xs text-zinc-400">Rendering version… you can stop anytime</p>
+          <p className="text-xs text-zinc-400">
+            {elapsed >= 60
+              ? "Still working — big scenes take a minute. Stop anytime; saved versions stay."
+              : "Rendering version… you can stop anytime"}
+          </p>
         </div>
         <div className="flex w-full max-w-56 flex-col gap-1.5">
           <div
             role="progressbar"
             aria-label="Render progress"
-            aria-valuenow={line?.pct ?? 0}
+            aria-valuenow={pct}
             aria-valuemin={0}
             aria-valuemax={100}
             className="h-1.5 w-full overflow-hidden rounded-full bg-white/10"
           >
             <div
               className="h-full rounded-full bg-primary transition-[width] duration-500"
-              style={{ width: `${line?.pct ?? 4}%` }}
+              style={{ width: `${pct}%` }}
             />
           </div>
           <div className="flex justify-between text-[11px] tabular-nums text-zinc-500">
             <span>Composing</span>
-            <span>{line?.pct ?? 4}%</span>
+            <span>{pct}%</span>
           </div>
         </div>
         <button
@@ -114,6 +128,15 @@ function GeneratingCard({
       </div>
     </div>
   )
+}
+
+/** "00:10" → 10. The chat composer inherits the picked length. */
+function specSecs(duration: string | undefined): number | null {
+  if (!duration) return null
+  const m = duration.match(/(\d+):(\d+)/)
+  if (!m) return null
+  const secs = Number(m[1]) * 60 + Number(m[2])
+  return Number.isFinite(secs) && secs >= 3 && secs <= 15 ? secs : null
 }
 
 function agentFooter(t: MotionStudio): string | undefined {
@@ -224,6 +247,17 @@ export function PlaygroundPage({
     }
     t.stopGeneration()
   }
+
+  // Recover cuts the stream never delivered: a Stop / 499 / refresh
+  // mid-run leaves the snapshot on the server but the local rail empty.
+  // Merge anything missing so the stage never says "No preview yet"
+  // while the server already holds the version.
+  const serverId = active?.serverId ?? null
+  useEffect(() => {
+    if (!serverId) return
+    void t.syncServerVersions(serverId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverId])
 
   useEffect(() => {
     if (!shared) return
@@ -353,6 +387,7 @@ export function PlaygroundPage({
               {active ? active.name : "Editor"}
             </h1>
             {active && <StatusPill phase={active.phase} />}
+            {active && <CreditsPill />}
           </nav>
           <div className="flex-1" />
           {active && (
@@ -474,6 +509,8 @@ export function PlaygroundPage({
                     onRemoveAttachment={t.removeActiveAttachment}
                     footer={agentFooter(t)}
                     firstPrompt={firstPrompt}
+                    defaultFormat={active.spec?.format ?? null}
+                    defaultSecs={specSecs(active.spec?.duration)}
                     onWorkingChange={setChatWorking}
                     stopRef={stopRef}
                   />
@@ -567,6 +604,7 @@ export function PlaygroundPage({
                       format={active.spec?.format ?? "16:9"}
                       onStop={stopAll}
                       progress={t.genProgress}
+                      working={chatWorking}
                     />
                   )}
                   {preview && (

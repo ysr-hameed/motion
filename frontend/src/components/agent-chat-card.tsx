@@ -39,6 +39,13 @@ import {
   seedAgentConversation,
   type AgentConversation,
 } from "@/lib/agent"
+import {
+  getCreditsFresh,
+  isOutOfCreditsError,
+  useCredits,
+  type CreditsSnapshot,
+} from "@/lib/credits"
+import { navigate } from "@/lib/router"
 
 const API = import.meta.env.VITE_API_URL as string | undefined
 const IS_PROD = import.meta.env.PROD
@@ -448,6 +455,13 @@ function ActivityLine({ parts }: { parts: ToolPart[] }) {
 function friendlyError(raw: string): string {
   const s = raw.trim()
   if (!s) return "Something interrupted that — retry and I'll pick it up."
+  // Exhausted wallet: the backend 402 message is written for the user
+  // (allowance, reset date), so it passes through verbatim instead of
+  // being replaced by the generic fallback below.
+  if (isOutOfCreditsError(s)) {
+    const m = s.match(/You've used all [\s\S]{0,200}?\. /)
+    return m ? m[0].trim() : "You've run out of credits — upgrade for more, or wait for the reset."
+  }
   // AI SDK's generic tool error when the stream dies mid-turn (e.g. the
   // Worker was killed): never show the raw sentence, it says nothing.
   if (/^an error occurred\.?$/i.test(s)) return "Interrupted mid-step — retry and I'll continue."
@@ -514,6 +528,41 @@ function AskBlock({
       </p>
     </div>
   )
+}
+
+/**
+ * Continuation token. One server request = ONE model step (CPU-capped
+ * plans die on multi-step loops), so the client chains steps by sending
+ * this exact text. It is NEVER rendered (filtered from the transcript
+ * below), never persisted server-side, and never charged. Shared
+ * contract with backend routes/agent.ts — same literal both sides.
+ */
+const CONTINUE_TOKEN = "[continue-turn]"
+const MAX_STEPS_PER_TURN = 7
+
+function messageText(m: UIMessage): string {
+  return m.parts
+    .filter((p) => p.type === "text")
+    .map((p) => (p as { text?: string }).text ?? "")
+    .join("")
+}
+
+/** Continuation markers are transport, not conversation — hide them. */
+function isContinueMessage(m: UIMessage): boolean {
+  return m.role === "user" && messageText(m).trim() === CONTINUE_TOKEN
+}
+
+/** Assistant step-messages since the last real user message. */
+function stepsUsedIn(messages: UIMessage[]): number {
+  let n = 0
+  for (const m of messages) {
+    if (m.role === "user") {
+      if (!isContinueMessage(m)) n = 0
+      continue
+    }
+    if (m.role === "assistant" && toolPartsOf(m).length > 0) n += 1
+  }
+  return n
 }
 
 /**
@@ -595,6 +644,7 @@ function AssistantBubble({
   streaming,
   actionsOpen,
   onAnswer,
+  isLast,
 }: {
   message: UIMessage
   firstOfGroup: boolean
@@ -607,6 +657,12 @@ function AssistantBubble({
    */
   actionsOpen: boolean
   onAnswer: (text: string) => void
+  /**
+   * Only the LAST assistant message may summarize. Intermediate step
+   * messages (one per server request now) render their live activity at
+   * most — never fallback lectures, or every step would narrate.
+   */
+  isLast: boolean
 }) {
   const text = assistantText(m)
   const reasoning = reasoningText(m)
@@ -618,9 +674,34 @@ function AssistantBubble({
   const hasVisible = text.length > 0 || reasoning.length > 0 || tools.length > 0 || asks.length > 0
   // Settled turn, tools ran, model wrote no words: never leave a bare
   // header — the version rail already moved, so say so in one line.
-  const published = !streaming && !text ? publishedVersion(tools) : null
+  const published = !streaming && !text && isLast ? publishedVersion(tools) : null
+  // Settled, tools ran, but no words and no preview came out (aborted
+  // mid-run, validation blocked, or a tool-only turn): the old code
+  // rendered a bare "SlyxUp" header or nothing at all — the "2 messages
+  // but nothing showing" ghost. Say so honestly instead. Last message
+  // only — intermediate steps stay quiet.
+  const settledSilent =
+    isLast && !streaming && !text && published == null && asks.length === 0 && tools.length > 0
   if (!hasVisible) {
-    if (!streaming) return null
+    if (!streaming) {
+      if (!isLast) return null
+      return (
+        <div className="msg-in flex min-w-0 max-w-full flex-col gap-1">
+          {firstOfGroup && (
+            <span className="flex items-center gap-1.5">
+              <span className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                <Sparkles className="size-3" />
+              </span>
+              <span className="text-[11px] font-semibold tracking-[-0.01em]">SlyxUp</span>
+            </span>
+          )}
+          <div className="break-words text-sm leading-relaxed text-muted-foreground">
+            That step finished without a visible reply — press Retry or describe what to do
+            next and I&apos;ll pick it up.
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="msg-in flex min-w-0 max-w-full flex-col gap-1" aria-live="polite">
         {firstOfGroup && (
@@ -667,6 +748,12 @@ function AssistantBubble({
           Saved as v{published} — it&apos;s on stage now. Tell me what to change next.
         </div>
       )}
+      {settledSilent && published == null && (
+        <div className="break-words text-sm leading-relaxed text-muted-foreground">
+          That step finished but produced no preview — press Retry or describe what to do
+          next and I&apos;ll pick it up.
+        </div>
+      )}
       {reasoning && <ReasoningBlock text={reasoning} streaming={streaming} />}
       <ActivityLine parts={tools} />
       {asks.map((p, i) => (
@@ -694,6 +781,7 @@ function AgentThread({
   onArtifact,
   onPendingChange,
   stopRef,
+  refreshCredits,
 }: {
   serverProjectId: string
   conversationId: string
@@ -707,6 +795,8 @@ function AgentThread({
   onArtifact: (artifact: Artifact, reply: string, serverVersion?: number) => void
   onPendingChange?: (pending: boolean) => void
   stopRef?: { current: (() => void) | null }
+  /** Wallet refresh (single instance per card) for post-turn updates. */
+  refreshCredits?: () => void
 }) {
   const [input, setInput] = useState(() => {
     try {
@@ -807,6 +897,45 @@ function AgentThread({
     onPendingChange?.(pending)
   }, [pending, onPendingChange])
 
+  // The turn spent a credit when it started — refresh the wallet when it
+  // settles so pills and guards never show a stale balance.
+  const settledRef = useRef(false)
+  useEffect(() => {
+    if (pending) {
+      settledRef.current = false
+      return
+    }
+    if (!settledRef.current) {
+      settledRef.current = true
+      refreshCredits?.()
+    }
+  }, [pending, refreshCredits])
+
+  /**
+   * Pre-send credit guard. The backend enforces with 402 regardless, but
+   * blocking here saves the user a failed round-trip and renders the
+   * upgrade path inline. Fresh (not cached) so a just-completed checkout
+   * unblocks immediately.
+   */
+  const [outOfCredits, setOutOfCredits] = useState<CreditsSnapshot | null>(null)
+  const checkCredits = useCallback(async (): Promise<boolean> => {
+    try {
+      const snap = await getCreditsFresh()
+      const cost = snap.costs.agentTurn ?? 1
+      if (!snap.credits.unlimited && snap.credits.balance < cost) {
+        setOutOfCredits(snap)
+        return false
+      }
+      setOutOfCredits(null)
+      return true
+    } catch {
+      // Credits unreachable — let the send through; the backend is the
+      // real gate and fails open here would strand the user otherwise.
+      setOutOfCredits(null)
+      return true
+    }
+  }, [])
+
   /**
    * `pending` reads `chat.status`, which only updates a tick after
    * `sendMessage`, so a second Enter or a fast double-click on a starter
@@ -839,95 +968,148 @@ function AgentThread({
     }
   }, [stopRef, stop, conversationId])
 
+  // Visible transcript: continuation tokens are transport, never rendered.
+  const visibleMessages = useMemo(
+    () => chat.messages.filter((m) => !isContinueMessage(m)),
+    [chat.messages]
+  )
+
+  /** This turn still has an open loop (set on every user send, cleared on settle). */
+  const turnActiveRef = useRef(false)
+
   /**
-   * Auto-continue a turn that died with zero trace: no text, no reasoning,
-   * no tool activity, no error, not user-stopped. The stream settled but
-   * the run clearly didn't finish — one silent regenerate per user message
-   * (max two per conversation) instead of leaving the user staring at
-   * nothing. Anything partially produced is left for the manual Retry.
+   * Chain the next single step of the open turn. The server runs exactly
+   * one model step per request; this hidden token asks for the next one
+   * without touching history (never persisted), credits (never charged)
+   * or the visible transcript (never rendered). Crucially it is NOT
+   * chat.regenerate(): regenerate deletes the last assistant message
+   * client-side, which would hide every previous step's text and tools.
    */
-  const turnBase = useRef<{ userId: string | null; msgCount: number } | null>(null)
-  const continuedFor = useRef<Set<string>>(new Set())
-  const continueCount = useRef(0)
-  useEffect(() => {
-    if (pending) {
-      stoppedRef.current = false
-      const lastUser = [...chat.messages].reverse().find((m) => m.role === "user")
-      turnBase.current = { userId: lastUser?.id ?? null, msgCount: chat.messages.length }
-      return
+  const sendContinue = useCallback(async (): Promise<boolean> => {
+    if (
+      chat.status === "submitted" ||
+      chat.status === "streaming" ||
+      inFlight.current ||
+      stoppedRef.current
+    ) {
+      return false
     }
-    const base = turnBase.current
-    turnBase.current = null
-    if (!base || stoppedRef.current || chat.error) return
-    const fresh = chat.messages.slice(base.msgCount)
-    const produced = fresh.some(
-      (m) =>
-        m.role === "assistant" &&
-        m.parts.some((p) => {
-          if (p.type === "text" || p.type === "reasoning") {
-            return Boolean((p as { text?: string }).text?.trim())
-          }
-          const t = (p as { type?: string }).type ?? ""
-          return t.startsWith("tool-") || t === "dynamic-tool"
-        })
-    )
-    if (produced) return
-    if (!base.userId || continuedFor.current.has(base.userId)) return
-    if (continueCount.current >= 2) return
-    continuedFor.current.add(base.userId)
-    continueCount.current += 1
+    inFlight.current = true
     try {
-      void chat.regenerate()
+      await chat.sendMessage({ text: CONTINUE_TOKEN })
+      return true
     } catch {
-      /* manual Retry stays available */
+      inFlight.current = false
+      return false
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending])
+  }, [chat])
 
-  // New conversation (or remount) resets the continue budget.
-  useEffect(() => {
-    turnBase.current = null
-    continuedFor.current = new Set()
-    continueCount.current = 0
-    stoppedRef.current = false
-  }, [conversationId])
+  /** Fatal errors a free continuation must never bypass (wallet/auth/gone). */
+  const isFatalError = useCallback((msg: string): boolean => {
+    return (
+      isOutOfCreditsError(msg) ||
+      /401|403|404|unauthorized|forbidden|session expired|sign in|gone|not found/i.test(msg)
+    )
+  }, [])
 
   /**
-   * One silent auto-retry per failed turn that produced nothing (no text,
-   * no reasoning, no tool activity). A stall that leaves zero trace gets
-   * a single regenerate; anything the user already saw keeps the manual
-   * Retry button instead, so this can never loop.
+   * Turn-loop driver. Fires when a step stream settles:
+   * - user stopped → done, forever.
+   * - fatal error → done (the error card + upgrade path own it now).
+   * - transient error (incl. a CPU-killed request) → one silent token
+   *   retry per error: tool effects are durable in D1 and the lint cache
+   *   makes the redo cheap, so a killed step resumes instead of dying.
+   * - step ended with tool calls the model hasn't reacted to, no
+   *   ask/approval pending, under the step cap → chain the next step.
+   * - otherwise (text-only close, question asked, cap reached) → done.
    */
   const autoRetried = useRef<string | null>(null)
   const [autoRetrying, setAutoRetrying] = useState(false)
   useEffect(() => {
-    if (!chat.error || pending) return
-    const key = chat.error.message
-    if (autoRetried.current === key) return
-    const lastAssistant = [...chat.messages].reverse().find((m) => m.role === "assistant")
-    const produced = lastAssistant
-      ? lastAssistant.parts.some((p) => {
-          if (p.type === "text" || p.type === "reasoning") {
-            return Boolean((p as { text?: string }).text?.trim())
-          }
-          const t = (p as { type?: string }).type ?? ""
-          return t.startsWith("tool-") || t === "dynamic-tool"
-        })
-      : false
-    if (produced) return
-    autoRetried.current = key
-    setAutoRetrying(true)
-    const t = setTimeout(() => {
+    if (pending) {
+      stoppedRef.current = false
       setAutoRetrying(false)
-      try {
-        void chat.regenerate()
-      } catch {
-        /* manual Retry stays available */
+      return
+    }
+    if (!turnActiveRef.current || stoppedRef.current) return
+    const err = chat.error
+    if (err) {
+      const key = err.message
+      if (autoRetried.current === key || isFatalError(key)) {
+        turnActiveRef.current = false
+        return
       }
-    }, 1500)
-    return () => clearTimeout(t)
+      autoRetried.current = key
+      setAutoRetrying(true)
+      const t = setTimeout(() => {
+        setAutoRetrying(false)
+        if (!turnActiveRef.current || stoppedRef.current) return
+        void sendContinue().then((ok) => {
+          if (!ok) turnActiveRef.current = false
+        })
+      }, 1500)
+      return () => clearTimeout(t)
+    }
+    const visible = chat.messages.filter((m) => !isContinueMessage(m))
+    const last = visible.length > 0 ? visible[visible.length - 1]! : null
+    const lastTools = last && last.role === "assistant" ? toolPartsOf(last) : []
+    const asked = lastTools.some((p) => {
+      const n = toolNameOf(p)
+      return n === "ask_user" || n === "request_approval"
+    })
+    const steps = stepsUsedIn(visible)
+    const zeroTrace =
+      !last ||
+      (last.role === "user" &&
+        !visible.some(
+          (m) =>
+            m.role === "assistant" &&
+            m.parts.some((p) =>
+              p.type === "text" || p.type === "reasoning"
+                ? Boolean((p as { text?: string }).text?.trim())
+                : (p as { type?: string }).type?.startsWith("tool-") ||
+                  (p as { type?: string }).type === "dynamic-tool"
+            )
+        ))
+    if ((lastTools.length > 0 && !asked && steps < MAX_STEPS_PER_TURN) || zeroTrace) {
+      // Turn stays open; the chained step releases inFlight on settle.
+      void sendContinue().then((ok) => {
+        if (!ok) turnActiveRef.current = false
+      })
+      return
+    }
+    turnActiveRef.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.error, pending])
+  }, [pending])
+
+  // New conversation (or remount) resets the loop state.
+  useEffect(() => {
+    turnActiveRef.current = false
+    autoRetried.current = null
+    stoppedRef.current = false
+    setAutoRetrying(false)
+  }, [conversationId])
+
+  /**
+   * Stall watchdog: gateway steps can take 11–26s each and a full turn
+   * several minutes. If nothing arrives for 60s the run is probably
+   * queued, not dead — say so explicitly instead of spinning forever
+   * like the 152s "Composing…" hang. Anything already saved stays saved;
+   * Stop + Retry resumes from the last version.
+   */
+  const [stalled, setStalled] = useState(false)
+  const lastActivity = useRef(Date.now())
+  useEffect(() => {
+    lastActivity.current = Date.now()
+    setStalled(false)
+  }, [chat.messages, chat.status])
+  useEffect(() => {
+    if (!pending) return
+    const t = setInterval(() => {
+      if (Date.now() - lastActivity.current > 60_000) setStalled(true)
+    }, 5000)
+    return () => clearInterval(t)
+  }, [pending])
 
   /**
    * Reference images, downscaled BEFORE send. The old code attached the
@@ -951,8 +1133,49 @@ function AgentThread({
     return out
   }, [attachments])
 
-  // Auto-send the composer's opening prompt exactly once.
+  // Opening prompt held locally when the credit guard blocks the
+  // auto-send: the handoff text must survive until the user upgrades,
+  // then go out via the card's "check again" action below.
+  const [pendingInitial, setPendingInitial] = useState<string | null>(null)
   const autoSent = useRef(false)
+
+  const sendInitial = useCallback(
+    async (text: string) => {
+      if (!(await checkCredits())) {
+        // Keep the text: clearing the parent prompt now would drop the
+        // user's brief with nowhere to recover it from.
+        setPendingInitial(text)
+        autoSent.current = false
+        onPromptSent()
+        return
+      }
+      setPendingInitial(null)
+      turnActiveRef.current = true
+      autoRetried.current = null
+      const files = await filesFor()
+      await chat.sendMessage(files.length > 0 ? { text, files } : { text })
+    },
+    [checkCredits, filesFor, chat, onPromptSent]
+  )
+
+  /** Retry after upgrade: re-check, then send any held opening prompt. */
+  const retryBlockedInitial = useCallback(async () => {
+    if (!pendingInitial) {
+      await checkCredits()
+      return
+    }
+    if (pending) return
+    inFlight.current = true
+    try {
+      await sendInitial(pendingInitial)
+    } catch {
+      /* prompt stays held for another try */
+    } finally {
+      inFlight.current = false
+    }
+  }, [pendingInitial, pending, sendInitial, checkCredits])
+
+  // Auto-send the composer's opening prompt exactly once.
   useEffect(() => {
     if (autoSent.current) return
     if (!initialPrompt || chat.messages.length > 0 || chat.status !== "ready") return
@@ -963,16 +1186,13 @@ function AgentThread({
     autoSent.current = true
     void (async () => {
       try {
-        const files = await filesFor()
-        await chat.sendMessage(
-          files.length > 0 ? { text: initialPrompt, files } : { text: initialPrompt }
-        )
+        await sendInitial(initialPrompt)
       } catch {
         autoSent.current = false
       }
     })()
-    onPromptSent()
-  }, [initialPrompt, chat.messages.length, chat.status, chat, onPromptSent, filesFor])
+    if (!pendingInitial) onPromptSent()
+  }, [initialPrompt, chat.messages.length, chat.status, chat, onPromptSent, filesFor, sendInitial, pendingInitial])
 
   // Stick-to-bottom, coalesced on animation frames: during fast
   // streaming this effect fires per chunk, and a synchronous
@@ -1020,8 +1240,10 @@ function AgentThread({
   const send = (text?: string) => {
     const value = (text ?? input).trim()
     if (!value || pending || inFlight.current) return
+    if (outOfCredits) return
     inFlight.current = true
-    // Fresh user turn gets its own auto-retry budget.
+    // Fresh user turn gets its own loop + retry budget.
+    turnActiveRef.current = true
     autoRetried.current = null
     setInput("")
     try {
@@ -1031,6 +1253,10 @@ function AgentThread({
     }
     void (async () => {
       try {
+        if (!(await checkCredits())) {
+          inFlight.current = false
+          return
+        }
         const files = await filesFor()
         await chat.sendMessage(
           files.length > 0 ? { text: value, files } : { text: value }
@@ -1040,6 +1266,27 @@ function AgentThread({
       }
     })()
   }
+
+  /**
+   * Manual Retry: resume a died step via token (preserves its partial
+   * message), or classically redo a completed answer the user dislikes.
+   */
+  const manualRetry = useCallback(() => {
+    const visible = chat.messages.filter((m) => !isContinueMessage(m))
+    const last = visible.length > 0 ? visible[visible.length - 1]! : null
+    turnActiveRef.current = true
+    autoRetried.current = null
+    stoppedRef.current = false
+    if (last && last.role === "assistant" && toolPartsOf(last).length > 0) {
+      void sendContinue()
+    } else {
+      try {
+        void chat.regenerate()
+      } catch {
+        /* composer stays available */
+      }
+    }
+  }, [chat, sendContinue])
 
   const starters = ["Neon countdown intro", "Lower third for interviews", "Earnings chart reveal"]
 
@@ -1056,7 +1303,7 @@ function AgentThread({
         aria-live="off"
         className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto overscroll-contain scrollbar-chat px-3 py-2.5 text-left"
       >
-        {chat.messages.length === 0 && !pending && !initialPrompt && (
+        {visibleMessages.length === 0 && !pending && !initialPrompt && !pendingInitial && (
           <div className="msg-in flex flex-col items-center gap-1 rounded-2xl border border-dashed px-5 py-6 text-center">
             <span className="flex size-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
               <Sparkles className="size-4" />
@@ -1080,9 +1327,9 @@ function AgentThread({
             </div>
           </div>
         )}
-        {chat.messages.map((m, idx) => {
-          const firstOfGroup = idx === 0 || chat.messages[idx - 1]?.role !== m.role
-          const isLast = idx === chat.messages.length - 1
+        {visibleMessages.map((m, idx) => {
+          const firstOfGroup = idx === 0 || visibleMessages[idx - 1]?.role !== m.role
+          const isLast = idx === visibleMessages.length - 1
           const streamingThis = pending && isLast
           return m.role === "user" ? (
             <div
@@ -1121,12 +1368,13 @@ function AgentThread({
               streaming={streamingThis}
               actionsOpen={isLast && !pending}
               onAnswer={send}
+              isLast={isLast}
             />
           )
         })}
         {pending &&
-          (chat.messages.length === 0 ||
-            chat.messages[chat.messages.length - 1]?.role !== "assistant") && (
+          (visibleMessages.length === 0 ||
+            visibleMessages[visibleMessages.length - 1]?.role !== "assistant") && (
             <div
               className="msg-in flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground"
               aria-live="polite"
@@ -1136,6 +1384,48 @@ function AgentThread({
               <Elapsed className="ml-auto text-[10px]" />
             </div>
           )}
+        {pending && stalled && (
+          <div
+            className="msg-in flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+            role="status"
+            aria-live="polite"
+          >
+            <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
+            <span>
+              Taking longer than usual — still working. Anything already saved stays
+              saved; you can Stop and retry, and I&apos;ll pick it up.
+            </span>
+          </div>
+        )}
+        {outOfCredits && (
+          <div className="msg-in flex flex-col gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-[12px] shadow-lg" role="alert">
+            <span className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-300">
+              <TriangleAlert className="size-3.5" aria-hidden />
+              Out of credits
+            </span>
+            <span className="text-muted-foreground">
+              You&apos;ve used all {outOfCredits.credits.allowance} credits on the{" "}
+              {outOfCredits.credits.tierLabel} plan
+              {outOfCredits.credits.resetsAt
+                ? ` — they reset ${new Date(outOfCredits.credits.resetsAt).toLocaleDateString()}`
+                : ""}
+              . Upgrade for more, or wait for the reset.
+            </span>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" className="h-9 min-h-[44px] px-4 text-[12px]" onClick={() => navigate("/settings#subscription")}>
+                View plans
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 min-h-[44px] px-4 text-[12px]"
+                onClick={() => void retryBlockedInitial()}
+              >
+                I&apos;ve upgraded — check again
+              </Button>
+            </div>
+          </div>
+        )}
         {chat.error && (
           <div className="msg-in flex flex-col gap-2 rounded-2xl border border-destructive/40 bg-destructive/5 p-3 text-[12px] shadow-lg" role="alert">
             <span className="flex items-center gap-1.5 font-medium text-destructive">
@@ -1153,10 +1443,33 @@ function AgentThread({
               <summary className="cursor-pointer hover:text-muted-foreground">Technical details</summary>
               <span className="break-words">{chat.error.message}</span>
             </details>
-            <div>
-              <Button size="sm" variant="outline" className="h-9 min-h-[44px] px-4 text-[12px]" onClick={() => chat.regenerate()}>
-                Retry
-              </Button>
+            <div className="flex flex-wrap gap-2">
+              {isOutOfCreditsError(chat.error.message) ? (
+                <>
+                  <Button size="sm" className="h-9 min-h-[44px] px-4 text-[12px]" onClick={() => navigate("/settings#subscription")}>
+                    View plans
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-9 min-h-[44px] px-4 text-[12px]"
+                    onClick={() => {
+                      refreshCredits?.()
+                      try {
+                        void chat.regenerate()
+                      } catch {
+                        /* manual send stays available */
+                      }
+                    }}
+                  >
+                    I&apos;ve upgraded — retry
+                  </Button>
+                </>
+              ) : (
+                <Button size="sm" variant="outline" className="h-9 min-h-[44px] px-4 text-[12px]" onClick={manualRetry}>
+                  Retry
+                </Button>
+              )}
             </div>
           </div>
         )}
@@ -1327,6 +1640,8 @@ export function AgentChatCard({
   onRemoveAttachment,
   footer,
   firstPrompt = null,
+  defaultFormat = null,
+  defaultSecs = null,
   onWorkingChange,
   stopRef,
 }: {
@@ -1344,6 +1659,14 @@ export function AgentChatCard({
    * and this prompt is sent through the agent automatically.
    */
   firstPrompt?: string | null
+  /**
+   * Length/shape the user already picked (dashboard prompt box / project
+   * spec). The first-message composer defaults to these instead of 5s /
+   * 16:9, so a "10 seconds, 9:16" choice survives into the playground
+   * instead of resetting to the default there.
+   */
+  defaultFormat?: string | null
+  defaultSecs?: number | null
   /** Live working flag for the preview pane (real generating state). */
   onWorkingChange?: (working: boolean) => void
   /** The preview's Stop button halts the agent stream through this. */
@@ -1362,6 +1685,9 @@ export function AgentChatCard({
   useEffect(() => {
     onWorkingChange?.(working)
   }, [working, onWorkingChange])
+  // Single wallet instance per card: the thread guards sends with it and
+  // refreshes it when turns settle; header pills poll on their own cache.
+  const wallet = useCredits()
   const seeded = useRef(new Set<string>())
   const handoffSent = useRef(false)
   /** Last good list per project — restored instead of wiped on reload failure. */
@@ -1676,6 +2002,7 @@ export function AgentChatCard({
           onArtifact={onArtifact}
           onPendingChange={setWorking}
           stopRef={stopRef}
+          refreshCredits={wallet.refresh}
         />
       ) : (
         // The composer stays mounted through the whole boot. It is disabled
@@ -1698,10 +2025,21 @@ export function AgentChatCard({
                 Sending your description over — the first version renders next door.
               </p>
             </div>
-          ) : hydrating ? (
+          ) : hydrating || !sid ? (
+            // No project yet (or history still loading): a skeleton, NOT
+            // the first-message composer. The old code mounted a disabled
+            // NewChatComposer here — a second "prompt box" sitting above
+            // the thread's real composer that ate typed text on unmount
+            // when the project arrived. Nothing to type into until there
+            // is something to send to.
             <ConversationSkeleton />
           ) : (
-            <NewChatComposer sid={sid} onStart={createConversation} />
+            <NewChatComposer
+              sid={sid}
+              onStart={createConversation}
+              initialFormat={defaultFormat}
+              initialSecs={defaultSecs}
+            />
           )}
         </div>
       )}
@@ -1722,13 +2060,24 @@ export function AgentChatCard({
 function NewChatComposer({
   sid,
   onStart,
+  initialFormat,
+  initialSecs,
 }: {
   sid: string | null
   onStart: (text: string) => Promise<void>
+  /** Picks the user already made elsewhere — never reset to defaults. */
+  initialFormat?: string | null
+  initialSecs?: number | null
 }) {
   const [value, setValue] = useState("")
-  const [secs, setSecs] = useState<number>(DEFAULT_DURATION)
-  const [format, setFormat] = useState<string>(FORMATS[0]!)
+  const [secs, setSecs] = useState<number>(() =>
+    initialSecs != null && DURATIONS.includes(initialSecs as (typeof DURATIONS)[number])
+      ? initialSecs
+      : DEFAULT_DURATION
+  )
+  const [format, setFormat] = useState<string>(() =>
+    initialFormat && (FORMATS as string[]).includes(initialFormat) ? initialFormat : FORMATS[0]!
+  )
   const [starting, setStarting] = useState(false)
 
   const send = () => {

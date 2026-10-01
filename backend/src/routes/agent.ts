@@ -100,6 +100,15 @@ async function ownedConversation(
 
 import { pruneForModel, userTextOf } from "../lib/agent/history"
 import { smalltalkReply } from "../lib/smalltalk"
+// Static imports (evaluated once at isolate cold-start, not per request):
+// the old dynamic `await import()` inside the chat handler re-evaluated
+// these modules on every turn, billing their parse cost to the request's
+// CPU budget — one of the contributors to the prod `exceededCpu` deaths.
+import { contractsFor, fontRules } from "../lib/remotion-guide"
+import { fontCatalogue } from "../lib/font-catalogue.generated"
+import { CHAT_TURN_COST, refund, spend } from "../lib/credits"
+
+import { MAX_STEPS_PER_TURN, isContinueMessage, stepsUsedOf } from "../lib/agent/turns"
 
 /**
  * Agent chat (AI SDK UIMessage stream).
@@ -130,12 +139,16 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
   })
 
   // Persist any new user messages the client sent (dedupe by id).
+  // Continuation tokens are NEVER persisted: they are transport, not
+  // history — storing them would pollute the model context and break
+  // step counting below.
   const stored = await loadMessages(ctx)
   const incoming = body.messages as UIMessage[]
-  for (const m of incoming) {
-    if (m.role === "user" && !stored.some((s) => s.id === m.id)) {
-      await appendMessage(ctx, { role: "user", parts: m.parts ?? [] })
-    }
+  const freshRealUser = incoming.filter(
+    (m) => m.role === "user" && !isContinueMessage(m) && !stored.some((s) => s.id === m.id)
+  )
+  for (const m of freshRealUser) {
+    await appendMessage(ctx, { role: "user", parts: m.parts ?? [] })
   }
 
   const uiHistory: UIMessage[] = [
@@ -144,15 +157,28 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
       role: m.role,
       parts: (m.parts ?? []) as UIMessage["parts"],
     })) as UIMessage[]),
-    ...incoming.filter((m) => m.role === "user" && !stored.some((s) => s.id === m.id)),
+    ...freshRealUser,
   ]
+
+  // Continuation? The latest incoming user message is the token the
+  // client auto-sends to chain the next single step of an open turn.
+  // No smalltalk, no charge — the turn already paid on its first step.
+  const isContinuation =
+    incoming.length > 0 && isContinueMessage(incoming[incoming.length - 1]!)
+  // A continuation with no real brief in history is a hand-crafted free
+  // step, not a resume — refuse it. (Legit retries always have the
+  // original user message persisted from the turn's first request.)
+  if (isContinuation && !uiHistory.some((m) => m.role === "user")) {
+    return c.json({ error: "Nothing to continue — describe the clip first." }, 400)
+  }
 
   // Smalltalk short-circuit: pure chit-chat never reaches the model.
   // Deterministic, instant, zero gateway cost — and the model can never
   // "inspect the project" in response to a "hi". Attachments mean task
-  // context, so image-bearing turns always go through.
+  // context, so image-bearing turns always go through. Skipped for
+  // continuations (the turn already started; there is no new brief).
   const latestUser = [...uiHistory].reverse().find((m) => m.role === "user")
-  if (latestUser) {
+  if (latestUser && !isContinuation) {
     const { text, hasFiles } = userTextOf(latestUser)
     const canned = !hasFiles ? smalltalkReply(text) : null
     if (canned) {
@@ -167,6 +193,67 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
         },
       })
       return createUIMessageStreamResponse({ stream: short })
+    }
+  }
+
+  // Step cap: each request runs exactly one model step, so count the
+  // assistant step-messages since the last real user message. At the cap
+  // the turn closes deterministically (no model call, ~1ms CPU) instead
+  // of looping until the plan kills the request.
+  const stepsUsed = stepsUsedOf(uiHistory)
+  if (stepsUsed >= MAX_STEPS_PER_TURN) {
+    const didPreview = uiHistory.some(
+      (m) =>
+        m.role === "assistant" &&
+        ((m.parts ?? []) as Array<{ type?: string; toolCallId?: string }>).some(
+          (p) => p?.type === "tool-preview_composition" || p?.type === "tool-render_video"
+        )
+    )
+    const closing = didPreview
+      ? "Saved — it's on stage now. Tell me what to change next."
+      : "I hit my step limit for this turn — press Retry and I'll continue from the latest version."
+    await appendMessage(ctx, { role: "assistant", parts: [{ type: "text", text: closing }] })
+    console.log(JSON.stringify({ msg: "agent-step-cap", projectId: body.projectId, stepsUsed }))
+    const short = createUIMessageStream({
+      execute: ({ writer }) => {
+        const id = crypto.randomUUID()
+        writer.write({ type: "text-start", id })
+        writer.write({ type: "text-delta", id, delta: closing })
+        writer.write({ type: "text-end", id })
+      },
+    })
+    return createUIMessageStreamResponse({ stream: short })
+  }
+
+  // Credit gate: 1 credit per real agent turn (charged once, on the first
+  // step — continuations ride the same turn). Pure smalltalk (answered
+  // above, never reached the model) is free. The deduct happens BEFORE
+  // the model runs so an unpaid turn can never start; runs that fail to
+  // start are refunded below, aborted mid-runs are not (work was done).
+  const callerToken =
+    (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "") || undefined
+  if (!isContinuation && freshRealUser.length > 0) {
+    const charge = await spend(
+      getDb(c.env.DB),
+      c.env,
+      user.id,
+      callerToken,
+      CHAT_TURN_COST,
+      "agent-turn",
+      body.conversationId
+    )
+    if (!charge.ok) {
+      const s = charge.status
+      return c.json(
+        {
+          error: s.unlimited
+            ? "Couldn't verify your plan — retry and I'll pick it up."
+            : `You've used all ${s.allowance} credits on the ${s.tierLabel} plan (resets ${new Date(s.resetsAt).toLocaleDateString()}). Upgrade for more, or wait for the reset.`,
+          code: "insufficient_credits",
+          credits: s,
+        },
+        402
+      )
     }
   }
 
@@ -192,8 +279,6 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
   try {
     const canvas = await readCanvas(ctx)
     canvasHint = `${canvas.width}x${canvas.height} @${canvas.fps}fps, ${canvas.durationInFrames} frames`
-    const { contractsFor, fontRules } = await import("../lib/remotion-guide")
-    const { fontCatalogue } = await import("../lib/font-catalogue.generated")
     systemPreamble = `${contractsFor(canvas)}\n\n${fontRules(fontCatalogue())}`
   } catch {
     /* grounding is advisory — the run proceeds without it */
@@ -225,6 +310,8 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
       conversationId: body.conversationId,
       history: uiHistory.length,
       fresh: freshProject,
+      step: stepsUsed + 1,
+      continuation: isContinuation,
     })
   )
 
@@ -238,26 +325,60 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
     throw err
   }
 
+  // Walk the model chain when the primary fails to start (queued /
+  // gateway hiccup): the Oct 1 incident was a single model with nowhere
+  // to fall through to, so every retry piled onto the same queued model
+  // until the client aborted (499) after 152s of "Composing".
   console.log(
     JSON.stringify({
       msg: "agent-model",
       projectId: body.projectId,
       conversationId: body.conversationId,
       model: built.modelId,
+      chain: built.chain,
     })
   )
 
   // Stream setup itself must not 500 the turn: a gateway hiccup here
-  // becomes a retryable JSON error, not a dead SSE connection.
+  // becomes a retryable JSON error, not a dead SSE connection. Walk the
+  // chain — a queued primary falls through to the next model instead of
+  // stalling until the client aborts.
   let result: ReturnType<typeof built.agent.stream>
+  let activeModel = built.modelId
   try {
     result = built.agent.stream({
       system: systemPreamble,
       messages: modelMessages,
     })
   } catch (err) {
-    console.error(JSON.stringify({ msg: "agent-stream-failed", err: String(err) }))
-    return c.json({ error: "The AI stumbled starting up — retry and I'll pick it up." }, 502)
+    console.error(JSON.stringify({ msg: "agent-stream-failed", model: activeModel, err: String(err) }))
+    let recovered: ReturnType<typeof built.agent.stream> | null = null
+    for (const fallback of built.chain.slice(1)) {
+      try {
+        const retry = buildAgent(c.env, tools, {
+          freshProject,
+          canvasHint,
+          modelId: fallback,
+        })
+        recovered = retry.agent.stream({ system: systemPreamble, messages: modelMessages })
+        console.log(JSON.stringify({ msg: "agent-model-fallback", from: activeModel, to: fallback }))
+        activeModel = fallback
+        built = retry
+        break
+      } catch (e2) {
+        console.error(JSON.stringify({ msg: "agent-stream-failed", model: fallback, err: String(e2) }))
+      }
+    }
+    if (!recovered) {
+      // The turn never reached the model — refund the credit it reserved.
+      try {
+        await refund(getDb(c.env.DB), user.id, CHAT_TURN_COST, "agent-turn-failed", body.conversationId)
+      } catch {
+        /* refund is best-effort */
+      }
+      return c.json({ error: "The AI stumbled starting up — retry and I'll pick it up." }, 502)
+    }
+    result = recovered
   }
 
   return result.toUIMessageStreamResponse<UIMessage>({
@@ -267,13 +388,28 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
         (async () => {
           try {
             const parts = responseMessage.parts ?? []
-            // Persist partial progress too: a failed or stopped run still
-            // leaves real tool calls/results worth keeping. Only a user
-            // abort discards the in-flight reply (history stays consistent).
-            if (!isAborted && parts.length > 0) {
+            // Persist partial progress ALWAYS — including user-aborted and
+            // errored runs. The old `!isAborted` guard is what made a
+            // refresh after Stop/499 show "only my message": the version
+            // snapshot (preview_composition) was already committed to the
+            // DB by the tool, but the chat row explaining it was thrown
+            // away, so reload showed the user turn with no reply and the
+            // preview had nothing to bridge to. Aborted parts may hold
+            // in-flight tool calls without results — pruneForModel already
+            // tolerates those on the next turn.
+            if (parts.length > 0) {
+              const finalParts = isAborted
+                ? [
+                    ...parts,
+                    {
+                      type: "text",
+                      text: "\n\n_That run was stopped before it finished — anything already saved stays saved. Press Retry or describe what to do next and I'll pick it up._",
+                    },
+                  ]
+                : parts
               await appendMessage(ctx, {
                 role: "assistant",
-                parts,
+                parts: finalParts,
               })
             }
             const toolParts = ((responseMessage.parts ?? []) as Array<{ type?: string }>).filter(
@@ -284,6 +420,7 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
                 msg: "agent-finish",
                 projectId: body.projectId,
                 conversationId: body.conversationId,
+                model: activeModel,
                 ms: Date.now() - t0,
                 toolParts,
                 aborted: isAborted,

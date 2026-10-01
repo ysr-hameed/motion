@@ -4,6 +4,7 @@ import { logger } from "hono/logger"
 import projects from "./routes/projects"
 import ai from "./routes/ai"
 import agent from "./routes/agent"
+import credits from "./routes/credits"
 import uploads from "./routes/uploads"
 import exp from "./routes/export"
 import motion from "./routes/motion"
@@ -48,6 +49,7 @@ app.get("/api/health", (c) => {
 app.route("/api/projects", projects)
 app.route("/api/ai", ai)
 app.route("/api/agent", agent)
+app.route("/api/credits", credits)
 app.route("/api/uploads", uploads)
 app.route("/api/export", exp)
 app.route("/api/motion", motion)

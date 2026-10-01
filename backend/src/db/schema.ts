@@ -231,6 +231,57 @@ export const renderErrors = sqliteTable(
   })
 )
 
+/**
+ * Credit wallet: one row per user, the source of truth for limit-based use.
+ * - `plan` is the credit tier (free | pro | studio), resolved lazily from
+ *   the platform subscription and cached here (see lib/credits.ts).
+ * - `balance` refills to the tier allowance at the start of each calendar
+ *   month (`periodKey` = YYYY-MM UTC). `spentThisPeriod` powers the UI.
+ * - Studio tier (`plan = "studio"`) is unlimited: spend() bypasses the
+ *   balance check, the wallet row just records the tier.
+ */
+export const creditWallets = sqliteTable(
+  "credit_wallets",
+  {
+    userId: text("user_id").primaryKey(),
+    plan: text("plan", { enum: ["free", "pro", "studio"] })
+      .notNull()
+      .default("free"),
+    balance: integer("balance").notNull().default(10),
+    spentThisPeriod: integer("spent_this_period").notNull().default(0),
+    periodKey: text("period_key").notNull().default("1970-01"),
+    lifetimeGranted: integer("lifetime_granted").notNull().default(0),
+    lifetimeSpent: integer("lifetime_spent").notNull().default(0),
+    planCheckedAt: integer("plan_checked_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  }
+)
+
+/** Append-only audit log for every grant/spend/refund. Never updated. */
+export const creditLedger = sqliteTable(
+  "credit_ledger",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id").notNull(),
+    delta: integer("delta").notNull(),
+    reason: text("reason").notNull(),
+    refId: text("ref_id"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => ({
+    userIdx: index("credit_ledger_user_idx").on(t.userId),
+  })
+)
+
 export type Project = typeof projects.$inferSelect
 export type NewProject = typeof projects.$inferInsert
 export type Version = typeof versions.$inferSelect
@@ -238,3 +289,5 @@ export type AttachmentRow = typeof attachments.$inferSelect
 export type Conversation = typeof conversations.$inferSelect
 export type ChatMessage = typeof messages.$inferSelect
 export type ProjectFile = typeof projectFiles.$inferSelect
+export type CreditWallet = typeof creditWallets.$inferSelect
+export type CreditLedgerEntry = typeof creditLedger.$inferSelect

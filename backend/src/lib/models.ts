@@ -12,8 +12,13 @@
 /** Vercel AI Gateway — OpenAI-compatible chat completions. */
 export const GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
 
-/** Prod default (paid). Dev overrides via .dev.vars — see .dev.vars.example. */
-export const DEFAULT_MODELS = ["alibaba/qwen3.7-flash"]
+/**
+ * Prod default (paid) plus a fallback. The agent walks the chain when the
+ * primary is queued or fails to start, instead of stalling one model until
+ * the client gives up (HTTP 499) — the exact hang in the Oct 1 logs where
+ * qwen3.7-flash took 11–26s per step with nowhere to fall through to.
+ */
+export const DEFAULT_MODELS = ["alibaba/qwen3.7-flash", "google/gemini-2.0-flash"]
 
 /** Free-tier dev default. */
 export const DEV_MODEL = "google/gemini-2.0-flash"

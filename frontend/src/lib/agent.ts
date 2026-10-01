@@ -108,6 +108,33 @@ export async function seedAgentConversation(
   })
 }
 
+/**
+ * Server versions for preview recovery. When a run is aborted (Stop /
+ * 499 / refresh mid-stream) the snapshot row is already committed by the
+ * preview_composition tool, but the live stream never delivered the
+ * artifact to the client — so the local rail is empty and the stage says
+ * "No preview yet" while the server holds v1+. Call this after boot and
+ * merge anything missing locally (dedupe by code, oldest first).
+ */
+export interface ServerVersion {
+  versionNo: number
+  note?: string | null
+  reply?: string | null
+  motionJson: unknown
+}
+
+export async function loadServerVersions(serverProjectId: string): Promise<ServerVersion[]> {
+  const res = await req<{
+    versions: Array<{
+      versionNo: number
+      note?: string | null
+      reply?: string | null
+      motionJson: unknown
+    }>
+  }>(`/api/projects/${serverProjectId}`)
+  return Array.isArray(res.versions) ? res.versions : []
+}
+
 /** Report a real player compile/render error for the agent recovery loop. */
 export async function reportRenderError(
   projectId: string,

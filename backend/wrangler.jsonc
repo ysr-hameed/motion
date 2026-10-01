@@ -4,17 +4,33 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-27",
   "compatibility_flags": ["nodejs_compat"],
+  // NOTE (2026-10-01): this account is on the Workers Free plan, which
+  // rejects "limits" AND caps requests at ~10ms CPU — the agent chat
+  // endpoint streams a multi-step model+tool loop (~100ms+ CPU), so
+  // /api/agent/chat cannot succeed until you upgrade to Workers Paid
+  // ($5/mo, https://dash.cloudflare.com/.../workers/plans) and restore:
+  //   "limits": { "cpu_ms": 30000 },
+  // Everything else in this deploy (credit diet, history caps, static
+  // imports) lowers per-request CPU as far as code alone can.
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
   },
   "vars": {
     "AI_PROVIDER": "gateway",
-    "AI_MODEL": "alibaba/qwen3.7-flash",
+    "AI_MODEL": "alibaba/qwen3.7-flash,google/gemini-2.0-flash",
     "AUTH_API_URL": "https://auth-slyxup-com.auth-0f4.workers.dev",
+    "BILLING_PROJECT_ID": "b52a7938-ec8d-4fdb-87fe-03d8d1d7ff4c",
+    "BILLING_PUBLISHABLE_KEY": "pk_daed7bd1745655af1ae217c59b848f00c8ccedda006dc429",
     "ALLOW_ANON": "false",
     "CORS_ORIGINS": "https://motion.slyxup.com,https://motion-frontend.pages.dev"
   },
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "4ff813c4bf074537a472f1638f21c647"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

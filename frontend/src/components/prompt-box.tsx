@@ -330,17 +330,17 @@ export function PromptBox({
                 )
               })}
             </div>
-            <div className="flex-1" />
+            <div className="min-w-2 flex-1" />
             <Button
               type="button"
               aria-label={canSubmit ? "Create clip from description" : "Type a description to create a clip"}
               title={canSubmit ? "Create clip" : "Describe your clip first"}
               disabled={!canSubmit}
               onClick={submit}
-              className="h-9 gap-1.5 px-4"
+              className="h-9 justify-center gap-1.5 px-4 max-sm:w-full"
             >
               <ArrowUp className="size-4" aria-hidden />
-              <span className="hidden sm:inline">Create clip</span>
+              <span>Create clip</span>
             </Button>
           </div>
         </div>

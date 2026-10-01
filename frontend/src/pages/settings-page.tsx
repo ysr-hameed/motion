@@ -32,6 +32,7 @@ import {
   useBilling,
   usePlan,
 } from "@/lib/billing"
+import { useCredits } from "@/lib/credits"
 import { navigate } from "@/lib/router"
 import {
   getThemePref,
@@ -380,6 +381,55 @@ function WorkspaceTab({ studio }: { studio: MotionStudio }) {
   )
 }
 
+/**
+ * AI credits — the enforced usage limit. 1 credit = 1 AI generation turn;
+ * greetings and runs that never start are free. Balances refill monthly.
+ */
+function CreditsCard() {
+  const { snapshot, loading, error, refresh } = useCredits()
+  const c = snapshot?.credits
+  const cost = snapshot?.costs.agentTurn ?? 1
+
+  return (
+    <Card
+      title="AI credits"
+      description="Every generation turn spends 1 credit. Refills monthly."
+    >
+      {loading && !c ? (
+        <div className="flex items-center gap-2.5 rounded-xl bg-muted/50 px-4 py-3.5" aria-live="polite">
+          <Loader2 className="size-4 animate-spin text-primary" />
+          <p className="text-[13px] text-muted-foreground">Loading your credits…</p>
+        </div>
+      ) : error && !c ? (
+        <div className="rounded-xl border border-dashed px-4 py-6 text-center">
+          <p className="text-[13px] text-muted-foreground">{error}</p>
+          <Button size="sm" variant="outline" className="mt-2 h-8" onClick={refresh}>
+            Retry
+          </Button>
+        </div>
+      ) : c ? (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <Stat
+              value={c.unlimited ? "∞" : String(c.balance)}
+              label={`Credits left · ${c.tierLabel}`}
+            />
+            <Stat value={String(c.spentThisPeriod)} label="Used this month" />
+            <Stat
+              value={new Date(c.resetsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              label="Resets"
+            />
+          </div>
+          <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
+            {c.tierLabel} plan: {c.unlimited ? "unlimited turns" : `${c.allowance} credits per month`} · 1
+            turn = {cost} credit · greetings are free · out of credits? Upgrade below for more.
+          </p>
+        </>
+      ) : null}
+    </Card>
+  )
+}
+
 function SubscriptionTab({ studio }: { studio: MotionStudio }) {
   const user = useUser()
   const billing = useBilling(user?.email ?? null)
@@ -431,6 +481,7 @@ function SubscriptionTab({ studio }: { studio: MotionStudio }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <CreditsCard />
       {paidReturn && (
         <div className="flex items-start gap-2.5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3.5">
           <Check className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />

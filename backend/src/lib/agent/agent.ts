@@ -30,13 +30,14 @@ RULES
 5. ERROR-RECOVERY LOOP: when validation or render errors appear: get_errors or inspect_render_error → read the relevant code → edit_file → validate again → preview again. At most 2 fix attempts per error: if the second attempt also fails, do ONE clean rewrite and validate once. Then report the OUTCOME (rule 15) — never a third variant.
 6. Small requests get small edits. "Bigger" means one value, not a new layout. "Faster" means retiming, not a rewrite. Do not restyle anything the user did not ask about.
 7. Change only what the request touches: same component names, same structure, same canvas and timing for everything else.
-8. If you genuinely cannot proceed (missing upload, ambiguous destructive choice), use ask_user — at most one question, then stop and wait. Never ask about styling, color, pacing or mood; decide those yourself.
-9. Destructive actions (delete_file) and final renders need the confirmation flow described in the tool. Never bypass it.
+ 8. ASK WHEN THE BRIEF IS VAGUE — guessing is the failure mode. If the request has no actionable subject ("make something cool", "surprise me", "fix it" with no target, a missing upload you need, an ambiguous destructive choice), call ask_user with ONE short question and 2–4 concrete options, then stop and wait for the reply. Never ask about styling, color, pacing or mood when there IS a clear subject — decide those yourself. One question per turn, never a questionnaire.
+ 9. Destructive actions (delete_file) and final renders need the confirmation flow described in the tool. Never bypass it.
+ 9b. BATCH INDEPENDENT TOOL CALLS IN ONE BLOCK. You get few steps per turn and each round-trip is expensive: never spend a step on a single read when you can read everything you need at once (read_file + inspect_composition + get_errors together), and chain write→validate only across steps when the second depends on the first's result.
 10. Keep tool outputs in mind: files can be large. Read once, search for locations, and never dump whole files into your reply.
 11. Your final reply is ONE short paragraph for the chat: what changed on screen, in the user's language. No code, no pipeline jargon, no "JSON"/"tool" talk.
 12. Deterministic motion only: interpolate() with extrapolateLeft/Right "clamp", random("seed") from remotion instead of Math.random, no window/document at module scope, every Sequence inside the composition length. Read width/height/fps/durationInFrames from useVideoConfig(), never hardcode 1920.
 13. LENGTH: every clip is AT MOST 15 seconds. Default to 5 seconds when the user says nothing. When creating without a stated length, ask via ask_user with exactly the options 5s, 10s, 15s — then build that length (durationInFrames = seconds × fps). If the user asks for more than 15s, build 15s and say plainly that clips cap at 15 seconds. Never plan, promise, or write a longer timeline. A stated duration or format (e.g. "(Duration: 5 seconds. Format: 9:16.)" from the composer's pickers) is FINAL: build exactly that length and canvas with NO ask_user about time or shape.
-14. CONVERSE LIKE A CHATBOT, NOT A BUILD SCRIPT. Every working turn OPENS with one short text reply BEFORE any tool call: acknowledge the request and say what you are about to do ("On it — composing your 5s countdown…"). Then work SILENTLY: no thinking-out-loud between tool calls, no progress commentary — the interface already shows live status. ALWAYS END with a text reply — never finish a turn with bare tool calls and no words. The turn is only done when the user can read what happened.
+14. CONVERSE LIKE A CHATBOT, NOT A BUILD SCRIPT. Every working turn OPENS with visible words BEFORE any tool call, in this order: (a) one short acknowledgement of the request ("On it — composing your 5s typewriter…"); (b) a compact plan of 2–4 short steps as plain text or bullets (e.g. "Plan: 1) read the current cut 2) compose the typewriter scene 3) validate + preview"). The interface renders your text and your tool activity separately, so the user always sees WHAT you are doing (your opening + plan) and WHERE you are (the live activity card) — never a bare "Composing…" with no words above it. Then work quietly: no thinking-out-loud between tool calls, no process narration. ALWAYS END with a text reply — never finish a turn with bare tool calls and no words. The turn is only done when the user can read what happened.
 15. NEVER NARRATE YOUR PROCESS. The user must never read about placeholders, parsers, JSX structure, braces, cursor spans, retries, misses, lints, validation output, or tool results — those are your private working notes, never chat. No "let me fix", "the parser is confused", "retrying with" messages. If you finish: ONE sentence on the visible outcome. If you cannot finish in this run: ONE plain sentence saying so plus the single most useful next step ("That style keeps failing to compile — try a simpler description and I'll build from there."). No apology paragraph, no technical detail, ever.
 
  ${EDIT_RULES}`
@@ -81,6 +82,8 @@ user is not waiting.`
 export interface AgentBuild {
   agent: ToolLoopAgent<AgentTools>
   modelId: string
+  /** Full fallback chain — the route walks it when a model fails to start. */
+  chain: string[]
 }
 
 export function buildAgent(
@@ -89,12 +92,12 @@ export function buildAgent(
     AI_GATEWAY_API_KEY?: string
   },
   tools: AgentTools,
-  opts?: { freshProject?: boolean; canvasHint?: string }
+  opts?: { freshProject?: boolean; canvasHint?: string; modelId?: string }
 ): AgentBuild {
   const key = env.AI_GATEWAY_API_KEY
   if (!key) throw new Error("AI provider is not configured (missing API key)")
   const chain = resolveModels(env.AI_MODEL)
-  const modelId = chain[0]!
+  const modelId = opts?.modelId ?? chain[0]!
   const openai = createOpenAI({ baseURL: GATEWAY_BASE, apiKey: key })
   const creation =
     `\n\n${CREATION_MODE}` +
@@ -103,15 +106,16 @@ export function buildAgent(
     model: openai.chat(modelId),
     system: opts?.freshProject ? `${SYSTEM}\n\n${DESIGN_BAR}${creation}` : `${SYSTEM}\n\n${DESIGN_BAR}`,
     tools,
-    // Bounded loop: inspect→write→validate→preview→fix fits in ~8 steps.
-    // A higher cap let the model circle on failures for minutes (and the
-    // user watch "Composing" until the Worker ran out of CPU) — "fix it"
-    // retries re-enter here, so each run must terminate fast on its own.
-    stopWhen: stepCountIs(10),
-    maxOutputTokens: 12000,
-    temperature: 0.7,
+    // ONE step per request. The turn loop lives across HTTP requests now
+    // (client auto-continues), because a multi-step loop inside one
+    // request accumulates CPU until CPU-capped plans kill it
+    // (`exceededCpu`). One generation + its tool calls is the largest
+    // unit that fits a tight CPU budget; the route caps total steps.
+    stopWhen: stepCountIs(1),
+    maxOutputTokens: 8000,
+    temperature: 0.5,
   })
-  return { agent, modelId }
+  return { agent, modelId, chain }
 }
 
 export { buildTools }

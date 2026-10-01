@@ -33,10 +33,12 @@ export function assertSafePath(path: string): string {
   return p
 }
 
-function defaultCanvasFor(format: string) {
-  if (format === "9:16") return { width: 1080, height: 1920, fps: 30, durationInFrames: 150 }
-  if (format === "1:1") return { width: 1080, height: 1080, fps: 30, durationInFrames: 150 }
-  return { width: 1920, height: 1080, fps: 30, durationInFrames: 150 }
+function defaultCanvasFor(format: string, durationSecs = 5) {
+  const secs = Math.min(MAX_VIDEO_SECS, Math.max(3, Math.round(durationSecs) || 5))
+  const durationInFrames = secs * 30
+  if (format === "9:16") return { width: 1080, height: 1920, fps: 30, durationInFrames }
+  if (format === "1:1") return { width: 1080, height: 1080, fps: 30, durationInFrames }
+  return { width: 1920, height: 1080, fps: 30, durationInFrames }
 }
 
 function starterComposition(canvas: {
@@ -231,6 +233,10 @@ export async function ensureSeeded(ctx: AgentContext): Promise<void> {
     .all()
   if (existing.length > 0) return
   const art = await latestArtifact(ctx)
+  // The seed canvas must honor the duration the user picked in the prompt
+  // box (project.durationSecs) — the old code always seeded 150 frames
+  // (5s), so a "10 seconds, 9:16" brief silently started life as 5s and
+  // the playground showed the default instead of the choice.
   const canvas = art
     ? {
         width: art.width,
@@ -238,7 +244,12 @@ export async function ensureSeeded(ctx: AgentContext): Promise<void> {
         fps: art.fps,
         durationInFrames: art.durationInFrames,
       }
-    : defaultCanvasFor(proj.format)
+    : defaultCanvasFor(
+        proj.format,
+        typeof (proj as { durationSecs?: unknown }).durationSecs === "number"
+          ? (proj as { durationSecs: number }).durationSecs
+          : 5
+      )
   const code = art?.code ?? starterComposition(canvas)
   await ctx.db.insert(projectFiles).values([
     { projectId: ctx.projectId, path: COMPOSITION_PATH, content: code },
@@ -343,8 +354,13 @@ export async function readCanvas(ctx: AgentContext): Promise<{
   fps: number
   durationInFrames: number
 }> {
-  const proj = await requireProject(ctx).catch(() => ({ format: "16:9" as const }))
-  const fallback = defaultCanvasFor(proj.format)
+  const proj = await requireProject(ctx).catch(() => ({ format: "16:9" as const, durationSecs: 5 as number }))
+  const fallback = defaultCanvasFor(
+    proj.format,
+    typeof (proj as { durationSecs?: unknown }).durationSecs === "number"
+      ? (proj as { durationSecs: number }).durationSecs
+      : 5
+  )
   try {
     const raw = await readFileContent(ctx, CONFIG_PATH)
     const parsed = JSON.parse(raw) as Partial<typeof fallback>
@@ -386,6 +402,20 @@ export async function snapshotVersion(
   const { canvas: clamped, clamped: durationClamped } = clampCanvas(canvas)
   canvas = clamped
   const artifact: Artifact = { kind: "code", ...canvas, code }
+  // Dedupe: a retried step (e.g. after a CPU-death) re-previews identical
+  // code — minting a new version row for it would inflate history with
+  // phantom versions. Same bytes → same version number, no insert.
+  const latest = await latestArtifact(ctx)
+  if (latest && latest.code === code) {
+    const [row] = await ctx.db
+      .select({ versionNo: versions.versionNo })
+      .from(versions)
+      .where(eq(versions.projectId, ctx.projectId))
+      .orderBy(desc(versions.versionNo))
+      .limit(1)
+      .all()
+    if (row) return { versionNo: row.versionNo, artifact, durationClamped }
+  }
   const existing = await ctx.db
     .select({ versionNo: versions.versionNo })
     .from(versions)
@@ -457,12 +487,16 @@ export async function getConversation(
 
 export async function loadMessages(
   ctx: AgentContext,
-  limit = 30
+  limit = 12
 ): Promise<StoredMessage[]> {
   await requireProject(ctx)
-  // Bounded: unbounded history is what blew the Worker's CPU budget —
-  // every stored message (base64 images, full-code tool snapshots) is
-  // re-serialized on every model step. The route prunes further.
+  // Bounded AND matched to the model window (MAX_MODEL_HISTORY = 12):
+  // unbounded history with full-code tool snapshots is what blew the
+  // Worker's CPU budget — every stored message was re-read, re-parsed
+  // and re-serialized on every model step. Older turns never reach the
+  // model or the UI window, so loading them only burns CPU + D1 bytes.
+  // (Stored parts are additionally sanitized on write — see
+  // sanitizePartsForStorage — so rows stay small forever.)
   const rows = await ctx.db
     .select()
     .from(messages)
@@ -475,6 +509,48 @@ export async function loadMessages(
     .map((r) => ({ id: r.id, role: r.role, parts: r.parts }))
 }
 
+/**
+ * Storage sanitizer: tool outputs for preview_composition / render_video
+ * carry the ENTIRE composition source (6–120KB) inside message parts.
+ * Persisting that verbatim meant every future turn re-read, re-parsed
+ * and re-serialized megabytes of duplicated code — the main driver of
+ * the prod `exceededCpu` deaths. The live stream already delivered the
+ * full artifact to the client (the version rail + preview bridge read
+ * the live parts, never the stored ones), the version row holds the
+ * code authoritatively, and refresh recovery re-syncs via
+ * /api/projects/:id — so storage keeps only the version pointer +
+ * canvas facts. This is what makes history size O(turns) instead of
+ * O(turns × code size), permanently.
+ */
+export function sanitizePartsForStorage(parts: unknown): unknown {
+  if (!Array.isArray(parts)) return parts ?? []
+  return parts.map((p) => {
+    if (typeof p !== "object" || p === null) return p
+    const t = (p as { type?: unknown }).type
+    if (typeof t !== "string" || (!t.startsWith("tool-") && t !== "dynamic-tool")) return p
+    const part = p as Record<string, unknown>
+    const out = part.output as Record<string, unknown> | undefined
+    if (!out || typeof out !== "object") return p
+    const art = out.artifact as Record<string, unknown> | undefined
+    if (!art || typeof art !== "object" || typeof art.code !== "string") return p
+    return {
+      ...part,
+      output: {
+        ...out,
+        artifact: {
+          kind: art.kind,
+          width: art.width,
+          height: art.height,
+          fps: art.fps,
+          durationInFrames: art.durationInFrames,
+          version: (out as { version?: unknown }).version ?? null,
+          note: "[full code lives in the version snapshot — see preview vN]",
+        },
+      },
+    }
+  })
+}
+
 export async function appendMessage(
   ctx: AgentContext,
   msg: { role: "user" | "assistant" | "system"; parts: unknown }
@@ -482,7 +558,7 @@ export async function appendMessage(
   await ctx.db.insert(messages).values({
     conversationId: ctx.conversationId,
     role: msg.role,
-    parts: msg.parts ?? [],
+    parts: sanitizePartsForStorage(msg.parts ?? []),
   })
   await ctx.db
     .update(conversations)

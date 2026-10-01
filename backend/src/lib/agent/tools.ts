@@ -3,7 +3,7 @@ import { z } from "zod"
 import { desc, eq } from "drizzle-orm"
 import { versions } from "../../db/schema"
 import { applyEdits, coerceOps } from "../agents/edit-ops"
-import { blockingIssues, describeIssues, lintComposition } from "../code-lint"
+import { blockingIssues, describeIssues, lintCompositionCached as lintComposition } from "../code-lint"
 import { hasDefaultExport } from "../code-block"
 import type { AgentContext } from "./context"
 import { ProjectAccessError, requireProject } from "./context"
@@ -658,9 +658,10 @@ export function buildTools(ctx: AgentContext) {
 
     ask_user: tool({
       description:
-        "Ask the user a clarifying question when you genuinely cannot proceed without an answer " +
-        "(missing asset, ambiguous target, destructive choice). Returns the question to the chat — the user's reply arrives as the next message. " +
-        "Do NOT use it for decisions you can reasonably make yourself (styling, color, pacing, mood). At most one question per call; never block a task that can proceed.",
+        "Ask the user a clarifying question when you genuinely cannot proceed without an answer: " +
+        "a vague brief with no actionable subject ('make something cool', 'surprise me'), a missing asset, " +
+        "an ambiguous target, or a destructive choice. Returns the question to the chat — the user's reply arrives as the next message. " +
+        "Prefer asking over guessing blindly on an empty brief. Do NOT use it for decisions you can reasonably make yourself (styling, color, pacing, mood around a clear subject). At most one question per call; never block a task that can proceed.",
       inputSchema: z.object({
         question: z.string().min(4).max(300).describe("One short question, max ~15 words"),
         options: z.array(z.string().min(1).max(60)).min(2).max(4).describe("2-4 genuinely different answers"),
