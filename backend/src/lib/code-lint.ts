@@ -447,10 +447,89 @@ function balanceError(code: string): string | null {
 const hasDefaultExportRe = /^\s*export\s+default\b/m
 const asDefaultRe = /^\s*export\s*\{[^}]*\bas\s+default\b/m
 
+/**
+ * CPU-aware size ceiling for the static gate.
+ *
+ * Measured: the lint is linear at ~0.42ms/KB (2KB → 2.9ms, 61KB → 25.5ms).
+ * That is free below a few KB and over budget past ~15KB, and the write
+ * tool accepts 120KB — a single large composition could burn ~50ms, more
+ * than the whole per-request allowance, on a CPU-capped plan.
+ *
+ * So above this size the gate runs a REDUCED check: balance/syntax and the
+ * default export (both single cheap passes, and the two that catch the
+ * failures that actually break playback), but skips the identifier analysis,
+ * which is the multi-pass part and costs proportionally the most.
+ *
+ * This is a deliberate trade: a 40KB file loses the "unimported component"
+ * check. That failure still surfaces — the browser player reports it, and
+ * the existing repair loop fixes it from the real error. Trading a
+ * second-line static check for keeping the request alive is the right way
+ * round, and it costs nothing for the 2-15KB files that make up almost all
+ * real compositions.
+ */
+export const LINT_FULL_SIZE_LIMIT = 15_000
+
+/**
+ * Cheap gate for oversized files: what still must hold for the thing to
+ * mount at all. No cache — it is already the fast path.
+ */
+function lintOversized(code: string, meta?: { durationInFrames?: number }): LintIssue[] {
+  const issues: LintIssue[] = []
+  if (code.trim() === "") {
+    return [{ severity: "error", code: "empty", message: "The composition is empty." }]
+  }
+  if (/^\s*```/m.test(code) && !/^\s*```[\s\S]*^\s*```\s*$/m.test(code)) {
+    issues.push({
+      severity: "error",
+      code: "fence",
+      message: "The file has an unclosed markdown fence.",
+    })
+  }
+  if (!hasDefaultExportRe.test(code) && !asDefaultRe.test(code)) {
+    issues.push({
+      severity: "error",
+      code: "no-default-export",
+      message: "The file has no default export, so nothing can mount it.",
+    })
+  }
+  const bal = balanceError(code)
+  if (bal) {
+    issues.push({ severity: "error", code: "balance", message: `Syntax: ${bal}.` })
+    return issues
+  }
+  // Cheap literal scans — one pass each, no identifier analysis.
+  if (/\bMath\.random\s*\(/.test(code)) {
+    issues.push({
+      severity: "error",
+      code: "math-random",
+      message:
+        "Math.random() is not deterministic — the same frame renders differently every time. Use random(\"seed\") from remotion.",
+    })
+  }
+  if (meta?.durationInFrames) {
+    const end = meta.durationInFrames
+    for (const m of code.matchAll(/\bfrom=\{?(\d+)\}?/g)) {
+      const n = Number(m[1])
+      if (Number.isFinite(n) && n >= end) {
+        issues.push({
+          severity: "warn",
+          code: "past-end",
+          message: `A Sequence starts at frame ${n} but the cut ends at ${end - 1} — it will never be seen.`,
+        })
+        break
+      }
+    }
+  }
+  return issues
+}
+
 export function lintComposition(
   code: string,
   meta?: { durationInFrames?: number }
 ): LintIssue[] {
+  if (code.length > LINT_FULL_SIZE_LIMIT) {
+    return lintOversized(code, meta)
+  }
   const issues: LintIssue[] = []
   if (code.trim() === "") {
     return [{ severity: "error", code: "empty", message: "The composition is empty." }]
