@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai"
 import { useChat } from "@ai-sdk/react"
 import {
@@ -148,52 +148,232 @@ function shortResult(name: string, output: unknown): string | null {
 }
 
 /**
- * Plain-text lite renderer: paragraphs + bullet lists, so the assistant's
- * sentences don't arrive as a wall of text. No markdown dependency.
+ * Lite markdown for assistant replies: paragraphs with real line breaks,
+ * bullets, numbered lists, small headings, bold/italic/code/links.
+ * Deliberately compact — headings stay close to body size, code stays
+ * inline-friendly. Built from React nodes (never raw HTML), so model
+ * output cannot inject markup.
  */
-function RichText({ text }: { text: string }) {
+const INLINE_RE =
+  /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|~~[^~\n]+~~|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\))/g
+
+function inlineNodes(text: string, keyBase: string): ReactNode[] {
+  const parts = text.split(INLINE_RE)
+  return parts.map((part, i) => {
+    const key = `${keyBase}-${i}`
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return <strong key={key} className="font-semibold">{inlineNodes(part.slice(2, -2), key)}</strong>
+    }
+    if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
+      return <em key={key}>{inlineNodes(part.slice(1, -1), key)}</em>
+    }
+    if (part.startsWith("~~") && part.endsWith("~~") && part.length > 4) {
+      return <span key={key} className="line-through opacity-80">{part.slice(2, -2)}</span>
+    }
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      return (
+        <code key={key} className="rounded bg-muted px-1 py-px font-mono text-[12px]">
+          {part.slice(1, -1)}
+        </code>
+      )
+    }
+    const link = part.match(/^\[([^\]\n]+)\]\(([^)\n]+)\)$/)
+    if (link) {
+      const href = link[2]!
+      const safe = /^(https?:\/\/|mailto:)/i.test(href) ? href : undefined
+      return safe ? (
+        <a key={key} href={safe} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+          {link[1]}
+        </a>
+      ) : (
+        <span key={key}>{link[1]}</span>
+      )
+    }
+    return <span key={key}>{part}</span>
+  })
+}
+
+type MdBlock =
+  | { type: "h"; level: number; text: string }
+  | { type: "ul"; items: string[] }
+  | { type: "ol"; items: string[] }
+  | { type: "code"; text: string }
+  | { type: "quote"; lines: string[] }
+  | { type: "p"; lines: string[] }
+
+function mdBlocks(text: string): MdBlock[] {
+  const blocks: MdBlock[] = []
   const lines = text.split("\n")
-  const blocks: Array<{ type: "p" | "ul"; lines: string[] }> = []
-  for (const raw of lines) {
-    const line = raw.trimEnd()
-    if (!line.trim()) continue
+  let i = 0
+  const pushPara = (linesOut: string[]) => {
+    if (linesOut.length > 0) blocks.push({ type: "p", lines: linesOut })
+  }
+  let para: string[] = []
+  while (i < lines.length) {
+    const line = lines[i]!
+    const fence = line.trim().match(/^```(\w*)\s*$/)
+    if (fence) {
+      pushPara(para)
+      para = []
+      const buf: string[] = []
+      i++
+      while (i < lines.length && !lines[i]!.trim().startsWith("```")) {
+        buf.push(lines[i]!)
+        i++
+      }
+      i++ // skip closing fence (or EOF)
+      blocks.push({ type: "code", text: buf.join("\n") })
+      continue
+    }
+    const h = line.match(/^(#{1,3})\s+(.*)$/)
+    if (h) {
+      pushPara(para)
+      para = []
+      blocks.push({ type: "h", level: h[1]!.length, text: h[2]!.trim() })
+      i++
+      continue
+    }
     const bullet = line.trim().match(/^[•\-*]\s+(.*)$/)
     if (bullet) {
-      const last = blocks[blocks.length - 1]
-      if (last?.type === "ul") last.lines.push(bullet[1])
-      else blocks.push({ type: "ul", lines: [bullet[1]] })
-    } else {
-      const last = blocks[blocks.length - 1]
-      if (last?.type === "p") last.lines.push(line.trim())
-      else blocks.push({ type: "p", lines: [line.trim()] })
+      pushPara(para)
+      para = []
+      const items = [bullet[1]!]
+      i++
+      while (i < lines.length) {
+        const b = lines[i]!.trim().match(/^[•\-*]\s+(.*)$/)
+        if (!b) break
+        items.push(b[1]!)
+        i++
+      }
+      blocks.push({ type: "ul", items })
+      continue
     }
+    const num = line.trim().match(/^\d+[.)]\s+(.*)$/)
+    if (num) {
+      pushPara(para)
+      para = []
+      const items = [num[1]!]
+      i++
+      while (i < lines.length) {
+        const b = lines[i]!.trim().match(/^\d+[.)]\s+(.*)$/)
+        if (!b) break
+        items.push(b[1]!)
+        i++
+      }
+      blocks.push({ type: "ol", items })
+      continue
+    }
+    if (line.trim().startsWith(">")) {
+      pushPara(para)
+      para = []
+      const quotes = [line.trim().replace(/^>\s?/, "")]
+      i++
+      while (i < lines.length && lines[i]!.trim().startsWith(">")) {
+        quotes.push(lines[i]!.trim().replace(/^>\s?/, ""))
+        i++
+      }
+      blocks.push({ type: "quote", lines: quotes })
+      continue
+    }
+    if (!line.trim()) {
+      pushPara(para)
+      para = []
+      i++
+      continue
+    }
+    para.push(line)
+    i++
   }
-  if (blocks.length === 0) return null
+  pushPara(para)
+  return blocks
+}
+
+function MdText({ text }: { text: string }) {
   return (
     <span className="block">
-      {blocks.map((b, i) =>
-        b.type === "ul" ? (
-          <ul key={i} className="my-1 list-disc space-y-0.5 pl-4 marker:text-muted-foreground">
-            {b.lines.map((l, j) => (
-              <li key={j}>{l}</li>
-            ))}
-          </ul>
-        ) : (
+      {mdBlocks(text).map((b, i) => {
+        if (b.type === "h") {
+          return (
+            <span
+              key={i}
+              className={cn(
+                "mb-1 mt-2 block font-semibold first:mt-0",
+                b.level === 1 ? "text-[15px]" : b.level === 2 ? "text-sm" : "text-[13px]"
+              )}
+            >
+              {inlineNodes(b.text, `h${i}`)}
+            </span>
+          )
+        }
+        if (b.type === "ul") {
+          return (
+            <ul key={i} className="my-1 list-disc space-y-0.5 pl-4 marker:text-muted-foreground">
+              {b.items.map((l, j) => (
+                <li key={j}>{inlineNodes(l, `u${i}-${j}`)}</li>
+              ))}
+            </ul>
+          )
+        }
+        if (b.type === "ol") {
+          return (
+            <ol key={i} className="my-1 list-decimal space-y-0.5 pl-4 marker:text-muted-foreground">
+              {b.items.map((l, j) => (
+                <li key={j}>{inlineNodes(l, `o${i}-${j}`)}</li>
+              ))}
+            </ol>
+          )
+        }
+        if (b.type === "code") {
+          return (
+            <pre key={i} className="my-1.5 overflow-x-auto rounded-lg border bg-muted/60 p-2 font-mono text-[12px] leading-relaxed">
+              <code>{b.text}</code>
+            </pre>
+          )
+        }
+        if (b.type === "quote") {
+          return (
+            <span key={i} className="my-1 block border-l-2 border-primary/40 pl-2 text-muted-foreground">
+              {b.lines.map((l, j) => (
+                <span key={j} className="block">
+                  {inlineNodes(l, `q${i}-${j}`)}
+                </span>
+              ))}
+            </span>
+          )
+        }
+        return (
           <span key={i} className="mb-1 block last:mb-0">
-            {b.lines.join(" ")}
+            {b.lines.map((l, j) => (
+              <span key={j}>
+                {j > 0 && <br />}
+                {inlineNodes(l.trim(), `p${i}-${j}`)}
+              </span>
+            ))}
           </span>
         )
-      )}
+      })}
     </span>
   )
 }
 
 /**
- * One live line while the agent works — never a checklist.
- * Successful steps collapse away once done; only the current activity
- * (or a failure) stays visible, so a finished turn reads as conversation,
- * not a build log.
+ * Seconds since mount, shown only after 5s of silence — fast turns stay
+ * clean, slow ones prove they're alive so nobody assumes a hang.
  */
+function Elapsed({ className }: { className?: string }) {
+  const [s, setS] = useState(0)
+  useEffect(() => {
+    const t0 = Date.now()
+    const t = setInterval(() => setS(Math.floor((Date.now() - t0) / 1000)), 1000)
+    return () => clearInterval(t)
+  }, [])
+  if (s < 5) return null
+  return (
+    <span className={cn("tabular-nums", className)} aria-label={`${s} seconds elapsed`}>
+      {s}s
+    </span>
+  )
+}
 function ActivityLine({ parts }: { parts: ToolPart[] }) {
   const visible = parts.filter((p) => {
     const n = toolNameOf(p)
@@ -252,6 +432,9 @@ function ActivityLine({ parts }: { parts: ToolPart[] }) {
         ) : null}
         {!isDone && !isFailed ? <span className="tabular-nums">…</span> : null}
       </span>
+      {!isDone && !isFailed && (
+        <Elapsed className="ml-auto shrink-0 text-[10px] text-muted-foreground" />
+      )}
     </div>
   )
 }
@@ -441,6 +624,7 @@ function AssistantBubble({
         <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">
           <Loader2 className="size-3 animate-spin text-primary" />
           Thinking…
+          <Elapsed className="ml-auto text-[10px]" />
         </div>
       </div>
     )
@@ -460,21 +644,21 @@ function AssistantBubble({
           <span className="text-[11px] font-semibold tracking-[-0.01em]">SlyxUp</span>
         </span>
       )}
-      <ActivityLine parts={tools} />
-      {reasoning && <ReasoningBlock text={reasoning} streaming={streaming} />}
-      {published != null && (
-        <div className="break-words text-sm leading-relaxed">
-          Saved as v{published} — it&apos;s on stage now. Tell me what to change next.
-        </div>
-      )}
       {text && (
         <div className="break-words text-sm leading-relaxed">
-          <RichText text={text} />
+          <MdText text={text} />
           {streaming && (
             <span aria-hidden className="ml-0.5 inline-block h-3.5 w-[7px] animate-pulse rounded-[2px] bg-primary/70 align-[-2px]" />
           )}
         </div>
       )}
+      {published != null && (
+        <div className="break-words text-sm leading-relaxed">
+          Saved as v{published} — it&apos;s on stage now. Tell me what to change next.
+        </div>
+      )}
+      {reasoning && <ReasoningBlock text={reasoning} streaming={streaming} />}
+      <ActivityLine parts={tools} />
       {asks.map((p, i) => (
         <AskBlock
           key={p.toolCallId ?? i}
@@ -596,6 +780,43 @@ function AgentThread({
   }, [pending])
 
   /**
+   * One silent auto-retry per failed turn that produced nothing (no text,
+   * no reasoning, no tool activity). A stall that leaves zero trace gets
+   * a single regenerate; anything the user already saw keeps the manual
+   * Retry button instead, so this can never loop.
+   */
+  const autoRetried = useRef<string | null>(null)
+  const [autoRetrying, setAutoRetrying] = useState(false)
+  useEffect(() => {
+    if (!chat.error || pending) return
+    const key = chat.error.message
+    if (autoRetried.current === key) return
+    const lastAssistant = [...chat.messages].reverse().find((m) => m.role === "assistant")
+    const produced = lastAssistant
+      ? lastAssistant.parts.some((p) => {
+          if (p.type === "text" || p.type === "reasoning") {
+            return Boolean((p as { text?: string }).text?.trim())
+          }
+          const t = (p as { type?: string }).type ?? ""
+          return t.startsWith("tool-") || t === "dynamic-tool"
+        })
+      : false
+    if (produced) return
+    autoRetried.current = key
+    setAutoRetrying(true)
+    const t = setTimeout(() => {
+      setAutoRetrying(false)
+      try {
+        void chat.regenerate()
+      } catch {
+        /* manual Retry stays available */
+      }
+    }, 1500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.error, pending])
+
+  /**
    * Reference images, downscaled BEFORE send. The old code attached the
    * original data URLs (up to 2.5 MB → ~3.3 MB base64 each): they were
    * persisted to D1, re-sent every turn and re-serialized on every model
@@ -680,6 +901,8 @@ function AgentThread({
     const value = (text ?? input).trim()
     if (!value || pending || inFlight.current) return
     inFlight.current = true
+    // Fresh user turn gets its own auto-retry budget.
+    autoRetried.current = null
     setInput("")
     void (async () => {
       try {
@@ -706,7 +929,7 @@ function AgentThread({
         role="log"
         aria-live="polite"
         aria-label="Messages"
-        className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto scrollbar-chat px-3 py-2.5 text-left"
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto overscroll-contain scrollbar-chat px-3 py-2.5 text-left"
       >
         {chat.messages.length === 0 && !pending && !initialPrompt && (
           <div className="msg-in flex flex-col items-center gap-1 rounded-2xl border border-dashed px-5 py-6 text-center">
@@ -785,6 +1008,7 @@ function AgentThread({
             >
               <Loader2 className="size-3 animate-spin text-primary" />
               Thinking…
+              <Elapsed className="ml-auto text-[10px]" />
             </div>
           )}
         {chat.error && (
@@ -794,6 +1018,12 @@ function AgentThread({
               Something went wrong
             </span>
             <span className="text-muted-foreground">{friendlyError(chat.error.message)}</span>
+            {autoRetrying && (
+              <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <Loader2 className="size-3 animate-spin text-primary" />
+                That turn produced nothing — retrying automatically…
+              </span>
+            )}
             <details className="text-[11px] text-muted-foreground/70">
               <summary className="cursor-pointer hover:text-muted-foreground">Details</summary>
               <span className="break-words">{chat.error.message}</span>
@@ -989,6 +1219,12 @@ export function AgentChatCard({
   const [working, setWorking] = useState(false)
   const seeded = useRef(new Set<string>())
   const handoffSent = useRef(false)
+  /** Last good list per project — restored instead of wiped on reload failure. */
+  const listCache = useRef<{
+    sid: string
+    convs: AgentConversation[]
+    activeId: string | null
+  } | null>(null)
   /** Set when the user starts a chat while the list is still in flight. */
   const createdDuringList = useRef(false)
   /**
@@ -1060,6 +1296,7 @@ export function AgentChatCard({
         if (cs.length > 0) {
           const latest = cs[0]!
           setActiveId(latest.id)
+          listCache.current = { sid, convs: cs, activeId: latest.id }
           try {
             if (live) setInitial(await loadAgentMessages(sid, latest.id))
           } catch {
@@ -1077,6 +1314,7 @@ export function AgentChatCard({
               if (!live) return
               setConversations([conv])
               setActiveId(conv.id)
+              listCache.current = { sid, convs: [conv], activeId: conv.id }
               setInitial([])
               setPendingPrompt(prompt)
             } catch (e) {
@@ -1089,14 +1327,32 @@ export function AgentChatCard({
         if (!live) return
         setListed(true)
         if (createdDuringList.current) return
-        // A failed listing is recoverable: we still have a project to talk
-        // to, so keep the composer alive and say what went wrong instead
-        // of replacing the panel with an error.
-        setConversations([])
-        setActiveId(null)
-        setInitial([])
+        // A failed reload must never wipe the list: restore the last good
+        // one for this project (a reload error used to empty the whole
+        // conversation list). Only a project with nothing cached before
+        // falls back to an empty composer.
+        const cached = listCache.current
+        if (cached && cached.sid === sid && cached.convs.length > 0) {
+          setConversations(cached.convs)
+          setActiveId(cached.activeId)
+          if (cached.activeId) {
+            loadAgentMessages(sid, cached.activeId)
+              .then((ms) => {
+                if (live) setInitial(ms)
+              })
+              .catch(() => {
+                if (live) setInitial([])
+              })
+          } else if (live) {
+            setInitial([])
+          }
+        } else {
+          setConversations([])
+          setActiveId(null)
+          setInitial([])
+        }
         setListWarning(
-          `${e instanceof Error ? e.message : "Couldn't load your chats"} — starting a new one.`
+          `${e instanceof Error ? e.message : "Couldn't load your chats"} — showing what I have.`
         )
       })
     return () => {
@@ -1123,7 +1379,11 @@ export function AgentChatCard({
     setBootError(null)
     try {
       const conv = await createAgentConversation(sid, (firstMessage ?? "Untitled").slice(0, 60))
-      setConversations((cs) => [conv, ...cs])
+      setConversations((cs) => {
+        const next = [conv, ...cs]
+        listCache.current = { sid, convs: next, activeId: conv.id }
+        return next
+      })
       setActiveId(conv.id)
       setInitial([])
       if (firstMessage) setPendingPrompt(firstMessage)

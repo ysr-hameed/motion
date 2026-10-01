@@ -499,7 +499,7 @@ export function PlaygroundPage({
                     </div>
                   )}
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-2 sm:p-3">
+                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 sm:p-3">
                 <div
                   className={cn(
                     "m-auto w-full",
@@ -524,7 +524,6 @@ export function PlaygroundPage({
                         version={active.activeVersion}
                         container={active.exportSettings.container}
                         quality={active.exportSettings.quality}
-                        framed={false}
                         onError={(errors) => t.repairVersion(active.id, active.activeVersion, errors)}
                       />
                     </div>

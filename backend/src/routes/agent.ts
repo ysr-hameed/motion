@@ -185,17 +185,16 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
   // Lean per-request grounding (context management): the canvas contract
   // for THIS cut plus the typeface catalogue. The full Remotion skill
   // reference is not re-sent — validate/repair tools close that loop.
+  // Passed via the `system` option (never as a system message inside
+  // `messages` — the SDK flags those as a prompt-injection risk).
   let canvasHint: string | undefined
+  let systemPreamble: string | undefined
   try {
     const canvas = await readCanvas(ctx)
     canvasHint = `${canvas.width}x${canvas.height} @${canvas.fps}fps, ${canvas.durationInFrames} frames`
     const { contractsFor, fontRules } = await import("../lib/remotion-guide")
     const { fontCatalogue } = await import("../lib/font-catalogue.generated")
-    const preamble: ModelMessage = {
-      role: "system",
-      content: `${contractsFor(canvas)}\n\n${fontRules(fontCatalogue())}`,
-    }
-    modelMessages.unshift(preamble)
+    systemPreamble = `${contractsFor(canvas)}\n\n${fontRules(fontCatalogue())}`
   } catch {
     /* grounding is advisory — the run proceeds without it */
   }
@@ -253,6 +252,7 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
   let result: ReturnType<typeof built.agent.stream>
   try {
     result = built.agent.stream({
+      system: systemPreamble,
       messages: modelMessages,
     })
   } catch (err) {
