@@ -10,7 +10,9 @@ import type { UIMessage } from "ai"
 import {
   CONTINUE_TOKEN,
   MAX_STEPS_PER_TURN,
+  TURN_LIMITS,
   isContinueMessage,
+  resolveMode,
   stepsUsedOf,
 } from "../src/lib/agent/turns"
 import { lintCompositionCached } from "../src/lib/code-lint"
@@ -55,7 +57,30 @@ describe("continuation token", () => {
   })
 
   it("cap is a sane bound for inspect→write→validate→preview→fix", () => {
-    assert.ok(MAX_STEPS_PER_TURN >= 5 && MAX_STEPS_PER_TURN <= 10)
+    assert.ok(MAX_STEPS_PER_TURN >= 5 && MAX_STEPS_PER_TURN <= 20)
+  })
+
+  it("advanced mode allows a deeper loop than standard", () => {
+    // The whole point of the mode: a full piece needs room for a second
+    // compose→preview→revise cycle that a tweak never needs.
+    assert.ok(TURN_LIMITS.advanced.maxSteps > TURN_LIMITS.standard.maxSteps)
+    assert.equal(MAX_STEPS_PER_TURN, TURN_LIMITS.advanced.maxSteps)
+  })
+
+  it("advanced raises the output budget, but stays bounded", () => {
+    assert.ok(TURN_LIMITS.advanced.maxOutputTokens > TURN_LIMITS.standard.maxOutputTokens)
+    // Parsing cost is linear in the response body, and the whole request has
+    // to fit a ~10ms CPU budget — an unbounded output budget would undo that.
+    assert.ok(TURN_LIMITS.advanced.maxOutputTokens <= TURN_LIMITS.standard.maxOutputTokens * 2)
+  })
+
+  it("resolveMode only accepts known modes", () => {
+    assert.equal(resolveMode("advanced"), "advanced")
+    assert.equal(resolveMode("standard"), "standard")
+    // Anything untrusted falls back rather than widening the budget.
+    for (const bad of [undefined, null, "", "ADVANCED", "pro", 1, {}, []]) {
+      assert.equal(resolveMode(bad), "standard", `expected fallback for ${JSON.stringify(bad)}`)
+    }
   })
 })
 

@@ -539,7 +539,16 @@ function AskBlock({
  * contract with backend routes/agent.ts — same literal both sides.
  */
 const CONTINUE_TOKEN = "[continue-turn]"
-const MAX_STEPS_PER_TURN = 7
+
+/**
+ * Client-side step budget, mirroring backend TURN_LIMITS.
+ *
+ * The client chains steps itself, so it must stop at the SAME point the
+ * server does. When these drifted the client cut an advanced turn off at 7
+ * steps while the server was willing to run 14 — the turn looked finished
+ * when it wasn't.
+ */
+const STEP_LIMITS = { standard: 7, advanced: 14 } as const
 
 function messageText(m: UIMessage): string {
   return m.parts
@@ -775,6 +784,7 @@ function AgentThread({
   conversationId,
   initialMessages,
   initialPrompt,
+  advanced = false,
   onPromptSent,
   attachments,
   onAttachFiles,
@@ -789,6 +799,8 @@ function AgentThread({
   initialMessages: UIMessage[]
   /** Sent once on mount (new conversation started from the composer). */
   initialPrompt: string | null
+  /** Turn depth chosen in the composer for this conversation. */
+  advanced?: boolean
   onPromptSent: () => void
   attachments: Attachment[]
   onAttachFiles?: (files: FileList) => void
@@ -901,6 +913,10 @@ function AgentThread({
               conversationId,
               ...(body ?? {}),
               messages: tail,
+              // Turn depth for every request in this conversation, including
+              // the hidden continuation steps — otherwise a chain would start
+              // in one mode and finish in another.
+              mode: advanced ? "advanced" : "standard",
               trigger,
               messageId,
             },
@@ -908,7 +924,7 @@ function AgentThread({
           }
         },
       }),
-    [serverProjectId, conversationId]
+    [serverProjectId, conversationId, advanced]
   )
 
   const chat = useChat({
@@ -1097,7 +1113,8 @@ function AgentThread({
                   (p as { type?: string }).type === "dynamic-tool"
             )
         ))
-    if ((lastTools.length > 0 && !asked && steps < MAX_STEPS_PER_TURN) || zeroTrace) {
+    const stepCap = advanced ? STEP_LIMITS.advanced : STEP_LIMITS.standard
+    if ((lastTools.length > 0 && !asked && steps < stepCap) || zeroTrace) {
       // Turn stays open; the chained step releases inFlight on settle.
       void sendContinue().then((ok) => {
         if (!ok) turnActiveRef.current = false
@@ -1106,7 +1123,7 @@ function AgentThread({
     }
     turnActiveRef.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending])
+  }, [pending, advanced])
 
   // New conversation (or remount) resets the loop state.
   useEffect(() => {
@@ -1762,6 +1779,12 @@ export function AgentChatCard({
   const [listWarning, setListWarning] = useState<string | null>(null)
   const [ensuring, setEnsuring] = useState(false)
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null)
+  /**
+   * Turn depth for the conversation being created. Carried alongside the
+   * opening prompt because the prompt alone doesn't describe how the agent
+   * should work on it.
+   */
+  const [pendingAdvanced, setPendingAdvanced] = useState(false)
   const [working, setWorking] = useState(false)
   useEffect(() => {
     onWorkingChange?.(working)
@@ -1921,7 +1944,7 @@ export function AgentChatCard({
    */
   const creating = useRef(false)
 
-  const createConversation = async (firstMessage?: string) => {
+  const createConversation = async (firstMessage?: string, advanced = false) => {
     if (!sid || creating.current) return
     creating.current = true
     // The list request may still be in flight; flag it so its resolution
@@ -1938,7 +1961,10 @@ export function AgentChatCard({
       })
       setActiveId(conv.id)
       setInitial([])
-      if (firstMessage) setPendingPrompt(firstMessage)
+      if (firstMessage) {
+        setPendingPrompt(firstMessage)
+        setPendingAdvanced(advanced)
+      }
     } catch (e) {
       // The text stays in the composer, so the user can just press send again.
       createdDuringList.current = false
@@ -2076,6 +2102,7 @@ export function AgentChatCard({
           conversationId={activeId}
           initialMessages={initial}
           initialPrompt={pendingPrompt}
+          advanced={pendingAdvanced}
           onPromptSent={() => setPendingPrompt(null)}
           attachments={attachments}
           onAttachFiles={onAttachFiles}
@@ -2145,7 +2172,7 @@ function NewChatComposer({
   initialSecs,
 }: {
   sid: string | null
-  onStart: (text: string) => Promise<void>
+  onStart: (text: string, advanced: boolean) => Promise<void>
   /** Picks the user already made elsewhere — never reset to defaults. */
   initialFormat?: string | null
   initialSecs?: number | null
@@ -2160,12 +2187,20 @@ function NewChatComposer({
     initialFormat && (FORMATS as string[]).includes(initialFormat) ? initialFormat : FORMATS[0]!
   )
   const [starting, setStarting] = useState(false)
+  /**
+   * Turn depth for this conversation. Advanced lets the agent run a longer
+   * compose→preview→revise loop in one turn — more steps for a full piece,
+   * each request still individually capped, so it costs patience rather than
+   * reliability. Sticky for the conversation so the agent behaves
+   * consistently across turns rather than switching mid-piece.
+   */
+  const [advanced, setAdvanced] = useState(false)
 
   const send = () => {
     const v = value.trim()
     if (!v || starting) return
     setStarting(true)
-    void onStart(`${v} ${specSuffix(secs, format)}`).finally(() =>
+    void onStart(`${v} ${specSuffix(secs, format)}`, advanced).finally(() =>
       setStarting(false)
     )
   }
@@ -2233,6 +2268,25 @@ function NewChatComposer({
             )
           })}
           <div className="min-w-2 flex-1" />
+          <button
+            type="button"
+            onClick={() => setAdvanced((v) => !v)}
+            aria-pressed={advanced}
+            title={
+              advanced
+                ? "Advanced mode on — the agent takes more passes and pushes the cut further"
+                : "Advanced mode off — one focused pass"
+            }
+            className={cn(
+              "flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all duration-200 active:scale-95",
+              advanced
+                ? "border-primary bg-primary text-primary-foreground shadow-md shadow-primary/25"
+                : "text-muted-foreground hover:border-primary/60 hover:text-foreground"
+            )}
+          >
+            <Sparkles className="size-3" aria-hidden />
+            Advanced
+          </button>
           <Button
             size="icon"
             disabled={!sid || !value.trim() || starting}

@@ -66,6 +66,8 @@ const chatSchema = z.object({
   projectId: z.string().min(1).max(80),
   conversationId: z.string().min(1).max(80),
   messages: z.array(uiMessageSchema).min(1).max(100),
+  /** Turn depth. Optional so older clients keep working unchanged. */
+  mode: z.enum(["standard", "advanced"]).optional(),
 })
 
 async function ownedProject(
@@ -115,7 +117,12 @@ import { contractsFor, fontRules } from "../lib/remotion-guide"
 import { fontCatalogue } from "../lib/font-catalogue.generated"
 import { CHAT_TURN_COST, refund, spend } from "../lib/credits"
 
-import { MAX_STEPS_PER_TURN, isContinueMessage, stepsUsedOf } from "../lib/agent/turns"
+import {
+  TURN_LIMITS,
+  isContinueMessage,
+  resolveMode,
+  stepsUsedOf,
+} from "../lib/agent/turns"
 import { isEmptyParts, toSseChunks, toUiParts, toolActivity } from "../lib/agent/nonstream-ui"
 import { loadTurnPreamble } from "../lib/agent/preamble"
 
@@ -214,8 +221,10 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
   // assistant step-messages since the last real user message. At the cap
   // the turn closes deterministically (no model call, ~1ms CPU) instead
   // of looping until the plan kills the request.
+  const mode = resolveMode(body.mode)
+  const limits = TURN_LIMITS[mode]
   const stepsUsed = stepsUsedOf(uiHistory)
-  if (stepsUsed >= MAX_STEPS_PER_TURN) {
+  if (stepsUsed >= limits.maxSteps) {
     const didPreview = uiHistory.some(
       (m) =>
         m.role === "assistant" &&
@@ -313,7 +322,7 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
 
   let built: ReturnType<typeof buildAgent>
   try {
-    built = buildAgent(c.env, tools, { freshProject, canvasHint })
+    built = buildAgent(c.env, tools, { freshProject, canvasHint, mode })
   } catch (err) {
     if (err instanceof Error && /not configured/i.test(err.message)) {
       return c.json({ error: "AI isn't set up on this server yet. Try again in a moment." }, 503)
@@ -389,6 +398,7 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
           freshProject,
           canvasHint,
           modelId: id,
+          mode,
           // Real progress, from a real event: the tool is about to execute.
           // `transient` keeps it out of the persisted message — it is a
           // live signal, not conversation content. This is what fills the

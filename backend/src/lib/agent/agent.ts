@@ -2,6 +2,7 @@ import { Experimental_Agent as ToolLoopAgent, stepCountIs } from "ai"
 import { createOpenAI } from "@ai-sdk/openai"
 import { GATEWAY_URL, resolveModels } from "../models"
 import { EDIT_RULES } from "../remotion-guide"
+import { TURN_LIMITS, resolveMode, type TurnMode } from "./turns"
 import type { AgentContext } from "./context"
 import { buildTools, type AgentTools } from "./tools"
 
@@ -79,6 +80,30 @@ only the seeded placeholder plus remotion.config.json, and the canvas
 facts are handed to you below. Every skipped inspection is seconds the
 user is not waiting.`
 
+/**
+ * Advanced mode — for briefs that need a real piece, not a tweak.
+ *
+ * The rules above describe HOW to work; this describes HOW FAR to go. It is
+ * deliberately about ambition, not about loosening correctness: the design
+ * bar, determinism rules, the 15s cap and the no-narration rule all still
+ * apply. What changes is that a first result is a draft to push on rather
+ * than the deliverable.
+ */
+const ADVANCED_MODE = `
+
+ADVANCED MODE (this brief asked for a full piece — go further than one pass):
+- ONE write is not enough. Compose, preview, then READ your own preview and
+  judge it like a motion designer: is the hierarchy clear? does the eye land
+  somewhere on frame 1? does the last frame resolve or just stop?
+- Improve what you actually find. A second deliberate pass with edit_file is
+  expected here — a small, surgical improvement beats a bigger first draft.
+- Spend the room you have. Use multiple beats and a real transition between
+  them, not one idea stretched to fill the duration. Depth beats length.
+- If a validate or preview step fails, fix it properly and re-preview.
+- Still obey every rule above: 15s maximum, deterministic motion only, and
+  ONE short closing paragraph in the user's language. The extra effort shows
+  in the video, never in a longer explanation of it.`
+
 export interface AgentBuild {
   agent: ToolLoopAgent<AgentTools>
   modelId: string
@@ -96,6 +121,8 @@ export function buildAgent(
     freshProject?: boolean
     canvasHint?: string
     modelId?: string
+    /** Turn depth — advanced allows a longer compose→preview→revise loop. */
+    mode?: TurnMode
     /**
      * Called as each tool begins. Non-streaming runs get no token events,
      * so this is what keeps the client's activity card live and honest —
@@ -109,13 +136,17 @@ export function buildAgent(
   const chain = resolveModels(env.AI_MODEL)
   const modelId = opts?.modelId ?? chain[0]!
   const openai = createOpenAI({ baseURL: GATEWAY_BASE, apiKey: key })
+  const mode = resolveMode(opts?.mode)
+  const limits = TURN_LIMITS[mode]
   const creation =
     `\n\n${CREATION_MODE}` +
     (opts?.canvasHint ? `\nCurrent canvas: ${opts.canvasHint}.` : "")
   const onToolStart = opts?.onToolStart
   const agent = new ToolLoopAgent({
     model: openai.chat(modelId),
-    system: opts?.freshProject ? `${SYSTEM}\n\n${DESIGN_BAR}${creation}` : `${SYSTEM}\n\n${DESIGN_BAR}`,
+    system:
+      (opts?.freshProject ? `${SYSTEM}\n\n${DESIGN_BAR}${creation}` : `${SYSTEM}\n\n${DESIGN_BAR}`) +
+      (mode === "advanced" ? ADVANCED_MODE : ""),
     tools,
     // ONE step per request. The turn loop lives across HTTP requests now
     // (client auto-continues), because a multi-step loop inside one
@@ -123,7 +154,7 @@ export function buildAgent(
     // (`exceededCpu`). One generation + its tool calls is the largest
     // unit that fits a tight CPU budget; the route caps total steps.
     stopWhen: stepCountIs(1),
-    maxOutputTokens: 8000,
+    maxOutputTokens: limits.maxOutputTokens,
     temperature: 0.5,
     // Wraps each tool so progress can be reported without streaming tokens.
     // Tools are otherwise untouched — same schemas, same execute functions.
