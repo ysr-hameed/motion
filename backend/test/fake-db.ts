@@ -18,6 +18,8 @@ import {
 export type Row = Record<string, unknown> & { id: string }
 
 function chainFor(rows: Row[]) {
+  let view = rows
+  let take: number | null = null
   const chain: {
     where: (...args: unknown[]) => typeof chain
     orderBy: (...args: unknown[]) => typeof chain
@@ -25,13 +27,43 @@ function chainFor(rows: Row[]) {
     all: () => Promise<Row[]>
     then: (res: (v: Row[]) => unknown) => Promise<unknown>
   } = {
-    where: () => chain,
+    // Conditions are opaque drizzle SQL — but every store query is an
+    // AND of column equalities, so filtering rows that contain ALL bound
+    // primitive values reproduces where() faithfully for tests.
+    where: (cond?: unknown) => {
+      const vals = conditionValues(cond)
+      view = view.filter((r) => vals.every((v) => Object.values(r).includes(v)))
+      return chain
+    },
     orderBy: () => chain,
-    limit: () => chain,
-    all: async () => rows,
+    limit: (n?: unknown) => {
+      if (typeof n === "number") take = n
+      return chain
+    },
+    all: async () => (take == null ? view : view.slice(0, take)),
     then: (res) => Promise.resolve([]).then(res),
   }
   return chain
+}
+
+/** Bound primitive values inside a drizzle condition (walks SQL chunks). */
+function conditionValues(cond: unknown): unknown[] {
+  const out: unknown[] = []
+  const walk = (node: unknown): void => {
+    if (node == null || typeof node !== "object") return
+    const rec = node as Record<string, unknown>
+    if (Array.isArray(rec.queryChunks)) {
+      for (const c of rec.queryChunks as unknown[]) walk(c)
+      return
+    }
+    const ctor = (node as object).constructor as { name?: unknown } | undefined
+    if (ctor?.name === "Param" && "value" in rec) {
+      const v = rec.value
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") out.push(v)
+    }
+  }
+  walk(cond)
+  return out
 }
 
 export interface FakeDb {

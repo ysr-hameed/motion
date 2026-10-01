@@ -99,6 +99,44 @@ const CATALOGUE: Record<string, { role: Face["role"]; note: string }> = {
 
 const resolved = new Map<string, Face>()
 
+/** Generic stacks that never need loading. */
+const GENERIC = new Set([
+  "sans-serif", "serif", "monospace", "cursive", "fantasy", "system-ui",
+  "ui-sans-serif", "ui-serif", "ui-monospace", "ui-rounded", "math",
+  "sans", "fangsong", "inherit", "initial", "unset",
+])
+
+/**
+ * Google family name (lowercased) → catalogue key. Resolves literal
+ * `fontFamily: '"Unbounded", system-ui, sans-serif'` stacks that never
+ * mention the Fonts.* registry.
+ */
+const FAMILY_TO_KEY: Record<string, string> = {
+  anton: "anton",
+  "bebas neue": "bebasNeue",
+  "archivo black": "archivoBlack",
+  syne: "syne",
+  unbounded: "unbounded",
+  "bricolage grotesque": "bricolage",
+  fraunces: "fraunces",
+  "instrument serif": "instrumentSerif",
+  "bodoni moda": "bodoni",
+  newsreader: "newsreader",
+  "crimson pro": "crimson",
+  spectral: "spectral",
+  "space grotesk": "spaceGrotesk",
+  chivo: "chivo",
+  archivo: "archivo",
+  manrope: "manrope",
+  outfit: "outfit",
+  epilogue: "epilogue",
+  "public sans": "publicSans",
+  karla: "karla",
+  "space mono": "spaceMono",
+  bungee: "bungee",
+  righteous: "righteous",
+}
+
 function makeFace(name: string, role: Face["role"], note: string): Face {
   return { family: name, role, note, href: "" }
 }
@@ -169,8 +207,41 @@ export async function ensureFontsLoaded(source: string): Promise<void> {
   for (const m of source.matchAll(/Fonts\.(\w+)\.family/g)) {
     if (CATALOGUE[m[1]!]) families.add(FONTS[m[1]!]!.family)
   }
+  // Literal stacks — `fontFamily: '"Unbounded", system-ui, sans-serif'`.
+  // These never mention the registry, so the old code skipped them and
+  // the composition silently rendered in a fallback face. Each known
+  // family is loaded on demand exactly like a registry reference.
   for (const m of source.matchAll(/fontFamily:\s*["'`]([^"'`]+)["'`]/g)) {
-    if (resolved.has(m[1]!)) families.add(m[1]!)
+    for (const raw of m[1]!.split(",")) {
+      const name = raw.trim().replace(/^['"]+|['"]+$/g, "")
+      if (!name || GENERIC.has(name.toLowerCase())) continue
+      if (resolved.has(name)) {
+        families.add(name)
+        continue
+      }
+      // Self-hosted UI face — no stylesheet needed, just await it below.
+      if (name === "Space Grotesk") {
+        families.add(name)
+        continue
+      }
+      const key = FAMILY_TO_KEY[name.toLowerCase()]
+      if (key && LOADERS[key] && CATALOGUE[key]) {
+        try {
+          const info = await LOADERS[key]!()
+          FONTS[key] = {
+            family: info.fontFamily,
+            role: CATALOGUE[key]!.role,
+            note: CATALOGUE[key]!.note,
+            href: info.url,
+          }
+          resolved.set(info.fontFamily, FONTS[key]!)
+          families.add(info.fontFamily)
+        } catch {
+          // Leave it out — the composition renders in a fallback face
+          // rather than failing to mount at all.
+        }
+      }
+    }
   }
   if (families.size === 0) return
 

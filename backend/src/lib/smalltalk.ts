@@ -13,9 +13,9 @@
  * swallowing it would break the approval flow.
  */
 
-const GREETING_ONLY = /^(hi+|hello|hey|yo|hiya|namaste|namaskar|good\s?(morning|afternoon|evening))\b[!.\s]*$/i
-const THANKS_ONLY = /^(thanks?|thank\s?you|thx|dhanyavaad|shukriya)\b[!.\s]*$/i
-const BYE_ONLY = /^(bye|goodbye|see\s?you|alvida|good\s?night)\b[!.\s]*$/i
+const GREETING_ONLY = /^(hi+|hello|hey|yo|hiya|namaste|namaskar|good\s?(morning|afternoon|evening))( there)?[!.\s]*$/i
+const THANKS_ONLY = /^(thanks?|thank\s?you|thx|dhanyavaad|shukriya)(\s+(so|very)\s+much|\s+a\s+lot)?[!.\s]*$/i
+const BYE_ONLY = /^(bye|goodbye|see\s?you|alvida|good\s?night)( there)?[!.\s]*$/i
 const CAPABILITIES =
   /\b(what can you do|what do you do|help(\b| me)|who are you|what are you|your name|about you|how does this work)\b/i
 
