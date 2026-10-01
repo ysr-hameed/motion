@@ -77,6 +77,86 @@ test("toUiParts: a tool-error renders as output-error, never dropped", () => {
   assert.equal(t.errorText, "no match")
 })
 
+/**
+ * The AI SDK's `tool-error` part carries its reason in `error`, NOT
+ * `errorText`. Reading only `errorText` collapsed every truncated tool call
+ * to the literal "The tool failed." — a turn that returned HTTP 200 with
+ * 8K output tokens, logged nothing in the Worker, and still told the user
+ * the tool had failed for no stated reason.
+ */
+test("toUiParts: a tool-error's reason is read from `error`, not `errorText`", () => {
+  const parts = toUiParts([
+    { type: "tool-call", toolCallId: "c1", toolName: "write_composition", input: {} },
+    { type: "tool-error", toolCallId: "c1", error: "Invalid input for tool write_composition: JSON parse" },
+  ])
+  const t = parts[0] as unknown as { state: string; errorText: string }
+  assert.equal(t.state, "output-error")
+  assert.match(t.errorText, /JSON parse/)
+  assert.notEqual(t.errorText, "The tool failed.")
+})
+
+test("toUiParts: a thrown Error object in `error` is unwrapped to its message", () => {
+  const parts = toUiParts([
+    { type: "tool-call", toolCallId: "c1", toolName: "write_composition", input: {} },
+    { type: "tool-error", toolCallId: "c1", error: new Error("File too large (max 200000 chars)") },
+  ])
+  const t = parts[0] as unknown as { errorText: string }
+  assert.equal(t.errorText, "File too large (max 200000 chars)")
+})
+
+test("toUiParts: a tool-error with no preceding call still surfaces its reason", () => {
+  const parts = toUiParts([
+    { type: "tool-error", toolCallId: "orphan", toolName: "write_composition", error: "boom" },
+  ])
+  assert.equal(parts.length, 1)
+  const t = parts[0] as unknown as { type: string; state: string; errorText: string }
+  assert.equal(t.type, "tool-write_composition")
+  assert.equal(t.state, "output-error")
+  assert.equal(t.errorText, "boom")
+})
+
+/**
+ * `finishReason: "length"` means the response hit maxOutputTokens, so the
+ * SDK never executed the tool. Left as `input-available` it renders as a
+ * spinner that never stops — the "request finished but the chat is still
+ * thinking" report.
+ */
+test("toUiParts: finishReason=length resolves a pending tool into an honest error", () => {
+  const parts = toUiParts(
+    [{ type: "tool-call", toolCallId: "c1", toolName: "write_composition", input: {} }],
+    { finishReason: "length" }
+  )
+  const t = parts[0] as unknown as { state: string; errorText: string }
+  assert.equal(t.state, "output-error")
+  assert.match(t.errorText, /cut off/i)
+  // It must not read as empty, or the route drops the whole turn.
+  assert.equal(isEmptyParts(parts), false)
+})
+
+test("toUiParts: finishReason=length does not override a real tool result", () => {
+  const parts = toUiParts(MODEL_CONTENT, { finishReason: "length" })
+  const tools = parts.filter((p) => (p as { type: string }).type.startsWith("tool-"))
+  assert.ok(tools.every((p) => (p as { state: string }).state === "output-available"))
+})
+
+test("toUiParts: a normal finish reason leaves a pending call pending", () => {
+  for (const reason of ["stop", "tool-calls", undefined]) {
+    const parts = toUiParts(
+      [{ type: "tool-call", toolCallId: "c1", toolName: "read_file", input: {} }],
+      { finishReason: reason }
+    )
+    assert.equal((parts[0] as unknown as { state: string }).state, "input-available")
+  }
+})
+
+test("toUiParts: non-array / malformed content degrades safely", () => {
+  for (const bad of [null, undefined, "nope", 42, {}]) {
+    assert.deepEqual(toUiParts(bad), [])
+    assert.equal(isEmptyParts(toUiParts(bad)), true)
+  }
+  assert.equal(isEmptyParts(toUiParts(null) as never), true)
+})
+
 test("toUiParts: a result with no preceding call is still surfaced", () => {
   const parts = toUiParts([
     { type: "tool-result", toolCallId: "orphan", toolName: "validate_composition", output: { ok: true } },
@@ -167,14 +247,6 @@ test("_collectToolsForTest: merge preserves call order and pairs by id", () => {
   assert.equal(tools[0]!.toolCallId, "call_1")
   assert.equal(tools[1]!.toolCallId, "call_2")
   assert.equal(tools[0]!.hasOutput, true)
-})
-
-test("non-array / malformed content degrades safely", () => {
-  for (const bad of [null, undefined, "nope", 42, {}]) {
-    assert.deepEqual(toUiParts(bad), [])
-    assert.equal(isEmptyParts(toUiParts(bad)), true)
-  }
-  assert.equal(isEmptyParts(toUiParts(null) as never), true)
 })
 
 test("nullish entries inside content are skipped, not thrown on", () => {

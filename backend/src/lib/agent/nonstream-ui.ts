@@ -48,10 +48,43 @@ interface ModelPart {
   output?: unknown
   result?: unknown
   errorText?: string
+  /**
+   * The AI SDK's `tool-error` part carries its reason here — NOT in
+   * `errorText`. Two different shapes reach us depending on how the tool
+   * failed: an INVALID call (unparsable/truncated arguments) gets a
+   * pre-stringified message, while a call whose `execute` threw carries
+   * the raw thrown value. Both land in `error`.
+   */
+  error?: unknown
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null
+}
+
+/**
+ * Pull a human-readable reason out of a tool failure.
+ *
+ * This used to read `errorText` only, which no AI SDK `tool-error` part
+ * ever sets. Every truncated tool call therefore collapsed to the literal
+ * "The tool failed." — which is why a turn that produced 8K output tokens
+ * and returned HTTP 200 reported a failure with no explanation anywhere,
+ * including the Worker logs (no exception is ever thrown: an invalid call
+ * never reaches `execute`).
+ */
+function errorTextOf(part: ModelPart): string | undefined {
+  const raw = part.errorText ?? part.error
+  if (raw == null) return undefined
+  if (typeof raw === "string") return raw.trim() || undefined
+  if (raw instanceof Error) return raw.message.trim() || undefined
+  if (isRecord(raw) && typeof raw.message === "string" && raw.message.trim()) {
+    return raw.message.trim()
+  }
+  try {
+    return JSON.stringify(raw).slice(0, 300)
+  } catch {
+    return String(raw).slice(0, 300)
+  }
 }
 
 /**
@@ -96,14 +129,46 @@ function collectTools(content: ModelPart[]): ToolInvocation[] {
         })
       }
     } else if (m.type === "tool-error" && typeof m.toolCallId === "string") {
+      const text = errorTextOf(m) ?? "The tool failed."
       const existing = byId.get(m.toolCallId)
       if (existing) {
-        existing.errorText = String(m.errorText ?? "The tool failed.")
+        existing.errorText = text
         existing.hasError = true
+      } else {
+        // An error with no preceding call (the SDK emits the call first
+        // today, but the two arrive on separate code paths) still has a
+        // reason worth showing — dropping it is how a failed tool used to
+        // disappear with no trace in the transcript.
+        byId.set(m.toolCallId, {
+          toolCallId: m.toolCallId,
+          toolName: m.toolName ?? "tool",
+          input: m.input ?? m.args,
+          errorText: text,
+          hasOutput: false,
+          hasError: true,
+        })
       }
     }
   }
   return [...byId.values()]
+}
+
+/**
+ * What the SDK reports when the response ran into `maxOutputTokens`.
+ *
+ * The whole step is still HTTP 200 — the model simply stopped mid-sentence.
+ * For a whole-file tool call like `write_composition` that means the JSON
+ * arguments never closed, so `execute` never ran. Saying so beats letting
+ * the card spin on a tool that is never going to resolve.
+ */
+const TRUNCATED_ERROR =
+  "The scene was cut off before it finished writing, so nothing was changed. " +
+  "Try a simpler scene, or ask for one beat at a time, and I'll build it in pieces."
+
+/** Extra facts about the finished step that change how parts are rendered. */
+export interface StepContext {
+  /** The SDK's `finishReason` — `"length"` means the output cap was hit. */
+  finishReason?: string | undefined
 }
 
 /**
@@ -112,9 +177,12 @@ function collectTools(content: ModelPart[]): ToolInvocation[] {
  * Order matches what a streamed run would have produced: text first (what
  * the user reads), then the tool activity it described.
  */
-export function toUiParts(content: unknown): UIMessage["parts"] {
+export function toUiParts(content: unknown, ctx?: StepContext): UIMessage["parts"] {
   const parts = Array.isArray(content) ? (content as ModelPart[]) : []
   const out: UIMessage["parts"] = []
+  // The SDK only executes tools when the finish reason allows it; on
+  // `length` every tool call in the step is left unresolved.
+  const truncated = ctx?.finishReason === "length"
 
   for (const part of parts) {
     if (!isRecord(part)) continue
@@ -147,6 +215,15 @@ export function toUiParts(content: unknown): UIMessage["parts"] {
         ...(base as object),
         state: "output-available",
         output: t.output,
+      } as unknown as UIMessage["parts"][number])
+    } else if (truncated) {
+      // Resolved-as-never: the response hit the output cap mid-call, so
+      // this tool can never finish. An eternal "still working" spinner is
+      // the one outcome worse than an honest failure.
+      out.push({
+        ...(base as object),
+        state: "output-error",
+        errorText: TRUNCATED_ERROR,
       } as unknown as UIMessage["parts"][number])
     } else {
       // Called but never resolved (the step ended first). Rendered as still

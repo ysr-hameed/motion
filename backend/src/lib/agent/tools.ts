@@ -20,6 +20,7 @@ import {
   snapshotVersion,
   writeFileContent,
 } from "./store"
+import { COMPOSITION_LINE_BUDGET } from "./turns"
 
 const MAX_OUTPUT = 12000
 const truncate = (s: string, n = MAX_OUTPUT) =>
@@ -270,13 +271,18 @@ export function buildTools(ctx: AgentContext) {
         "anywhere 8 surgical ops cannot express the change. You MUST call read_file first (keep imports, " +
         "canvas shape and the default export valid). The result is gated exactly like edit_file: " +
         "default export + static lint must pass or the write is rejected with reasons. " +
+        `The whole file travels inside THIS reply, so keep it under ${COMPOSITION_LINE_BUDGET} lines — ` +
+        "beyond that the reply is cut off mid-file and nothing is written. If the scene needs more, " +
+        "write the first part here and extend it with edit_file in a following step. " +
         "When NOT to use: small tweaks (use edit_file), new side files (use create_file).",
       inputSchema: z.object({
         content: z
           .string()
           .min(200)
           .max(120000)
-          .describe("Complete new file content for src/Composition.tsx"),
+          .describe(
+            `Complete new file content for src/Composition.tsx (keep under ${COMPOSITION_LINE_BUDGET} lines)`
+          ),
       }),
       execute: async ({ content }) => {
         if (!hasDefaultExport(content)) {

@@ -30,6 +30,20 @@ export const CONTINUE_TOKEN = "[continue-turn]"
  * it does not make any single request more expensive. The one thing that
  * does raise per-request cost is `maxOutputTokens`, since a longer answer
  * is a bigger JSON body to parse, so it stays modest and bounded.
+ *
+ * `maxOutputTokens` IS the ceiling on a whole-file write, though, and that
+ * is not a soft number. `write_composition` carries an entire
+ * Composition.tsx as TOOL-CALL ARGUMENTS, so the scene has to be emitted
+ * inside one response. At 8000 tokens a dense 5s scene (~900 lines of TSX)
+ * ran past the cap, the response stopped mid-JSON, and the tool call was
+ * never executed — while the gateway logged a clean HTTP 200 and the
+ * Worker logged nothing at all, because no exception is ever raised. The
+ * user just saw "The tool failed."
+ *
+ * So the budget is sized to hold a real composition, and the
+ * COMPOSITION_LINE_BUDGET figure is stated in the write_composition tool
+ * description so the model sizes its own output far more reliably than a
+ * token ceiling it cannot see.
  */
 export type TurnMode = "standard" | "advanced"
 
@@ -39,12 +53,19 @@ export interface TurnLimits {
 }
 
 export const TURN_LIMITS: Record<TurnMode, TurnLimits> = {
-  standard: { maxSteps: 7, maxOutputTokens: 8000 },
-  // 14 steps ≈ two full compose→preview→revise cycles inside one turn.
-  // Output stays under 2x standard: parsing cost is linear in the response
-  // body, and this file has to live inside a ~10ms CPU budget.
-  advanced: { maxSteps: 14, maxOutputTokens: 14000 },
+  // 16K ≈ a full dense 5s composition with headroom.
+  standard: { maxSteps: 7, maxOutputTokens: 16000 },
+  // 24K ≈ the ceiling the repairer already uses, for scenes that genuinely
+  // need a longer timeline or more beats.
+  advanced: { maxSteps: 14, maxOutputTokens: 24000 },
 }
+
+/**
+ * Lines a written composition should stay under so it fits one response.
+ * Stated in the system prompt and the tool description: the model sizes
+ * its own output far more reliably than a token ceiling.
+ */
+export const COMPOSITION_LINE_BUDGET = 900
 
 export const DEFAULT_MODE: TurnMode = "standard"
 

@@ -547,11 +547,34 @@ export function sanitizePartsForStorage(parts: unknown): unknown {
       }
     }
     if (typeof t !== "string" || (!t.startsWith("tool-") && t !== "dynamic-tool")) return p
-    const part = p as Record<string, unknown>
+    let part = p as Record<string, unknown>
+    // Whole-file tool INPUTS. `write_composition` / `create_file` carry an
+    // entire source file as their argument, so persisting `input.content`
+    // verbatim put 30–50KB of the model's own code into the messages table
+    // — and, because `convertToModelMessages` turns every stored tool part
+    // back into a tool-call for the model, straight back out of D1 and into
+    // the NEXT step's context. That is where the 5.9K → 7.6K → 15.1K input
+    // token growth came from, along with most of the per-step CPU and the
+    // 58–73s step latency.
+    //
+    // The authoritative copy always lives in project_files / the version
+    // snapshot, and the model re-reads it with read_file when it needs it,
+    // so a marker keeps history truthful at O(turns) cost.
+    const input = part.input as Record<string, unknown> | undefined
+    const inputContent = input && typeof input === "object" ? input.content : undefined
+    if (typeof inputContent === "string" && inputContent.length > 1000) {
+      part = {
+        ...part,
+        input: {
+          ...input,
+          content: `[${inputContent.length} chars of source omitted from history — read_file re-reads the current file]`,
+        },
+      }
+    }
     const out = part.output as Record<string, unknown> | undefined
-    if (!out || typeof out !== "object") return p
+    if (!out || typeof out !== "object") return part
     const art = out.artifact as Record<string, unknown> | undefined
-    if (!art || typeof art !== "object" || typeof art.code !== "string") return p
+    if (!art || typeof art !== "object" || typeof art.code !== "string") return part
     return {
       ...part,
       output: {

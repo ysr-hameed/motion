@@ -397,6 +397,12 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
         const retry = buildAgent(c.env, tools, {
           freshProject,
           canvasHint,
+          // The renderer contract goes IN here, not as generate({ system }).
+          // The SDK's Agent spreads options over its own settings, so a
+          // per-call `system` replaces the whole manual — which is exactly
+          // what used to happen, leaving the model with nothing but the
+          // canvas contract and no rules at all.
+          canvasPreamble: systemPreamble,
           modelId: id,
           mode,
           // Real progress, from a real event: the tool is about to execute.
@@ -412,10 +418,7 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
           },
         })
         activeModel = id
-        return retry.agent.generate({
-          system: systemPreamble,
-          messages: modelMessages,
-        })
+        return retry.agent.generate({ messages: modelMessages })
       }
 
       let result!: Awaited<ReturnType<typeof built.agent.generate>>
@@ -449,7 +452,12 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
       // One conversion, used for BOTH the live stream and the stored row, so
       // a reload can never show a different conversation than the one the
       // user just watched.
-      const parts = toUiParts(result.content)
+      //
+      // finishReason travels with it: on "length" the response hit
+      // maxOutputTokens mid-call, so the SDK never executed the tool. That
+      // step still returns HTTP 200 and throws nothing, which is why it
+      // used to reach the user as an unexplained failure.
+      const parts = toUiParts(result.content, { finishReason: result.finishReason })
       const activity = toolActivity(parts)
       const toolParts = activity.length
       const elapsed = Date.now() - t0

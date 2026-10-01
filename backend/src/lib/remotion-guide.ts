@@ -248,10 +248,34 @@ scale punch, a parallax push, an elastic settle. Build the whole cut to set
 it up and land it. If the brief names one, that is the one.
 
 ## Output
-- Emit the file and stop. No explanation, no trailing prose.
-- Every helper you define is used. No "add more here" — finish the cut.
+- Finish the cut: every helper you define is used, no "add more here".
+- Then write ONE sentence about what is now on screen. This used to say
+  "emit the file and stop, no explanation" — which fought the reply shape
+  above and left the user looking at a silent turn. One sentence is not
+  narration; narration is describing your process, and that stays banned.
 `
 
+/**
+ * The composer agent's craft layer: the patterns that separate a cut that
+ * looks designed from one that looks generated, written as CODE.
+ *
+ * WHY THIS EXISTS
+ *
+ * The prose rules above say "depth in layers", "overshoot then settle" and
+ * "a spring with low damping feels alive". A small model reads that as an
+ * intention and writes `opacity + translateY` — which is the flattest
+ * possible cut. The same model, shown the actual `interpolate()` call with
+ * the right `easing`, the actual parallax rig and the actual per-character
+ * reveal, reproduces it. Prose describes the destination; code is the only
+ * thing a model copies verbatim.
+ *
+ * So this block is deliberately code-dense and short. Every snippet is real
+ * Remotion 4.x against the same package set the runtime exposes (see
+ * CONTRACTS), and every one is a complete, droppable pattern rather than a
+ * fragment. The full Remotion reference is NOT pasted in here — that lives
+ * in the vendored skills (`remotion-skills.ts`, 30k tokens) and is used by
+ * the repairer, which needs a manual. The composer needs a pattern book.
+ */
 /**
  * Refinement guidance. Kept separate from the first-cut rules because a
  * surgical edit must not be handed a brief to redesign with.
