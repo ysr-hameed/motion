@@ -48,7 +48,7 @@ export function Hero() {
         <Badge variant="secondary">
           AI motion graphics for video creators
         </Badge>
-        <h1 className="max-w-2xl text-4xl leading-[1.08] sm:text-5xl lg:text-6xl">
+        <h1 className="max-w-2xl text-balance text-4xl leading-[1.08] sm:text-5xl lg:text-6xl">
           Turn words into motion graphics
         </h1>
         <p className="max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
@@ -74,13 +74,13 @@ export function Hero() {
 
         <dl className="mt-2 grid w-full max-w-2xl grid-cols-3 divide-x divide-border rounded-2xl border bg-card">
           {PROOF.map((s) => (
-            <div key={s.label} className="px-4 py-4">
-              <dd className="text-xl font-semibold tabular-nums sm:text-2xl">
-                {s.value}
-              </dd>
-              <dt className="mt-1 text-[11px] leading-snug text-muted-foreground sm:text-xs">
+            <div key={s.label} className="flex flex-col px-4 py-4">
+              <dt className="order-2 mt-1 text-[11px] leading-snug text-muted-foreground sm:text-xs">
                 {s.label}
               </dt>
+              <dd className="order-1 text-xl font-semibold tabular-nums sm:text-2xl">
+                {s.value}
+              </dd>
             </div>
           ))}
         </dl>
@@ -89,18 +89,24 @@ export function Hero() {
       <div className="border-y bg-muted/50 py-3">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-2 px-4">
           {STYLES.map((s) => (
-            <span
+            <button
               key={s}
-              className="rounded-md border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground"
+              type="button"
+              onClick={() => {
+                stashPendingPrompt(`Make a ${s.toLowerCase()} motion graphic`, "16:9")
+                navigate("/playground")
+              }}
+              title={`Start a ${s} clip`}
+              className="min-h-[36px] rounded-md border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2"
             >
               {s}
-            </span>
+            </button>
           ))}
           <a
             href="/studio"
-            className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-primary hover:underline"
+            className="inline-flex min-h-[36px] items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2"
           >
-            Try one <ArrowRight className="size-3" />
+            Try one <ArrowRight className="size-3" aria-hidden />
           </a>
         </div>
       </div>

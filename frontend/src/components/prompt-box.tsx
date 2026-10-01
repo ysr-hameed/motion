@@ -45,7 +45,7 @@ export function PromptBox({
   examples = PROMPT_EXAMPLES,
   formats = FORMATS,
   placeholder = "Describe the clip you want to make…",
-  showHint = true,
+  showHint: _showHint = true,
   autoFocus = false,
   attachments = [],
   onAttachFiles,
@@ -56,6 +56,7 @@ export function PromptBox({
   const [secs, setSecs] = useState<number>(DEFAULT_DURATION)
   const [focused, setFocused] = useState(false)
   const [typed, setTyped] = useState("")
+  const [typingPaused, setTypingPaused] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -76,6 +77,7 @@ export function PromptBox({
     if (
       value ||
       focused ||
+      typingPaused ||
       examples.length === 0 ||
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
@@ -111,7 +113,7 @@ export function PromptBox({
     }
     timer = setTimeout(tick, 500)
     return () => clearTimeout(timer)
-  }, [value, focused, examples])
+  }, [value, focused, typingPaused, examples])
 
   const showTyping = !value && !focused && examples.length > 0
   const canSubmit = value.trim().length > 0
@@ -134,8 +136,12 @@ export function PromptBox({
         )}
       >
         <div className="relative">
+          <label htmlFor={id ? `${id}-input` : undefined} className="sr-only">
+            Describe your clip
+          </label>
           <textarea
             ref={taRef}
+            id={id ? `${id}-input` : undefined}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onFocus={() => setFocused(true)}
@@ -150,15 +156,27 @@ export function PromptBox({
             autoFocus={autoFocus}
             placeholder={showTyping ? "" : placeholder}
             aria-label="Describe your clip"
+            aria-describedby={id ? `${id}-hint` : undefined}
             className="max-h-40 w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-base leading-relaxed outline-none placeholder:text-muted-foreground sm:text-[15px]"
           />
           {showTyping && (
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-x-0 top-0 px-4 pb-1 pt-3.5 text-left text-base text-muted-foreground sm:text-[15px]"
-            >
-              {typed}
-              <span className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[3px] animate-pulse bg-primary" />
+            <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between px-4 pb-1 pt-3.5">
+              <div
+                aria-hidden
+                className="text-left text-base text-muted-foreground sm:text-[15px]"
+              >
+                {typed}
+                <span className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[3px] animate-pulse bg-primary" />
+              </div>
+              <button
+                type="button"
+                onClick={() => setTypingPaused(true)}
+                aria-label="Pause example animations"
+                title="Pause examples"
+                className="pointer-events-auto ml-2 shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                Pause
+              </button>
             </div>
           )}
 
@@ -213,8 +231,9 @@ export function PromptBox({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-8"
-              aria-label="Attach reference image"
+              className="size-9"
+              aria-label="Attach reference image (PNG or JPG, up to 4)"
+              title="Attach reference image"
               onClick={() => fileRef.current?.click()}
             >
               <Plus />
@@ -225,81 +244,111 @@ export function PromptBox({
                 variant="ghost"
                 size="icon"
                 className={cn(
-                  "size-8",
+                  "size-9",
                   voice.listening && "bg-destructive/10 text-destructive"
                 )}
-                aria-label={voice.listening ? "Stop dictation" : "Voice input"}
+                aria-label={voice.listening ? "Stop dictation" : "Dictate with voice"}
+                title={voice.listening ? "Stop dictation" : "Dictate with voice"}
+                aria-pressed={voice.listening}
                 onClick={voice.toggle}
               >
                 <Mic />
               </Button>
             )}
             <div className="mx-1 hidden h-4 w-px bg-border min-[480px]:block" />
-            <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Aspect ratio">
+            <div
+              className="flex flex-wrap gap-1"
+              role="radiogroup"
+              aria-label="Aspect ratio"
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+                e.preventDefault()
+                const i = formats.indexOf(format)
+                const n = e.key === "ArrowRight" ? (i + 1) % formats.length : (i - 1 + formats.length) % formats.length
+                setFormat(formats[n]!)
+              }}
+            >
               {formats.map((f) => {
                 const Icon = formatIcon(f)
+                const selected = format === f
                 return (
                   <button
                     key={f}
                     type="button"
                     role="radio"
-                    aria-checked={format === f}
+                    aria-checked={selected}
+                    tabIndex={selected ? 0 : -1}
                     title={`${f} aspect ratio`}
                     onClick={() => setFormat(f)}
                     className={cn(
-                      "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium tabular-nums transition-colors",
-                      format === f
+                      "flex min-h-[36px] items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
+                      selected
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     )}
                   >
-                    <Icon className="size-3" />
+                    <Icon className="size-3" aria-hidden />
                     {f}
                   </button>
                 )
               })}
             </div>
             <div className="mx-1 hidden h-4 w-px bg-border min-[480px]:block" />
-            <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Clip length">
-              {DURATIONS.map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  role="radio"
-                  aria-checked={secs === n}
-                  title={`${n} seconds`}
-                  onClick={() => setSecs(n)}
-                  className={cn(
-                    "rounded-md px-2 py-1 text-xs font-medium tabular-nums transition-colors",
-                    secs === n
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                >
-                  {n}s
-                </button>
-              ))}
+            <div
+              className="flex flex-wrap gap-1"
+              role="radiogroup"
+              aria-label="Clip length in seconds"
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+                e.preventDefault()
+                const i = DURATIONS.findIndex((d) => d === secs)
+                const n = e.key === "ArrowRight" ? (i + 1) % DURATIONS.length : (i - 1 + DURATIONS.length) % DURATIONS.length
+                const next = DURATIONS[n]
+                if (next !== undefined) setSecs(next)
+              }}
+            >
+              {DURATIONS.map((n) => {
+                const selected = secs === n
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    tabIndex={selected ? 0 : -1}
+                    title={`${n} seconds`}
+                    onClick={() => setSecs(n)}
+                    className={cn(
+                      "min-h-[36px] rounded-md px-2.5 py-1.5 text-xs font-medium tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
+                      selected
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    {n}s
+                  </button>
+                )
+              })}
             </div>
             <div className="flex-1" />
             <Button
               type="button"
-              aria-label="Create clip"
+              aria-label={canSubmit ? "Create clip from description" : "Type a description to create a clip"}
+              title={canSubmit ? "Create clip" : "Describe your clip first"}
               disabled={!canSubmit}
               onClick={submit}
-              className="h-8 gap-1.5 px-3.5"
+              className="h-9 gap-1.5 px-4"
             >
-              <ArrowUp className="size-4" />
-              <span className="hidden sm:inline">Create</span>
+              <ArrowUp className="size-4" aria-hidden />
+              <span className="hidden sm:inline">Create clip</span>
             </Button>
           </div>
         </div>
       </div>
 
-      {showHint && (
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          Enter to create · Shift + Enter for a new line · Opens in the editor
-        </p>
-      )}
+      <p id={id ? `${id}-hint` : undefined} className="mt-2 text-center text-xs text-muted-foreground">
+        Enter to create · Shift + Enter for a new line · Opens in the editor
+      </p>
     </div>
   )
 }

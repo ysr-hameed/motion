@@ -286,8 +286,9 @@ export function ClipPlayer({
         <button
           type="button"
           onClick={toggle}
-          aria-label={playing ? "Pause" : "Play"}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105 active:scale-95 sm:size-8"
+          aria-label={playing ? "Pause preview" : "Play preview"}
+          title={playing ? "Pause (Space)" : "Play (Space)"}
+          className="flex size-10 min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105 active:scale-95"
         >
           {playing ? (
             <Pause className="size-4" />
@@ -295,7 +296,7 @@ export function ClipPlayer({
             <Play className="size-4 translate-x-[1px]" />
           )}
         </button>
-        <span className="shrink-0 text-xs tabular-nums text-white/80">
+        <span className="shrink-0 text-xs tabular-nums text-white/80" aria-live="off">
           {fmtTime(frame, canvas.fps)}
         </span>
         <input
@@ -304,7 +305,8 @@ export function ClipPlayer({
           max={Math.max(0, canvas.durationInFrames - 1)}
           value={Math.min(frame, Math.max(0, canvas.durationInFrames - 1))}
           onChange={(e) => seek(Number(e.target.value))}
-          aria-label="Seek"
+          aria-label={`Seek — ${fmtTime(frame, canvas.fps)} of ${fmtTime(canvas.durationInFrames, canvas.fps)}`}
+          aria-valuetext={`${fmtTime(frame, canvas.fps)} of ${fmtTime(canvas.durationInFrames, canvas.fps)}`}
           className={cn(
             "h-1 w-full min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-white/20",
             "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none",
@@ -313,14 +315,15 @@ export function ClipPlayer({
             "[&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white"
           )}
         />
-        <span className="hidden shrink-0 text-xs tabular-nums text-white/50 min-[380px]:inline">
+        <span className="shrink-0 text-xs tabular-nums text-white/50">
           {fmtTime(canvas.durationInFrames, canvas.fps)}
         </span>
         <button
           type="button"
           onClick={fullscreen}
-          aria-label="Fullscreen"
-          className="flex size-8 shrink-0 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+          aria-label="Toggle fullscreen preview"
+          title="Fullscreen"
+          className="flex size-10 min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2"
         >
           <Maximize className="size-4" />
         </button>
@@ -328,8 +331,8 @@ export function ClipPlayer({
 
 
       {error && (
-        <p className="border-t border-red-500/30 bg-red-950 px-4 py-2 text-xs text-red-200">
-          Preview error: {error}
+        <p className="border-t border-red-500/30 bg-red-950 px-4 py-2 text-xs text-red-200" role="alert">
+          This preview hit a snag: {error} — try a new version or adjust the last change.
         </p>
       )}
     </div>

@@ -144,7 +144,7 @@ function ProjectRow({
         onClick={() => setArming(true)}
         aria-label={`Delete ${project.name}`}
         title={`Delete ${project.name}`}
-        className="hidden size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:flex group-focus-within:flex"
+        className="flex size-8 min-h-[36px] min-w-[36px] shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-2 focus-visible:outline-offset-2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
       >
         <Trash2 className="size-3.5" />
       </button>
@@ -173,6 +173,21 @@ export function StudioSidebar({
 }) {
   const user = useUser()
   const path = usePathRoute()
+  const [dismissedTip, setDismissedTip] = useState(() => {
+    try {
+      return localStorage.getItem("motion:sidebar-tip:v1") === "1"
+    } catch {
+      return false
+    }
+  })
+  const dismissTip = () => {
+    setDismissedTip(true)
+    try {
+      localStorage.setItem("motion:sidebar-tip:v1", "1")
+    } catch {
+      /* storage unavailable */
+    }
+  }
   const onProjects = path === "/studio"
   const onEditor = path.startsWith("/playground")
   const onSettings = path === "/settings"
@@ -374,18 +389,30 @@ export function StudioSidebar({
           </div>
         </nav>
 
-        {onEditor && activeProjectId != null && (
-          <p className="mt-4 rounded-lg border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
-            You are editing one video. Use{" "}
-            <button
-              type="button"
-              onClick={goProjects}
-              className="font-medium text-primary hover:underline"
-            >
-              Projects
-            </button>{" "}
-            to switch videos.
-          </p>
+        {onEditor && activeProjectId != null && !dismissedTip && (
+          <div className="mt-4 rounded-lg border border-primary/20 bg-primary/[0.06] px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+            <div className="flex items-start justify-between gap-2">
+              <p>
+                You are editing one video. Use{" "}
+                <button
+                  type="button"
+                  onClick={goProjects}
+                  className="font-medium text-primary hover:underline"
+                >
+                  Projects
+                </button>{" "}
+                to switch videos.
+              </p>
+              <button
+                type="button"
+                onClick={dismissTip}
+                aria-label="Dismiss tip"
+                className="flex size-6 shrink-0 items-center justify-center rounded-md hover:bg-muted"
+              >
+                <X className="size-3.5" aria-hidden />
+              </button>
+            </div>
+          </div>
         )}
 
         <div className="mt-4 flex min-h-0 w-full flex-1 flex-col">

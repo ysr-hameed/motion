@@ -84,7 +84,20 @@ function Item({
 }
 
 export function Faq() {
-  const [open, setOpen] = useState(0)
+  const [open, setOpen] = useState<Set<number>>(new Set([0]))
+  const toggle = (i: number) => {
+    setOpen((prev) => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      try {
+        window.history.replaceState({}, "", "#faq")
+      } catch {
+        /* history unavailable */
+      }
+      return next
+    })
+  }
   return (
     <section id="faq" className="scroll-mt-20 border-t bg-muted/50 py-16 sm:py-24">
       <div className="mx-auto max-w-3xl px-4">
@@ -100,8 +113,8 @@ export function Faq() {
               q={f.q}
               a={f.a}
               index={i}
-              open={open === i}
-              onToggle={() => setOpen(open === i ? -1 : i)}
+              open={open.has(i)}
+              onToggle={() => toggle(i)}
             />
           ))}
         </div>

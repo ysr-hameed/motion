@@ -18,34 +18,51 @@ export default function App() {
   const studio = useMotionStudio()
   const path = usePathRoute()
 
+  const shell = (page: React.ReactNode) => (
+    <>
+      <a
+        href="#main-content"
+        onClick={(e) => {
+          e.preventDefault()
+          document.getElementById("main-content")?.focus()
+          document.getElementById("main-content")?.scrollIntoView()
+        }}
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-primary-foreground"
+      >
+        Skip to main content
+      </a>
+      {page}
+    </>
+  )
+
   // /playground/123 — project slug; bare /playground handled in-page.
   const pgMatch = path.match(/^\/playground\/(\d+)$/)
   if (pgMatch) {
-    return <PlaygroundPage studio={studio} projectId={Number(pgMatch[1])} />
+    return shell(<PlaygroundPage studio={studio} projectId={Number(pgMatch[1])} />)
   }
 
   switch (path) {
     case "/playground":
-      return <PlaygroundPage studio={studio} projectId={null} />
+      return shell(<PlaygroundPage studio={studio} projectId={null} />)
     case "/studio":
-      return <StudioPage studio={studio} />
+      return shell(<StudioPage studio={studio} />)
     case "/settings":
-      return <SettingsPage studio={studio} />
+      return shell(<SettingsPage studio={studio} />)
     case "/privacy":
-      return <PrivacyPage />
+      return shell(<PrivacyPage />)
     case "/terms":
-      return <TermsPage />
+      return shell(<TermsPage />)
     case "/login":
-      return <LoginPage />
+      return shell(<LoginPage />)
     case "/signup":
-      return <SignupPage />
+      return shell(<SignupPage />)
     case "/forgot-password":
-      return <ForgotPasswordPage />
+      return shell(<ForgotPasswordPage />)
     case "/reset-password":
-      return <ResetPasswordPage />
+      return shell(<ResetPasswordPage />)
     case "/auth/callback":
-      return <OAuthCallbackPage />
+      return shell(<OAuthCallbackPage />)
     default:
-      return <LandingPage />
+      return shell(<LandingPage />)
   }
 }

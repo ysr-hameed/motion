@@ -12,7 +12,7 @@ export function LandingPage() {
   return (
     <div className="min-h-svh bg-background text-foreground">
       <SiteHeader />
-      <main>
+      <main id="main-content" tabIndex={-1} className="outline-none">
         <Hero />
         <Features />
         <HowItWorks />

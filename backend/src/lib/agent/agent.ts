@@ -55,6 +55,8 @@ const DESIGN_BAR = `DESIGN BAR (every cut, no exceptions):
 - Kinetic typography: staggered per-word/line entrances with spring() or
   interpolate + Easing.out, tracking/weight shifts, overshoot on the hero
   word. Display faces come from the Fonts catalogue, never system sans.
+  Per-character reveals must preserve spaces — whiteSpace:"pre" on char
+  spans, \u00A0 space placeholders, or progressive text.slice(0, n).
 - Camera life: a slow 1.03–1.08x scale push or drift on the whole scene,
   parallax between layers (background moves least).
 - Transitions between beats: TransitionSeries (fade/slide/clockWipe) or

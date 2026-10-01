@@ -132,16 +132,22 @@ function Switch({
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onChange(!checked)
+        }
+      }}
       className={cn(
-        "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+        "relative h-7 min-h-[28px] w-12 shrink-0 rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
         checked ? "bg-primary" : "bg-input"
       )}
     >
       <span
         aria-hidden
         className={cn(
-          "absolute top-0.5 size-5 rounded-full bg-white shadow transition-all",
-          checked ? "left-[22px]" : "left-0.5"
+          "absolute top-1 size-5 rounded-full bg-white shadow transition-all",
+          checked ? "left-[26px]" : "left-1"
         )}
       />
     </button>
@@ -283,7 +289,14 @@ function WorkspaceTab({ studio }: { studio: MotionStudio }) {
   const deleteAll = () => {
     if (!arming) {
       setArming(true)
-      window.setTimeout(() => setArming(false), 3000)
+      window.setTimeout(() => setArming(false), 5000)
+      return
+    }
+    const confirmed = window.confirm(
+      `Delete all ${stats.projects} project${stats.projects === 1 ? "" : "s"}? This cannot be undone. Consider downloading a backup first.`
+    )
+    if (!confirmed) {
+      setArming(false)
       return
     }
     studio.projects.forEach((p) => studio.deleteProject(p.id))
@@ -300,7 +313,7 @@ function WorkspaceTab({ studio }: { studio: MotionStudio }) {
           <Stat value={String(stats.projects)} label="Projects" />
           <Stat value={String(stats.versions)} label="Versions generated" />
           <Stat value={String(stats.refs)} label="Reference images" />
-          <Stat value={formatBytes(stats.bytes)} label="Local data" />
+          <Stat value={formatBytes(stats.bytes)} label="Local draft data (approx.)" />
         </div>
       </Card>
 
@@ -362,16 +375,7 @@ function SubscriptionTab({ studio }: { studio: MotionStudio }) {
   const user = useUser()
 
   const goPricing = () => {
-    if (window.location.pathname !== "/") {
-      navigate("/")
-      window.setTimeout(() => {
-        document
-          .getElementById("pricing")
-          ?.scrollIntoView({ behavior: "smooth" })
-      }, 400)
-    } else {
-      document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" })
-    }
+    navigate("/?plan=pro#pricing")
   }
 
   return (
@@ -394,7 +398,7 @@ function SubscriptionTab({ studio }: { studio: MotionStudio }) {
               </p>
             </div>
           </div>
-          <Badge className="text-[11px]">Active</Badge>
+          <Badge className="text-[11px]">{user ? "Active" : "Sign in to activate"}</Badge>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3">
           <Stat value={String(studio.projects.length)} label="Projects" />
@@ -615,10 +619,26 @@ function NotificationsTab() {
 }
 
 export function SettingsPage({ studio }: { studio: MotionStudio }) {
-  const [tab, setTab] = useState<TabId>("profile")
+  const [tab, setTab] = useState<TabId>(() => {
+    try {
+      const h = window.location.hash.replace("#", "") as TabId
+      return TABS.some((t) => t.id === h) ? h : "profile"
+    } catch {
+      return "profile"
+    }
+  })
   const [navOpen, setNavOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const active = TABS.find((t) => t.id === tab)!
+
+  const selectTab = (id: TabId) => {
+    setTab(id)
+    try {
+      window.history.replaceState({}, "", `/settings#${id}`)
+    } catch {
+      /* history unavailable */
+    }
+  }
 
   useEffect(() => {
     document.body.style.overflow = navOpen ? "hidden" : ""
@@ -724,7 +744,7 @@ export function SettingsPage({ studio }: { studio: MotionStudio }) {
           </span>
         </header>
 
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 sm:py-8">
+        <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 outline-none sm:py-8">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
             <nav
               aria-label="Settings sections"
@@ -734,7 +754,7 @@ export function SettingsPage({ studio }: { studio: MotionStudio }) {
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => setTab(t.id)}
+                  onClick={() => selectTab(t.id)}
                   aria-current={tab === t.id ? "page" : undefined}
                   className={cn(
                     "flex shrink-0 items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium transition-colors",

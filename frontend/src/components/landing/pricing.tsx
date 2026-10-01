@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 const PLANS = [
   {
     name: "Starter",
-    price: "$0",
+    price: 0,
     per: "free forever",
     cta: "Start free",
     action: () => navigate("/signup"),
@@ -22,7 +22,7 @@ const PLANS = [
   },
   {
     name: "Pro",
-    price: "$19",
+    price: 19,
     per: "per month",
     cta: "Start 7-day trial",
     action: () => navigate("/signup"),
@@ -38,11 +38,11 @@ const PLANS = [
   },
   {
     name: "Studio",
-    price: "$49",
+    price: 49,
     per: "per month",
     cta: "Contact sales",
     action: () => {
-      window.location.href = "mailto:hello@slyxup.com"
+      window.location.href = "mailto:hello@slyxup.com?subject=Studio%20plan%20inquiry"
     },
     featured: false,
     features: [
@@ -81,7 +81,7 @@ export function Pricing() {
               <h3 className="text-sm font-semibold">{p.name}</h3>
               <p className="mt-2 flex items-baseline gap-2">
                 <span className="text-4xl font-semibold tracking-tight tabular-nums">
-                  {p.price}
+                  {new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(p.price)}
                 </span>
                 <span className="text-sm text-muted-foreground">{p.per}</span>
               </p>

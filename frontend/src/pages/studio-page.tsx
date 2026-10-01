@@ -33,16 +33,21 @@ function focusPrompt() {
 }
 
 function timeAgo(ts: number): string {
-  const s = Math.floor((Date.now() - ts) / 1000)
-  if (s < 60) return "Just now"
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  if (d === 1) return "Yesterday"
-  if (d < 7) return `${d}d ago`
-  return new Date(ts).toLocaleDateString()
+  const diffMs = ts - Date.now()
+  const absS = Math.abs(Math.floor(diffMs / 1000))
+  if (absS < 60) return "Just now"
+  try {
+    const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" })
+    const m = Math.round(diffMs / 60000)
+    if (Math.abs(m) < 60) return rtf.format(m, "minute")
+    const h = Math.round(diffMs / 3600000)
+    if (Math.abs(h) < 24) return rtf.format(h, "hour")
+    const d = Math.round(diffMs / 86400000)
+    if (Math.abs(d) < 7) return rtf.format(d, "day")
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(ts))
+  } catch {
+    return new Date(ts).toLocaleDateString()
+  }
 }
 
 type CardProject = {
@@ -73,9 +78,14 @@ function ProjectCard({
 
   return (
     <article className="group relative overflow-hidden rounded-2xl border bg-card transition-all hover:border-primary/30 hover:shadow-md">
-      <button
-        type="button"
-        onClick={onOpen}
+      <a
+        href={`/playground/${project.id}`}
+        onClick={(e) => {
+          // Allow Cmd/Ctrl+click + middle-click to open in new tab.
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
+          e.preventDefault()
+          onOpen()
+        }}
         aria-label={`Open ${project.name} in the editor`}
         className="block w-full text-left"
       >
@@ -140,7 +150,7 @@ function ProjectCard({
               ` · ${project.attachments.length} reference${project.attachments.length > 1 ? "s" : ""}`}
           </span>
         </span>
-      </button>
+      </a>
       <button
         type="button"
         onClick={(e) => {
@@ -151,12 +161,12 @@ function ProjectCard({
             setArming(true)
           }
         }}
-        aria-label={arming ? "Confirm delete" : `Delete ${project.name}`}
-        title={arming ? "Click again to confirm" : "Delete video"}
+        aria-label={arming ? `Confirm delete ${project.name}` : `Delete ${project.name}`}
+        title={arming ? "Click again to confirm delete" : "Delete video"}
         className={
           arming
-            ? "absolute right-2.5 top-2.5 rounded-lg bg-destructive px-2.5 py-1 text-[11px] font-semibold text-white shadow-lg"
-            : "absolute right-2.5 top-2.5 flex size-7 items-center justify-center rounded-lg bg-black/50 text-white opacity-0 backdrop-blur transition-opacity hover:bg-destructive focus-visible:opacity-100 group-hover:opacity-100"
+            ? "absolute right-2.5 top-2.5 min-h-[44px] rounded-lg bg-destructive px-3 py-2 text-[11px] font-semibold text-white shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2"
+            : "absolute right-2.5 top-2.5 flex size-8 items-center justify-center rounded-lg bg-black/50 text-white backdrop-blur transition-colors hover:bg-destructive focus-visible:outline-2 focus-visible:outline-offset-2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
         }
       >
         {arming ? "Confirm?" : <Trash2 className="size-3.5" />}
@@ -222,13 +232,13 @@ function ProjectListRow({
           if (arming) onDelete()
           else setArming(true)
         }}
-        aria-label={arming ? "Confirm delete" : `Delete ${project.name}`}
-        title={arming ? "Click again to confirm" : "Delete video"}
+        aria-label={arming ? `Confirm delete ${project.name}` : `Delete ${project.name}`}
+        title={arming ? "Click again to confirm delete" : "Delete video"}
         className={cn(
-          "flex h-7 shrink-0 items-center justify-center rounded-lg transition-colors",
+          "flex h-8 min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
           arming
             ? "bg-destructive px-2.5 text-[11px] font-semibold text-white"
-            : "size-7 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+            : "px-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 lg:focus-visible:opacity-100"
         )}
       >
         {arming ? "Confirm?" : <Trash2 className="size-3.5" />}
@@ -334,10 +344,11 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
         />
         <aside
           className={cn(
-            "absolute left-0 top-0 h-full w-72 max-w-[85vw] overflow-hidden bg-background shadow-2xl transition-transform duration-300 ease-out",
+            "absolute left-0 top-0 h-full w-72 max-w-[85vw] overflow-hidden overscroll-contain bg-background shadow-2xl transition-transform duration-300 ease-out",
             navOpen ? "translate-x-0" : "-translate-x-full"
           )}
           role="dialog"
+          aria-modal="true"
           aria-label="Projects menu"
         >
           <StudioSidebar
@@ -392,11 +403,14 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
             <Search className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
             <input
               id="studio-search"
+              type="search"
+              autoComplete="off"
+              spellCheck={false}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search videos"
+              placeholder="Search videos…"
               aria-label="Search videos"
-              className="h-8 w-44 rounded-lg border bg-background pl-8 pr-3 text-[13px] outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15 lg:w-56"
+              className="h-9 w-44 rounded-lg border bg-background pl-8 pr-3 text-[13px] outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15 lg:w-56"
             />
           </label>
           <Button size="sm" className="h-8 sm:hidden" onClick={focusPrompt} aria-label="New video">
@@ -405,7 +419,7 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
           </Button>
         </header>
 
-        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 p-4 sm:p-6">
+        <main id="main-content" tabIndex={-1} className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 p-4 outline-none sm:p-6">
           <section
             aria-label="Create a new video"
             className="rounded-2xl border bg-card p-5 sm:p-6"
@@ -481,11 +495,14 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
                 <Search className="pointer-events-none absolute left-3 size-4 text-muted-foreground" />
                 <input
                   id="studio-search-mobile"
+                  type="search"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search videos"
+                  placeholder="Search videos…"
                   aria-label="Search videos"
-                  className="h-9 w-full rounded-lg border bg-background pl-9 pr-3 text-base outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
+                  className="h-11 w-full rounded-lg border bg-background pl-9 pr-3 text-base outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
                 />
               </label>
             )}

@@ -461,6 +461,28 @@ export function lintComposition(
   }
 
   /**
+   * Per-character spans with inline-block collapse spaces: "THE FUTURE"
+   * renders "THEFUTURE" because each space becomes an empty zero-width
+   * span. Seen for real on a typewriter cut. Warn (don't block — some
+   * files handle it) with the exact fix.
+   */
+  if (/\.split\(\s*["']{2}\s*\)/.test(code) && /inline-block/.test(code)) {
+    const preservesSpace =
+      /whiteSpace\s*:\s*["']pre/.test(code) ||
+      /\\u00a0/.test(code) ||
+      /&nbsp;/.test(code) ||
+      /whiteSpace\s*:\s*["']pre-wrap/.test(code)
+    if (!preservesSpace) {
+      issues.push({
+        severity: "warn",
+        code: "per-char-spacing",
+        message:
+          "Per-character inline-block spans collapse spaces — 'THE FUTURE IS WRITTEN' renders 'THEFUTUREISWRITTEN'. Preserve whitespace: add whiteSpace:'pre' to each char span, render spaces as \\u00A0 placeholders with width, or reveal progressively with text.slice(0, n) instead of per-char spans.",
+      })
+    }
+  }
+
+  /**
    * Redeclaring a scope binding is a hard SyntaxError, not a style
    * problem: the evaluator supplies `Fonts` as a parameter, so a
    * top-level `const Fonts = …` collides with it and the file will not

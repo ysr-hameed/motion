@@ -485,12 +485,12 @@ function AskBlock({
     ? o.options.filter((x): x is string => typeof x === "string").slice(0, 4)
     : []
   if (!question) return null
-  // Director's slate: dark mini-card that ties the chat to the screening
-  // room next to it. Tapping an option sends it instantly.
+  // Director's slate: theme-aware mini-card that ties the chat to the
+  // screening room next to it. Tapping an option sends it instantly.
   return (
-    <div className="mt-1.5 flex flex-col gap-2 overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 p-3 text-white shadow-lg">
-      <div aria-hidden className="pointer-events-none -mx-3 -mt-3 h-8 bg-grid-dark opacity-60" />
-      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/50">
+    <div className="mt-1.5 flex flex-col gap-2 overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-lg dark:border-white/10 dark:bg-neutral-950 dark:text-white">
+      <div aria-hidden className="pointer-events-none -mx-3 -mt-3 h-8 bg-grid opacity-40 dark:bg-grid-dark dark:opacity-60" />
+      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground dark:text-white/50">
         SlyxUp asks
       </p>
       <p className="-mt-1 text-[13px] font-medium leading-snug">{question}</p>
@@ -502,22 +502,32 @@ function AskBlock({
               type="button"
               disabled={disabled}
               onClick={() => onAnswer(opt)}
-              className="max-w-full cursor-pointer rounded-full border border-white/15 bg-white/[0.07] px-2.5 py-1 text-left text-[11px] font-medium break-words text-white/90 transition-all duration-200 hover:-translate-y-px hover:border-white/30 hover:bg-white/[0.14] disabled:cursor-default disabled:opacity-50 disabled:hover:translate-y-0"
+              className="max-w-full cursor-pointer rounded-full border border-input bg-secondary px-3 py-1.5 text-left text-[12px] font-medium break-words transition-colors hover:border-primary/50 disabled:cursor-default disabled:opacity-50 dark:border-white/15 dark:bg-white/[0.07] dark:text-white/90 dark:hover:border-white/30 dark:hover:bg-white/[0.14]"
             >
               {opt}
             </button>
           ))}
         </div>
       )}
-      <p className="-mb-0.5 text-[10px] text-white/40">
+      <p className="-mb-0.5 text-[10px] text-muted-foreground dark:text-white/40">
         {answered ? "Answered — continue below" : "Tap an option to send it instantly"}
       </p>
     </div>
   )
 }
 
-function assistantText(msg: UIMessage): string {
-  return msg.parts
+/**
+ * The composer appends "(Duration: 5 seconds. Format: 16:9.)" for the
+ * model — it rides along invisibly, stripped here for display so the
+ * bubble shows only what the user actually typed.
+ */
+const SPEC_SUFFIX_RE = /\s*\(Duration:\s*\d+\s*seconds?\.\s*Format:\s*[^)]+\)\.?\s*$/i
+
+function displayUserText(text: string): string {
+  return text.replace(SPEC_SUFFIX_RE, "").trim()
+}
+
+function assistantText(msg: UIMessage): string {  return msg.parts
     .filter((p) => p.type === "text")
     .map((p) => (p as { text?: string }).text ?? "")
     .join("")
@@ -683,6 +693,7 @@ function AgentThread({
   onRemoveAttachment,
   onArtifact,
   onPendingChange,
+  stopRef,
 }: {
   serverProjectId: string
   conversationId: string
@@ -693,15 +704,43 @@ function AgentThread({
   attachments: Attachment[]
   onAttachFiles?: (files: FileList) => void
   onRemoveAttachment?: (id: string) => void
-  onArtifact: (artifact: Artifact, reply: string) => void
+  onArtifact: (artifact: Artifact, reply: string, serverVersion?: number) => void
   onPendingChange?: (pending: boolean) => void
+  stopRef?: { current: (() => void) | null }
 }) {
-  const [input, setInput] = useState("")
+  const [input, setInput] = useState(() => {
+    try {
+      return localStorage.getItem(`motion:chat-draft:${conversationId}`) ?? ""
+    } catch {
+      return ""
+    }
+  })
   const fileRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
   const seenArtifacts = useRef(new Set<string>())
+
+  // Persist unsent drafts per conversation; restore on reload.
+  useEffect(() => {
+    try {
+      if (input.trim()) localStorage.setItem(`motion:chat-draft:${conversationId}`, input)
+      else localStorage.removeItem(`motion:chat-draft:${conversationId}`)
+    } catch {
+      /* storage unavailable */
+    }
+  }, [input, conversationId])
+
+  // Warn before leaving with an unsent draft.
+  useEffect(() => {
+    const onBefore = (e: BeforeUnloadEvent) => {
+      if (input.trim()) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener("beforeunload", onBefore)
+    return () => window.removeEventListener("beforeunload", onBefore)
+  }, [input])
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current
@@ -778,6 +817,80 @@ function AgentThread({
   useEffect(() => {
     if (!pending) inFlight.current = false
   }, [pending])
+
+  // Explicit user stop — never auto-continue after this.
+  const stoppedRef = useRef(false)
+  const stop = useCallback(() => {
+    stoppedRef.current = true
+    try {
+      chat.stop()
+    } catch {
+      /* already settled */
+    }
+  }, [chat])
+
+  // Expose the real stop to the preview header (its Stop button must halt
+  // the agent stream, not just clear progress UI).
+  useEffect(() => {
+    if (!stopRef) return
+    stopRef.current = stop
+    return () => {
+      stopRef.current = null
+    }
+  }, [stopRef, stop, conversationId])
+
+  /**
+   * Auto-continue a turn that died with zero trace: no text, no reasoning,
+   * no tool activity, no error, not user-stopped. The stream settled but
+   * the run clearly didn't finish — one silent regenerate per user message
+   * (max two per conversation) instead of leaving the user staring at
+   * nothing. Anything partially produced is left for the manual Retry.
+   */
+  const turnBase = useRef<{ userId: string | null; msgCount: number } | null>(null)
+  const continuedFor = useRef<Set<string>>(new Set())
+  const continueCount = useRef(0)
+  useEffect(() => {
+    if (pending) {
+      stoppedRef.current = false
+      const lastUser = [...chat.messages].reverse().find((m) => m.role === "user")
+      turnBase.current = { userId: lastUser?.id ?? null, msgCount: chat.messages.length }
+      return
+    }
+    const base = turnBase.current
+    turnBase.current = null
+    if (!base || stoppedRef.current || chat.error) return
+    const fresh = chat.messages.slice(base.msgCount)
+    const produced = fresh.some(
+      (m) =>
+        m.role === "assistant" &&
+        m.parts.some((p) => {
+          if (p.type === "text" || p.type === "reasoning") {
+            return Boolean((p as { text?: string }).text?.trim())
+          }
+          const t = (p as { type?: string }).type ?? ""
+          return t.startsWith("tool-") || t === "dynamic-tool"
+        })
+    )
+    if (produced) return
+    if (!base.userId || continuedFor.current.has(base.userId)) return
+    if (continueCount.current >= 2) return
+    continuedFor.current.add(base.userId)
+    continueCount.current += 1
+    try {
+      void chat.regenerate()
+    } catch {
+      /* manual Retry stays available */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending])
+
+  // New conversation (or remount) resets the continue budget.
+  useEffect(() => {
+    turnBase.current = null
+    continuedFor.current = new Set()
+    continueCount.current = 0
+    stoppedRef.current = false
+  }, [conversationId])
 
   /**
    * One silent auto-retry per failed turn that produced nothing (no text,
@@ -879,6 +992,8 @@ function AgentThread({
   }, [chat.messages, pending])
 
   // Bridge published previews into the local version rail + player.
+  // The server version number rides along so the studio can tell a real
+  // new cut from a re-preview of identical code (no version inflation).
   useEffect(() => {
     for (const m of chat.messages) {
       if (m.role !== "assistant") continue
@@ -888,10 +1003,15 @@ function AgentThread({
         const name = toolNameOf(tp)
         if (name !== "preview_composition" && name !== "render_video") continue
         if (tp.state !== "output-available") continue
-        const art = asArtifact((tp.output as { artifact?: unknown } | null)?.artifact)
+        const out = (tp.output ?? {}) as { artifact?: unknown; version?: unknown }
+        const art = asArtifact(out.artifact)
         if (art) {
           seenArtifacts.current.add(tp.toolCallId)
-          onArtifact(art, assistantText(m))
+          onArtifact(
+            art,
+            assistantText(m),
+            typeof out.version === "number" ? out.version : undefined
+          )
         }
       }
     }
@@ -904,6 +1024,11 @@ function AgentThread({
     // Fresh user turn gets its own auto-retry budget.
     autoRetried.current = null
     setInput("")
+    try {
+      localStorage.removeItem(`motion:chat-draft:${conversationId}`)
+    } catch {
+      /* storage unavailable */
+    }
     void (async () => {
       try {
         const files = await filesFor()
@@ -927,8 +1052,8 @@ function AgentThread({
         ref={scrollRef}
         onScroll={onScroll}
         role="log"
-        aria-live="polite"
         aria-label="Messages"
+        aria-live="off"
         className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto overscroll-contain scrollbar-chat px-3 py-2.5 text-left"
       >
         {chat.messages.length === 0 && !pending && !initialPrompt && (
@@ -983,7 +1108,7 @@ function AgentThread({
                 .filter((p) => p.type === "text")
                 .map((p, i, arr) => (
                   <span key={i}>
-                    {(p as { text?: string }).text}
+                    {displayUserText((p as { text?: string }).text ?? "")}
                     {i < arr.length - 1 ? "\n" : ""}
                   </span>
                 ))}
@@ -1012,24 +1137,24 @@ function AgentThread({
             </div>
           )}
         {chat.error && (
-          <div className="msg-in flex flex-col gap-2 rounded-2xl border border-destructive/40 bg-destructive/5 p-3 text-[12px] shadow-lg">
+          <div className="msg-in flex flex-col gap-2 rounded-2xl border border-destructive/40 bg-destructive/5 p-3 text-[12px] shadow-lg" role="alert">
             <span className="flex items-center gap-1.5 font-medium text-destructive">
-              <TriangleAlert className="size-3.5" />
+              <TriangleAlert className="size-3.5" aria-hidden />
               Something went wrong
             </span>
             <span className="text-muted-foreground">{friendlyError(chat.error.message)}</span>
             {autoRetrying && (
-              <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Loader2 className="size-3 animate-spin text-primary" />
+              <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground" aria-live="polite">
+                <Loader2 className="size-3 animate-spin text-primary" aria-hidden />
                 That turn produced nothing — retrying automatically…
               </span>
             )}
             <details className="text-[11px] text-muted-foreground/70">
-              <summary className="cursor-pointer hover:text-muted-foreground">Details</summary>
+              <summary className="cursor-pointer hover:text-muted-foreground">Technical details</summary>
               <span className="break-words">{chat.error.message}</span>
             </details>
             <div>
-              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => chat.regenerate()}>
+              <Button size="sm" variant="outline" className="h-9 min-h-[44px] px-4 text-[12px]" onClick={() => chat.regenerate()}>
                 Retry
               </Button>
             </div>
@@ -1061,8 +1186,12 @@ function AgentThread({
               ))}
             </div>
           )}
+          <label htmlFor={`chat-input-${conversationId}`} className="sr-only">
+            Describe the change to your clip
+          </label>
           <textarea
             ref={inputRef}
+            id={`chat-input-${conversationId}`}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -1073,20 +1202,27 @@ function AgentThread({
               }
             }}
             rows={1}
-            placeholder={pending ? "Working… press Stop to interrupt" : "Describe the change… (Enter sends)"}
-            aria-label="Message"
+            placeholder="Describe the change…"
+            aria-label="Describe the change to your clip"
+            aria-describedby={pending ? `chat-working-${conversationId}` : undefined}
             className="max-h-[120px] w-full min-w-0 resize-none bg-transparent px-3 pb-1 pt-2 text-base leading-relaxed outline-none placeholder:text-muted-foreground sm:text-sm"
           />
+          {pending && (
+            <p id={`chat-working-${conversationId}`} className="sr-only" aria-live="polite">
+              Working on your clip. Press Stop to interrupt.
+            </p>
+          )}
           <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="size-7 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+              className="size-9 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
               aria-label="Attach reference image"
+              title="Attach reference image"
               onClick={() => fileRef.current?.click()}
             >
-              <Paperclip className="size-3.5" />
+              <Paperclip className="size-3.5" aria-hidden />
             </Button>
             <div className="flex-1" />
             <Button
@@ -1094,13 +1230,13 @@ function AgentThread({
               aria-label={pending ? "Stop generation" : "Send message"}
               title={pending ? "Stop generation" : "Send message (Enter)"}
               disabled={pending ? false : !input.trim()}
-              onClick={pending ? () => chat.stop() : () => send()}
+              onClick={pending ? stop : () => send()}
               className={cn(
-                "size-8 shrink-0 cursor-pointer rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-default disabled:opacity-50",
+                "size-10 min-h-[44px] min-w-[44px] shrink-0 cursor-pointer rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-default disabled:opacity-50",
                 pending && "bg-destructive hover:bg-destructive/90"
               )}
             >
-              {pending ? <Square className="size-3.5" /> : <Send className="size-3.5" />}
+              {pending ? <Square className="size-3.5" aria-hidden /> : <Send className="size-3.5" aria-hidden />}
             </Button>
           </div>
         </div>
@@ -1191,10 +1327,12 @@ export function AgentChatCard({
   onRemoveAttachment,
   footer,
   firstPrompt = null,
+  onWorkingChange,
+  stopRef,
 }: {
   serverProjectId: string | null
   onEnsureServerProject: () => Promise<string | null>
-  onArtifact: (artifact: Artifact, reply: string) => void
+  onArtifact: (artifact: Artifact, reply: string, serverVersion?: number) => void
   legacyThread: Array<{ role: string; text: string }>
   attachments?: Attachment[]
   onAttachFiles?: (files: FileList) => void
@@ -1206,6 +1344,10 @@ export function AgentChatCard({
    * and this prompt is sent through the agent automatically.
    */
   firstPrompt?: string | null
+  /** Live working flag for the preview pane (real generating state). */
+  onWorkingChange?: (working: boolean) => void
+  /** The preview's Stop button halts the agent stream through this. */
+  stopRef?: { current: (() => void) | null }
 }) {
   const [sid, setSid] = useState<string | null>(serverProjectId)
   const [listed, setListed] = useState(false)
@@ -1217,6 +1359,9 @@ export function AgentChatCard({
   const [ensuring, setEnsuring] = useState(false)
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
+  useEffect(() => {
+    onWorkingChange?.(working)
+  }, [working, onWorkingChange])
   const seeded = useRef(new Set<string>())
   const handoffSent = useRef(false)
   /** Last good list per project — restored instead of wiped on reload failure. */
@@ -1530,6 +1675,7 @@ export function AgentChatCard({
           onRemoveAttachment={onRemoveAttachment}
           onArtifact={onArtifact}
           onPendingChange={setWorking}
+          stopRef={stopRef}
         />
       ) : (
         // The composer stays mounted through the whole boot. It is disabled

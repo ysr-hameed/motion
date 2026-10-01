@@ -29,6 +29,8 @@ export function applyThemePref(pref: ThemePref) {
     (pref === "system" &&
       window.matchMedia("(prefers-color-scheme: dark)").matches)
   document.documentElement.classList.toggle("dark", dark)
+  // Fixes native scrollbars / form controls in dark mode (Windows).
+  document.documentElement.style.colorScheme = dark ? "dark" : "light"
 }
 
 /**

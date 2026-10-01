@@ -111,10 +111,11 @@ export function SiteHeader() {
         />
         <aside
           className={cn(
-            "absolute left-0 top-0 flex h-full w-80 max-w-[85vw] flex-col bg-background shadow-2xl transition-transform duration-300 ease-out",
+            "absolute left-0 top-0 flex h-full w-80 max-w-[85vw] flex-col overscroll-contain bg-background shadow-2xl transition-transform duration-300 ease-out",
             open ? "translate-x-0" : "-translate-x-full"
           )}
           role="dialog"
+          aria-modal="true"
           aria-label="Menu"
         >
           <div className="flex h-16 items-center justify-between border-b px-4">
@@ -148,6 +149,13 @@ export function SiteHeader() {
               className="rounded-lg px-4 py-3 text-[15px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               Sign in
+            </a>
+            <a
+              href="/signup"
+              onClick={() => setOpen(false)}
+              className="rounded-lg px-4 py-3 text-[15px] font-medium transition-colors hover:bg-muted"
+            >
+              Create account
             </a>
           </nav>
           <div className="border-t p-4">

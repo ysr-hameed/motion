@@ -292,6 +292,11 @@ export function useMotionStudio() {
    * Commit an agent-published preview into the local version rail + chat.
    * The server already snapshotted the version; this mirrors it locally so
    * the player, version rail and thread stay in sync.
+   *
+   * Dedupe guard: the agent previews repeatedly within one run (validate →
+   * preview → fix → preview), and every one of those used to mint a new
+   * local version — three edits read as ten versions. Identical code
+   * refreshes the stage in place; only changed code opens a new version.
    */
   const clipReply = (raw: string, fallback: string, max = 280) => {
     const t = raw.trim()
@@ -299,9 +304,25 @@ export function useMotionStudio() {
     return t.length > max ? `${t.slice(0, max).trimEnd()}…` : t
   }
 
+  function sameCut(a: Artifact, b: Artifact): boolean {
+    if (a.kind !== b.kind) return false
+    if (a.kind === "code" && b.kind === "code") return a.code === b.code
+    try {
+      return JSON.stringify(a) === JSON.stringify(b)
+    } catch {
+      return false
+    }
+  }
+
   const commitAgentResult = (id: number, artifact: Artifact, reply: string) => {
     const p = projectRef(id)
     if (!p) return
+    const newest = p.artifacts[p.versions]
+    if (newest && sameCut(newest, artifact)) {
+      // Re-preview of unchanged code — show the newest cut, mint nothing.
+      patchProject(id, { phase: "ready", activeVersion: p.versions })
+      return
+    }
     commitVersion(id, artifact, "agent")
     const text = clipReply(reply, "Done — saved as a new version.")
     aiSay(id, { role: "ai", text, kind: "reply" })
@@ -404,6 +425,18 @@ export function useMotionStudio() {
       })
       mirrorVersion(id, undefined, "Fixed the render.", next)
     })()
+  }
+
+  /**
+   * Restore any version as a new cut: the old artifact is committed on top
+   * so the rail keeps full history (nothing is ever overwritten) and the
+   * restored cut plays immediately.
+   */
+  const restoreVersion = (id: number, versionNo: number) => {
+    const p = projectRef(id)
+    const art = p?.artifacts[versionNo]
+    if (!p || !art) return
+    commitVersion(id, { ...art }, null)
   }
 
   const stopGeneration = () => {
@@ -529,6 +562,7 @@ export function useMotionStudio() {
     repairVersion,
     ensureServerProject,
     commitAgentResult,
+    restoreVersion,
     selectProject,
     deleteProject,
     setActiveVersion: (v: number) => {

@@ -117,10 +117,25 @@
   }
   html {
     @apply scroll-smooth;
+    color-scheme: light dark;
+    overscroll-behavior-y: none;
+  }
+  html.dark {
+    color-scheme: dark;
   }
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-feature-settings: "ss01", "cv11";
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  button,
+  a,
+  input,
+  textarea,
+  [role="button"] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(0, 0, 0, 0.08);
   }
   h1,
   h2,

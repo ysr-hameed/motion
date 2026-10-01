@@ -4,6 +4,7 @@ import {
   Check,
   Clapperboard,
   FolderOpen,
+  History,
   MessageSquare,
   MonitorPlay,
   PanelLeft,
@@ -159,6 +160,10 @@ export function PlaygroundPage({
   const [shared, setShared] = useState(false)
   const [mobileTab, setMobileTab] = useState<"chat" | "preview">("chat")
   const [firstPrompt, setFirstPrompt] = useState<string | null>(null)
+  // Live agent working flag (drives the preview generating state) + a
+  // handle so preview Stop halts the real agent stream.
+  const [chatWorking, setChatWorking] = useState(false)
+  const stopRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     if (consumed.current) return
@@ -207,6 +212,18 @@ export function PlaygroundPage({
 
   const active = t.active
   const preview = (active?.artifacts[active.activeVersion] as Artifact) ?? null
+  // Real running state: the chat's live working flag, or the legacy phase.
+  const running =
+    chatWorking || active?.phase === "generating" || active?.phase === "thinking"
+
+  const stopAll = () => {
+    try {
+      stopRef.current?.()
+    } catch {
+      /* stream already settled */
+    }
+    t.stopGeneration()
+  }
 
   useEffect(() => {
     if (!shared) return
@@ -222,7 +239,7 @@ export function PlaygroundPage({
       )
       setShared(true)
     } catch {
-      /* clipboard unavailable */
+      setShared(false)
     }
   }
 
@@ -314,7 +331,7 @@ export function PlaygroundPage({
             onClick={() => navigate("/studio")}
             aria-label="Back to projects"
             title="Back to projects"
-            className="hidden size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
           >
             <ArrowLeft className="size-4" />
           </button>
@@ -325,16 +342,16 @@ export function PlaygroundPage({
             <button
               type="button"
               onClick={() => navigate("/studio")}
-              className="hidden shrink-0 font-medium text-muted-foreground transition-colors hover:text-foreground sm:block"
+              className="shrink-0 font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
               Projects
             </button>
-            <span aria-hidden className="hidden shrink-0 text-border sm:block">
+            <span aria-hidden className="shrink-0 text-border">
               /
             </span>
-            <span className="truncate font-semibold">
+            <h1 className="truncate text-[15px] font-semibold">
               {active ? active.name : "Editor"}
-            </span>
+            </h1>
             {active && <StatusPill phase={active.phase} />}
           </nav>
           <div className="flex-1" />
@@ -342,9 +359,9 @@ export function PlaygroundPage({
             <button
               type="button"
               onClick={shareProject}
-              aria-label={shared ? "Link copied" : "Copy link to video"}
-              title={shared ? "Link copied" : "Copy link to video"}
-              className="hidden size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
+              aria-label={shared ? "Link copied to clipboard" : "Copy link to video (opens this device's copy only)"}
+              title={shared ? "Link copied — note: projects live on this device" : "Copy link to video"}
+              className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 sm:flex"
             >
               {shared ? (
                 <Check className="size-4 text-primary" />
@@ -363,7 +380,7 @@ export function PlaygroundPage({
           )}
         </header>
 
-        <main className="flex min-h-0 flex-1 flex-col overflow-x-clip p-2 sm:p-3">
+        <main id="main-content" tabIndex={-1} className="flex min-h-0 flex-1 flex-col overflow-x-clip p-2 outline-none sm:p-3">
           {!active ? (
             <div className="flex flex-col items-center gap-1 rounded-2xl border border-dashed px-6 py-12 text-center">
               <span className="flex size-10 items-center justify-center rounded-xl bg-secondary">
@@ -378,12 +395,17 @@ export function PlaygroundPage({
               </Button>
             </div>
           ) : (
-            <div className="flex min-h-0 flex-1 flex-col gap-2 xl:h-[calc(100svh-4.5rem)] xl:flex-row xl:overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row xl:items-start">
               <div className="shrink-0 xl:hidden">
                 <div
                   role="tablist"
                   aria-label="Editor view"
                   className="grid shrink-0 grid-cols-2 gap-1 rounded-xl border bg-card p-1"
+                  onKeyDown={(e) => {
+                    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+                    e.preventDefault()
+                    setMobileTab((t) => (t === "chat" ? "preview" : "chat"))
+                  }}
                 >
                 {(
                   [
@@ -394,11 +416,14 @@ export function PlaygroundPage({
                   <button
                     key={tab.id}
                     role="tab"
+                    id={`editor-tab-${tab.id}`}
                     aria-selected={mobileTab === tab.id}
+                    aria-controls={`editor-panel-${tab.id}`}
+                    tabIndex={mobileTab === tab.id ? 0 : -1}
                     type="button"
                     onClick={() => setMobileTab(tab.id)}
                     className={cn(
-                      "flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[13px] font-medium transition-colors",
+                      "flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg py-1.5 text-[13px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
                       mobileTab === tab.id
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:text-foreground"
@@ -425,11 +450,14 @@ export function PlaygroundPage({
 
               <section
                 aria-label="Chat"
+                id="editor-panel-chat"
+                role="tabpanel"
+                aria-labelledby="editor-tab-chat"
                 className={cn(
                   "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card",
                   "h-[calc(100dvh-11.5rem)] min-h-[320px]",
                   mobileTab === "chat" ? "flex flex-1" : "hidden",
-                  "xl:flex xl:h-full xl:min-h-0 xl:w-[400px] xl:max-w-[440px] xl:flex-none"
+                  "xl:flex xl:h-[calc(100svh-5rem)] xl:min-h-[480px] xl:w-[400px] xl:max-w-[440px] xl:flex-none xl:sticky xl:top-16"
                 )}
               >
                 {active && (
@@ -446,12 +474,17 @@ export function PlaygroundPage({
                     onRemoveAttachment={t.removeActiveAttachment}
                     footer={agentFooter(t)}
                     firstPrompt={firstPrompt}
+                    onWorkingChange={setChatWorking}
+                    stopRef={stopRef}
                   />
                 )}
               </section>
 
               <section
                 aria-label="Preview"
+                id="editor-panel-preview"
+                role="tabpanel"
+                aria-labelledby="editor-tab-preview"
                 className={cn(
                   "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-950",
                   "h-[calc(100dvh-11.5rem)] min-h-[320px]",
@@ -464,10 +497,30 @@ export function PlaygroundPage({
                     <MonitorPlay className="size-3.5" />
                     Preview
                   </span>
+                  {running && (
+                    <span className="flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                      <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-primary" />
+                      Working
+                    </span>
+                  )}
                   <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white">
                     {active.spec?.format ?? "16:9"}
                   </span>
                   <div className="flex-1" />
+                  {active.activeVersion < active.versions && (
+                    <button
+                      type="button"
+                      onClick={() => t.restoreVersion(active.id, active.activeVersion)}
+                      title={`Restore v${active.activeVersion} as a new version (history is kept)`}
+                      aria-label={`Restore version ${active.activeVersion} as a new version`}
+                      className="flex min-h-[44px] shrink-0 items-center gap-1 rounded-md border border-primary/40 bg-primary/15 px-2.5 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-primary/25 focus-visible:outline-2 focus-visible:outline-offset-2 sm:min-h-0"
+                    >
+                      <History className="size-3.5" />
+                      <span className="hidden min-[420px]:inline">
+                        Restore v{active.activeVersion}
+                      </span>
+                    </button>
+                  )}
                   {active.versions > 1 && (
                     <div
                       role="group"
@@ -487,7 +540,7 @@ export function PlaygroundPage({
                             v === active.activeVersion ? "true" : undefined
                           }
                           className={cn(
-                            "shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold tabular-nums transition-colors",
+                            "min-h-[44px] min-w-[44px] shrink-0 rounded-md px-2.5 py-1.5 text-[11px] font-semibold tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
                             v === active.activeVersion
                               ? "bg-white text-zinc-950"
                               : "bg-white/10 text-zinc-300 hover:bg-white/20 hover:text-white"
@@ -509,14 +562,14 @@ export function PlaygroundPage({
                   )}
                 >
 
-                  {(active.phase === "generating" || active.phase === "thinking") && (
+                  {running && !preview && (
                     <GeneratingCard
                       format={active.spec?.format ?? "16:9"}
-                      onStop={() => t.stopGeneration()}
+                      onStop={stopAll}
                       progress={t.genProgress}
                     />
                   )}
-                  {active.phase !== "generating" && active.phase !== "thinking" && preview && (
+                  {preview && (
                     <div key={active.activeVersion} className={stageFrameClass(active.spec?.format)}>
                       <ClipPlayer
                         artifact={preview}
@@ -528,7 +581,7 @@ export function PlaygroundPage({
                       />
                     </div>
                   )}
-                  {active.phase !== "generating" && active.phase !== "thinking" && !preview && (
+                  {!running && !preview && (
                     <div
                       className={cn(
                         "relative m-auto w-full overflow-hidden rounded-xl border border-white/10 bg-zinc-950",

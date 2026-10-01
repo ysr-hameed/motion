@@ -13,7 +13,7 @@ function LegalLayout({
   return (
     <div className="min-h-svh bg-background text-foreground">
       <SiteHeader />
-      <main className="mx-auto max-w-3xl px-4 pb-20 pt-28">
+      <main id="main-content" tabIndex={-1} className="mx-auto max-w-3xl px-4 pb-20 pt-28 outline-none">
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
           {title}
         </h1>

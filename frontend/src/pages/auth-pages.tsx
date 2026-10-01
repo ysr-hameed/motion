@@ -78,7 +78,7 @@ function OAuthButtons({ mode }: { mode: "in" | "up" }) {
           GitHub
         </Button>
       </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </div>
   )
 }
@@ -91,6 +91,12 @@ function Divider() {
       <span className="h-px flex-1 bg-border" />
     </div>
   )
+}
+
+function go(e: React.MouseEvent, path: string) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button === 1) return
+  e.preventDefault()
+  navigate(path)
 }
 
 function AuthShell({
@@ -106,10 +112,7 @@ function AuthShell({
     <div className="flex min-h-svh flex-col items-center justify-center bg-background px-4 py-12 text-foreground">
       <a
         href="/"
-        onClick={(e) => {
-          e.preventDefault()
-          navigate("/")
-        }}
+        onClick={(e) => go(e, "/")}
         aria-label="SlyxUp home"
       >
         <Logo />
@@ -211,12 +214,12 @@ export function LoginPage() {
           <Input
             name="code"
             inputMode="numeric"
-            placeholder="6-digit code"
+            autoComplete="one-time-code"
+            placeholder="6-digit code…"
             className="rounded-2xl text-center tracking-[0.3em]"
-            aria-label="Two-factor code"
-            autoFocus
+            aria-label="Two-factor authentication code"
           />
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <Button type="submit" className="w-full" disabled={busy}>
             <KeyRound />
             Verify
@@ -236,7 +239,7 @@ export function LoginPage() {
           >
             {resent ? "Link resent — check inbox" : "Resend verification link"}
           </Button>
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <Button
             variant="ghost"
             size="sm"
@@ -249,30 +252,31 @@ export function LoginPage() {
         <div className="flex flex-col gap-4">
           <OAuthButtons mode="in" />
           <Divider />
-          <form onSubmit={submit} className="flex flex-col gap-3">
-            <Input name="email" type="email" placeholder="Email" className="rounded-2xl" aria-label="Email" />
+          <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+            <label htmlFor="login-email" className="sr-only">Email address</label>
+            <Input id="login-email" name="email" type="email" autoComplete="email" spellCheck={false} placeholder="you@example.com…" className="rounded-2xl" aria-label="Email address" />
+            <label htmlFor="login-password" className="sr-only">Password</label>
             <Input
+              id="login-password"
               name="password"
               type="password"
-              placeholder="Password"
+              autoComplete="current-password"
+              placeholder="Your password…"
               className="rounded-2xl"
               aria-label="Password"
             />
             <div className="text-right">
               <a
                 href="/forgot-password"
-                onClick={(e) => {
-                  e.preventDefault()
-                  navigate("/forgot-password")
-                }}
+                onClick={(e) => go(e, "/forgot-password")}
                 className="text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
               >
                 Forgot password?
               </a>
             </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={busy}>
-              <LogIn />
+              <LogIn aria-hidden />
               {busy ? "Logging in…" : "Log in"}
             </Button>
           </form>
@@ -280,10 +284,7 @@ export function LoginPage() {
             New here?{" "}
             <a
               href="/signup"
-              onClick={(e) => {
-                e.preventDefault()
-                navigate("/signup")
-              }}
+              onClick={(e) => go(e, "/signup")}
               className="font-medium text-foreground underline-offset-4 hover:underline"
             >
               Create an account
@@ -346,38 +347,59 @@ export function SignupPage() {
       <div className="flex flex-col gap-4">
         <OAuthButtons mode="up" />
         <Divider />
-        <form onSubmit={submit} className="flex flex-col gap-3">
-          <Input name="name" placeholder="Name" className="rounded-2xl" aria-label="Name" />
-          <Input name="email" type="email" placeholder="Email" className="rounded-2xl" aria-label="Email" />
-          <Input
-            name="password"
-            type="password"
-            placeholder="Password (8+ characters)"
-            className="rounded-2xl"
-            aria-label="Password"
-          />
-          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Plan">
-            {["Free plan", "Pro plan"].map((p) => (
-              <button
-                key={p}
-                type="button"
-                role="radio"
-                aria-checked={plan === p}
-                onClick={() => setPlan(p)}
-                className={cn(
-                  "rounded-2xl border px-3 py-2.5 text-sm font-medium transition-colors",
-                  plan === p
-                    ? "border-primary bg-primary/5 text-foreground"
-                    : "text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                )}
-              >
-                {p}
-              </button>
-            ))}
+          <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+            <label htmlFor="signup-name" className="sr-only">Full name</label>
+            <Input id="signup-name" name="name" autoComplete="name" placeholder="Ada Lovelace…" className="rounded-2xl" aria-label="Full name" />
+            <label htmlFor="signup-email" className="sr-only">Email address</label>
+            <Input id="signup-email" name="email" type="email" autoComplete="email" spellCheck={false} placeholder="you@example.com…" className="rounded-2xl" aria-label="Email address" />
+            <label htmlFor="signup-password" className="sr-only">Password</label>
+            <Input
+              id="signup-password"
+              name="password"
+              type="password"
+              autoComplete="new-password"
+              placeholder="8+ characters…"
+              className="rounded-2xl"
+              aria-label="Password (8 or more characters)"
+            />
+          <div
+            className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2"
+            role="radiogroup"
+            aria-label="Plan — Free to start, Pro adds 4K and priority rendering"
+            onKeyDown={(e) => {
+              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+              e.preventDefault()
+              setPlan((p) => (p === "Free plan" ? "Pro plan" : "Free plan"))
+            }}
+          >
+            {["Free plan", "Pro plan"].map((p) => {
+              const selected = plan === p
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => setPlan(p)}
+                  className={cn(
+                    "min-h-[44px] rounded-2xl border px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
+                    selected
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                  )}
+                >
+                  {p}
+                  <span className="block text-[11px] font-normal text-muted-foreground">
+                    {p === "Free plan" ? "$0 · 10 clips/mo" : "$19/mo · 7-day trial"}
+                  </span>
+                </button>
+              )
+            })}
           </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <Button type="submit" className="w-full" disabled={busy}>
-            <UserPlus />
+            <UserPlus aria-hidden />
             {busy ? "Creating…" : "Create account"}
           </Button>
         </form>
@@ -385,10 +407,7 @@ export function SignupPage() {
           Have an account?{" "}
           <a
             href="/login"
-            onClick={(e) => {
-              e.preventDefault()
-              navigate("/login")
-            }}
+            onClick={(e) => go(e, "/login")}
             className="font-medium text-foreground underline-offset-4 hover:underline"
           >
             Log in
@@ -447,9 +466,10 @@ export function ForgotPasswordPage() {
           </Button>
         </div>
       ) : (
-        <form onSubmit={submit} className="flex flex-col gap-3">
-          <Input name="email" type="email" placeholder="Email" className="rounded-2xl" aria-label="Email" />
-          {error && <p className="text-sm text-destructive">{error}</p>}
+        <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+          <label htmlFor="forgot-email" className="sr-only">Email address</label>
+          <Input id="forgot-email" name="email" type="email" autoComplete="email" spellCheck={false} placeholder="you@example.com…" className="rounded-2xl" aria-label="Email address" />
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <Button type="submit" className="w-full" disabled={busy}>
             <KeyRound />
             {busy ? "Sending…" : "Send reset link"}
@@ -458,10 +478,7 @@ export function ForgotPasswordPage() {
             Remembered it?{" "}
             <a
               href="/login"
-              onClick={(e) => {
-                e.preventDefault()
-                navigate("/login")
-              }}
+              onClick={(e) => go(e, "/login")}
               className="font-medium text-foreground underline-offset-4 hover:underline"
             >
               Log in
@@ -536,22 +553,28 @@ export function ResetPasswordPage() {
           </Button>
         </div>
       ) : (
-        <form onSubmit={submit} className="flex flex-col gap-3">
+        <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+          <label htmlFor="reset-password" className="sr-only">New password</label>
           <Input
+            id="reset-password"
             name="password"
             type="password"
-            placeholder="New password (8+ characters)"
+            autoComplete="new-password"
+            placeholder="8+ characters…"
             className="rounded-2xl"
-            aria-label="New password"
+            aria-label="New password (8 or more characters)"
           />
+          <label htmlFor="reset-confirm" className="sr-only">Confirm new password</label>
           <Input
+            id="reset-confirm"
             name="confirm"
             type="password"
-            placeholder="Confirm new password"
+            autoComplete="new-password"
+            placeholder="Repeat password…"
             className="rounded-2xl"
             aria-label="Confirm new password"
           />
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <Button type="submit" className="w-full" disabled={busy}>
             <KeyRound />
             {busy ? "Saving…" : "Set new password"}
