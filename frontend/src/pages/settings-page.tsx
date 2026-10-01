@@ -80,7 +80,7 @@ function Card({
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-2xl border bg-card">
+    <section className="rounded-2xl border bg-card shadow-elev-1">
       <div className="border-b px-5 py-4 sm:px-6">
         <h2 className="text-[14px] font-semibold tracking-tight">{title}</h2>
         {description && (
@@ -118,7 +118,7 @@ function Row({
 
 function Stat({ value, label }: { value: string; label: string }) {
   return (
-    <div className="rounded-xl border px-4 py-3.5">
+    <div className="rounded-xl border bg-muted/25 px-4 py-3.5">
       <p className="truncate text-2xl font-bold tabular-nums">{value}</p>
       <p className="mt-0.5 text-[12px] text-muted-foreground">{label}</p>
     </div>
@@ -227,7 +227,7 @@ function ProfileTab() {
             </div>
           </div>
         </div>
-        <div className="mt-4 flex flex-col divide-y rounded-xl border px-4">
+        <div className="mt-4 flex flex-col divide-y overflow-hidden rounded-xl border bg-card px-1">
           <Row
             label="Email"
             hint="Managed by your sign-in provider"
@@ -599,7 +599,7 @@ function SubscriptionTab({ studio }: { studio: MotionStudio }) {
         ) : billing.loading ? (
           <div className="grid gap-3 sm:grid-cols-2">
             {[0, 1].map((i) => (
-              <div key={i} className="h-36 animate-pulse rounded-xl border bg-muted/40" aria-hidden />
+              <div key={i} className="skeleton h-36 rounded-xl border" aria-hidden />
             ))}
           </div>
         ) : billing.plans.length === 0 ? (

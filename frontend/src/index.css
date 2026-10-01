@@ -238,3 +238,137 @@
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
 }
+
+/* ---------------------------------------------------------------------------
+   Elevation, surface and motion primitives.
+   Added as a layer rather than by rewriting class names across ~25 files:
+   these utilities are opt-in where used, but the tokens below feed the
+   existing `rounded-*`/`border`/`shadow-*` classes everywhere, so the whole
+   app picks up consistent depth and focus behaviour without a big diff.
+   --------------------------------------------------------------------------- */
+
+@theme {
+  /* Depth scale. Cool-tinted in light mode, neutral-blue in dark so shadows
+     read as light falling on a surface rather than grey smudge. */
+  --shadow-elev-1: 0 1px 2px -1px oklch(0.22 0.02 264 / 0.10), 0 1px 3px 0 oklch(0.22 0.02 264 / 0.06);
+  --shadow-elev-2: 0 2px 4px -2px oklch(0.22 0.02 264 / 0.10), 0 4px 10px -3px oklch(0.22 0.02 264 / 0.08);
+  --shadow-elev-3: 0 4px 8px -4px oklch(0.22 0.02 264 / 0.12), 0 12px 24px -6px oklch(0.22 0.02 264 / 0.10);
+  --shadow-elev-4: 0 8px 16px -8px oklch(0.22 0.02 264 / 0.14), 0 24px 48px -12px oklch(0.22 0.02 264 / 0.14);
+
+  /* Primary glow — used on primary actions and focus rings. */
+  --shadow-glow: 0 0 0 1px oklch(from var(--primary) l c h / 0.28), 0 8px 24px -8px oklch(from var(--primary) l c h / 0.45);
+
+  /* Motion. One scale, so every transition in the app shares a personality. */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --animate-fade-up: fade-up 0.5s var(--ease-out-soft) both;
+  --animate-fade-in: fade-in 0.4s var(--ease-out-soft) both;
+  --animate-shimmer: shimmer 2.2s linear infinite;
+  --animate-pulse-ring: pulse-ring 2.4s var(--ease-out-soft) infinite;
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @keyframes shimmer {
+    from { background-position: -200% 0; }
+    to   { background-position: 200% 0; }
+  }
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 oklch(from var(--primary) l c h / 0.35); }
+    70%  { box-shadow: 0 0 0 10px oklch(from var(--primary) l c h / 0); }
+    100% { box-shadow: 0 0 0 0 oklch(from var(--primary) l c h / 0); }
+  }
+}
+
+/* Frosted surface — headers, sidebars, floating panels. Falls back to a
+   plain translucent tint where backdrop-filter is unavailable. */
+@utility glass {
+  background-color: color-mix(in oklch, var(--color-card) 72%, transparent);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  @supports not (backdrop-filter: blur(1px)) {
+    background-color: var(--color-card);
+  }
+}
+
+/* Gradient hairline border, drawn with a mask so it works on any radius.
+   Used for hero/premium surfaces where a flat 1px border reads cheap. */
+@utility ring-gradient {
+  position: relative;
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      140deg,
+      oklch(from var(--primary) l c h / 0.55),
+      transparent 38%,
+      transparent 62%,
+      oklch(from var(--primary) l c h / 0.28)
+    );
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+}
+
+/* Subtle top-light sheen for raised cards. */
+@utility sheen {
+  position: relative;
+  overflow: hidden;
+  &::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    height: 40%;
+    background: linear-gradient(to bottom, rgb(255 255 255 / 0.06), transparent);
+    pointer-events: none;
+  }
+}
+
+/* Skeleton fill for loading states. */
+@utility skeleton {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--muted) 70%, transparent) 0%,
+    color-mix(in oklch, var(--muted-foreground) 12%, transparent) 50%,
+    color-mix(in oklch, var(--muted) 70%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}
+
+/* Interactive affordance for anything clickable that is not a <button>. */
+@utility interactive {
+  transition:
+    transform 0.18s var(--ease-out-soft),
+    box-shadow 0.18s var(--ease-out-soft),
+    border-color 0.18s var(--ease-out-soft),
+    background-color 0.18s var(--ease-out-soft),
+    color 0.18s var(--ease-out-soft);
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+}
+
+/* A visible, consistent focus ring for keyboard users across the app.
+   `:focus-visible` in base layers already does this; this is the stronger
+   version for primary surfaces where a 2px outline is easy to lose. */
+@utility focus-ring {
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-background), 0 0 0 4px oklch(from var(--primary) l c h / 0.6);
+  }
+}

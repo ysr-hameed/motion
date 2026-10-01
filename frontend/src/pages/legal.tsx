@@ -14,12 +14,16 @@ function LegalLayout({
     <div className="min-h-svh bg-background text-foreground">
       <SiteHeader />
       <main id="main-content" tabIndex={-1} className="mx-auto max-w-3xl px-4 pb-20 pt-28 outline-none">
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+        {/* Legal text is read, not skimmed: a card with a comfortable
+            measure and generous leading beats raw prose on the page. */}
+        <div className="rounded-2xl border bg-card p-6 shadow-elev-2 sm:p-10">
+        <h1 className="bg-linear-to-b from-foreground to-foreground/70 bg-clip-text text-3xl font-bold tracking-tight text-transparent sm:text-4xl">
           {title}
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">Updated {updated}</p>
         <div className="mt-8 flex flex-col gap-6 text-sm leading-relaxed text-muted-foreground">
           {children}
+        </div>
         </div>
       </main>
       <SiteFooter />

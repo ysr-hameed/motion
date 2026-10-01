@@ -5,19 +5,25 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 active:scale-[0.98]",
+  // `interactive` supplies the shared transition + press feedback; `focus-ring`
+  // the two-tone ring that stays visible on both light and dark surfaces
+  // (a single-colour ring disappears against one of them).
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium outline-none interactive focus-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+        default:
+          "bg-primary text-primary-foreground shadow-elev-2 hover:bg-primary/90 hover:shadow-elev-3 active:shadow-elev-1",
         destructive:
-          "bg-destructive text-white shadow-sm hover:bg-destructive/90",
+          "bg-destructive text-white shadow-elev-2 hover:bg-destructive/90 active:shadow-elev-1",
         outline:
-          "border border-input bg-background shadow-sm hover:bg-muted hover:text-foreground",
+          "border border-input bg-background shadow-elev-1 hover:border-primary/40 hover:bg-muted hover:text-foreground hover:shadow-elev-2",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/70",
         ghost: "hover:bg-muted hover:text-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        /** Hero / primary CTA — gradient fill with a primary glow. */
+        glow: "bg-linear-to-b from-primary to-primary/85 text-primary-foreground shadow-glow hover:from-primary hover:to-primary/80 hover:shadow-glow active:shadow-elev-2",
       },
       size: {
         default: "h-9 px-4 py-2",

@@ -22,7 +22,7 @@ export function CreditsPill() {
   return (
     <span
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium tabular-nums",
+        "flex shrink-0 items-center gap-1.5 rounded-md border bg-card/60 px-2 py-1 text-[11px] font-medium tabular-nums backdrop-blur-sm transition-colors",
         low
           ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
           : "text-muted-foreground"

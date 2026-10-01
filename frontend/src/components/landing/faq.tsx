@@ -49,13 +49,13 @@ function Item({
 }) {
   const panelId = `faq-panel-${index}`
   return (
-    <div className="rounded-2xl border bg-card px-5 transition-colors">
+    <div className="rounded-2xl border bg-card px-5 shadow-elev-1 transition-all duration-300 open:shadow-elev-2">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={panelId}
-        className="flex w-full items-center justify-between gap-4 py-4 text-left"
+        className="focus-ring flex w-full items-center justify-between gap-4 rounded-2xl py-4 text-left"
       >
         <span className="text-sm font-medium">{q}</span>
         <span

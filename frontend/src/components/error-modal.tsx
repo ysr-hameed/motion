@@ -82,9 +82,9 @@ function CrashModal({
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="crash-title"
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-linear-to-b from-black/70 to-black/60 p-4 backdrop-blur-md"
     >
-      <div className="w-full max-w-lg overflow-hidden rounded-2xl border bg-card shadow-2xl">
+      <div className="w-full max-w-lg animate-fade-up overflow-hidden rounded-2xl border bg-card shadow-elev-4 ring-1 ring-black/5 dark:ring-white/10">
         <div className="flex items-start gap-3 border-b border-destructive/20 bg-destructive/5 px-4 py-3.5 sm:px-5">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10">
             <AlertTriangle className="size-4 text-destructive" />

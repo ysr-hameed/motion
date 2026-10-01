@@ -78,7 +78,7 @@ function ProjectCard({
   }, [arming])
 
   return (
-    <article className="group relative overflow-hidden rounded-2xl border bg-card transition-all hover:border-primary/30 hover:shadow-md">
+    <article className="group relative overflow-hidden rounded-2xl border bg-card shadow-elev-1 transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-elev-4">
       <a
         href={`/playground/${project.id}`}
         onClick={(e) => {
@@ -118,15 +118,18 @@ function ProjectCard({
           <span className="absolute bottom-2.5 right-2.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] tabular-nums text-white backdrop-blur">
             {project.versions === 0 ? "No versions" : `v${project.versions}`}
           </span>
+          {/* Scrim rather than a flat tint: it darkens the bottom where the
+              badges sit and leaves the centre readable, so the hover state
+              doesn't wash out the project name. */}
           <span
             aria-hidden
-            className="absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/30"
+            className="absolute inset-0 bg-linear-to-t from-black/60 via-black/10 to-black/20 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
           />
           <span
             aria-hidden
-            className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
+            className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-300 group-hover:opacity-100"
           >
-            <span className="flex size-10 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg">
+            <span className="flex size-11 scale-90 items-center justify-center rounded-full bg-white text-zinc-950 shadow-elev-4 transition-transform duration-300 [transition-timing-function:var(--ease-spring)] group-hover:scale-100">
               <Play className="size-4 translate-x-[1px] fill-current" />
             </span>
           </span>
@@ -373,7 +376,7 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/90 px-3.5 backdrop-blur-xl sm:px-4">
+        <header className="glass sticky top-0 z-30 flex h-14 items-center gap-2 border-b px-3.5 shadow-elev-1 sm:px-4">
           <Button
             variant="ghost"
             size="icon"
@@ -417,7 +420,7 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search videos…"
               aria-label="Search videos"
-              className="h-9 w-44 rounded-lg border bg-background pl-8 pr-3 text-[13px] outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15 lg:w-56"
+              className="h-9 w-44 rounded-lg border bg-background pl-8 pr-3 text-[13px] outline-none transition-all placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15 focus:shadow-elev-1 lg:w-56"
             />
           </label>
           <Button size="sm" className="h-8 sm:hidden" onClick={focusPrompt} aria-label="New video">
@@ -429,7 +432,7 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
         <main id="main-content" tabIndex={-1} className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 p-4 outline-none sm:p-6">
           <section
             aria-label="Create a new video"
-            className="rounded-2xl border bg-card p-5 sm:p-6"
+            className="sheen rounded-2xl border bg-card p-5 shadow-elev-2 ring-gradient sm:p-6"
           >
             <div className="flex flex-col gap-1">
               <h2 className="text-lg">Create a new video</h2>

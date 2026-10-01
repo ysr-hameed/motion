@@ -19,7 +19,7 @@ export function Showcase() {
   }
 
   return (
-    <section id="showcase" className="scroll-mt-20 py-16 sm:py-24">
+    <section id="showcase" className="scroll-mt-20 py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4">
         <SectionHeading
           eyebrow="Showcase"
@@ -31,7 +31,7 @@ export function Showcase() {
             type="button"
             onClick={() => setPaused((v) => !v)}
             aria-pressed={paused}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2"
+            className="interactive inline-flex min-h-[44px] items-center gap-1.5 rounded-full border bg-card px-4 py-2 text-xs font-medium text-muted-foreground shadow-elev-1 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2"
           >
             {paused ? <Play className="size-3.5" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
             {paused ? "Play previews" : "Pause previews"}
@@ -44,7 +44,7 @@ export function Showcase() {
                 type="button"
                 onClick={() => open(c.prompt)}
                 aria-label={`Remix the ${c.style} style — ${c.meta}`}
-                className="group block w-full overflow-hidden rounded-xl border bg-zinc-950 text-left transition-colors hover:border-primary/40 focus-visible:outline-2 focus-visible:outline-offset-2"
+                className="group block w-full overflow-hidden rounded-xl border bg-zinc-950 text-left shadow-elev-2 transition-all duration-300 [transition-timing-function:var(--ease-out-soft)] hover:-translate-y-1 hover:border-primary/40 hover:shadow-elev-4 focus-visible:outline-2 focus-visible:outline-offset-2"
               >
                 {paused ? (
                   <span className="flex aspect-video w-full items-center justify-center text-xs text-zinc-400">

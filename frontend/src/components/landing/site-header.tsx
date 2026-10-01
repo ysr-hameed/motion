@@ -45,9 +45,12 @@ export function SiteHeader() {
       <header
         className={cn(
           "fixed inset-x-0 top-0 z-40 transition-all",
+          // Glass + a shadow that only appears once content is scrolled
+          // under it: without the shadow a translucent bar on a busy page
+          // reads as a seam rather than as elevation.
           scrolled
-            ? "border-b border-border bg-background/90 backdrop-blur-xl"
-            : "border-b border-transparent bg-background/60 backdrop-blur-sm"
+            ? "border-b border-border bg-background/80 shadow-elev-2 backdrop-blur-xl"
+            : "border-b border-transparent bg-background/40 backdrop-blur-sm"
         )}
       >
         <div className="mx-auto flex h-16 max-w-6xl items-center gap-2 px-4">
@@ -71,7 +74,7 @@ export function SiteHeader() {
               <a
                 key={item.href}
                 href={item.href}
-                className="rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="rounded-lg px-3 py-2 text-sm text-muted-foreground interactive focus-ring hover:bg-muted hover:text-foreground"
               >
                 {item.label}
               </a>
@@ -83,7 +86,7 @@ export function SiteHeader() {
           <div className="flex items-center gap-2">
             <a
               href="/login"
-              className="hidden rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground sm:block"
+              className="hidden rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground interactive focus-ring hover:bg-muted hover:text-foreground sm:block"
             >
               Sign in
             </a>

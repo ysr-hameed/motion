@@ -129,10 +129,12 @@ export function PromptBox({
     <div id={id} className="w-full scroll-mt-24">
       <div
         className={cn(
-          "rounded-2xl border bg-card shadow-sm transition-all",
+          // Elevation lifts on focus so the composer visibly "activates" —
+          // it's the primary action on both the landing page and the studio.
+          "rounded-2xl border bg-card transition-all duration-300 [transition-timing-function:var(--ease-out-soft)]",
           focused
-            ? "border-primary/50 ring-2 ring-primary/15"
-            : "border-border hover:border-muted-foreground/30"
+            ? "border-primary/50 shadow-elev-3 ring-2 ring-primary/15"
+            : "border-border shadow-elev-1 hover:border-muted-foreground/30 hover:shadow-elev-2"
         )}
       >
         <div className="relative">

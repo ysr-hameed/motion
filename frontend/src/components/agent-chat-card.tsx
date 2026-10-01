@@ -1404,7 +1404,7 @@ function AgentThread({
           return m.role === "user" ? (
             <div
               key={m.id}
-              className="msg-in max-w-[85%] self-end break-words rounded-2xl rounded-tr-md bg-primary px-3.5 py-2 text-sm text-primary-foreground"
+              className="msg-in max-w-[85%] self-end break-words rounded-2xl rounded-tr-md bg-linear-to-br from-primary to-primary/85 px-3.5 py-2 text-sm text-primary-foreground shadow-elev-2"
             >
               {/* Only the newest turn carries its image bytes; older turns
                   were sent (and stored) without them to keep the request
@@ -1460,7 +1460,11 @@ function AgentThread({
           (visibleMessages.length === 0 ||
             visibleMessages[visibleMessages.length - 1]?.role !== "assistant") && (
             <div
-              className="msg-in flex flex-wrap items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground"
+              // The primary progress signal now that the server doesn't stream
+              // tokens. Glass + a soft primary wash keeps it feeling live
+              // without pretending work is happening (only real tool events
+              // ever populate these chips).
+              className="msg-in flex flex-wrap items-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.07] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground shadow-elev-1 backdrop-blur-sm"
               aria-live="polite"
             >
               <Loader2 className="size-3 animate-spin text-primary" />
@@ -1472,7 +1476,7 @@ function AgentThread({
                 ? liveTools.map((t, i) => (
                     <span
                       key={`${t}-${i}`}
-                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] text-foreground/80"
+                      className="inline-flex items-center gap-1 rounded-md bg-primary/12 px-1.5 py-0.5 text-[10px] text-foreground/80 ring-1 ring-inset ring-primary/15"
                     >
                       <Check className="size-2.5 text-primary" aria-hidden />
                       {toolLabel(t)}

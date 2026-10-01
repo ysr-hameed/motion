@@ -220,7 +220,7 @@ export function LoginPage() {
             aria-label="Two-factor authentication code"
           />
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" className="w-full" disabled={busy}>
+          <Button type="submit" variant="glow" className="w-full rounded-2xl" disabled={busy}>
             <KeyRound />
             Verify
           </Button>
@@ -275,7 +275,7 @@ export function LoginPage() {
               </a>
             </div>
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="w-full" disabled={busy}>
+            <Button type="submit" variant="glow" className="w-full rounded-2xl" disabled={busy}>
               <LogIn aria-hidden />
               {busy ? "Logging in…" : "Log in"}
             </Button>
@@ -398,7 +398,7 @@ export function SignupPage() {
             })}
           </div>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" className="w-full" disabled={busy}>
+          <Button type="submit" variant="glow" className="w-full rounded-2xl" disabled={busy}>
             <UserPlus aria-hidden />
             {busy ? "Creating…" : "Create account"}
           </Button>
@@ -470,7 +470,7 @@ export function ForgotPasswordPage() {
           <label htmlFor="forgot-email" className="sr-only">Email address</label>
           <Input id="forgot-email" name="email" type="email" autoComplete="email" spellCheck={false} placeholder="you@example.com…" className="rounded-2xl" aria-label="Email address" />
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" className="w-full" disabled={busy}>
+          <Button type="submit" variant="glow" className="w-full rounded-2xl" disabled={busy}>
             <KeyRound />
             {busy ? "Sending…" : "Send reset link"}
           </Button>
@@ -575,7 +575,7 @@ export function ResetPasswordPage() {
             aria-label="Confirm new password"
           />
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" className="w-full" disabled={busy}>
+          <Button type="submit" variant="glow" className="w-full rounded-2xl" disabled={busy}>
             <KeyRound />
             {busy ? "Saving…" : "Set new password"}
           </Button>

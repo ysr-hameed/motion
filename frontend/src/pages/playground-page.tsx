@@ -417,8 +417,8 @@ export function PlaygroundPage({
 
         <main id="main-content" tabIndex={-1} className="flex min-h-0 flex-1 flex-col overflow-x-clip p-2 outline-none sm:p-3">
           {!active ? (
-            <div className="flex flex-col items-center gap-1 rounded-2xl border border-dashed px-6 py-12 text-center">
-              <span className="flex size-10 items-center justify-center rounded-xl bg-secondary">
+            <div className="flex flex-col items-center gap-1 rounded-2xl border border-dashed bg-card/40 px-6 py-12 text-center transition-colors hover:border-primary/30">
+              <span className="flex size-10 items-center justify-center rounded-xl bg-linear-to-br from-primary/15 to-primary/5 ring-1 ring-inset ring-primary/15">
                 <FolderOpen className="size-4 text-muted-foreground" />
               </span>
               <p className="text-sm font-semibold">No video open</p>
@@ -489,7 +489,7 @@ export function PlaygroundPage({
                 role="tabpanel"
                 aria-labelledby="editor-tab-chat"
                 className={cn(
-                  "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card",
+                  "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card shadow-elev-2",
                   "h-[calc(100dvh-11.5rem)] min-h-[320px]",
                   mobileTab === "chat" ? "flex flex-1" : "hidden",
                   "xl:flex xl:h-[calc(100svh-5rem)] xl:min-h-[480px] xl:w-[400px] xl:max-w-[440px] xl:flex-none xl:sticky xl:top-16"

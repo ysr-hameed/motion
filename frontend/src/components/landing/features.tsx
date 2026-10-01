@@ -43,7 +43,7 @@ const FEATURES = [
 
 export function Features() {
   return (
-    <section id="features" className="scroll-mt-20 py-16 sm:py-24">
+    <section id="features" className="scroll-mt-20 py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4">
         <SectionHeading
           eyebrow="Features"
@@ -51,12 +51,15 @@ export function Features() {
           sub="From the first sentence of your brief to a file sitting in your editor."
         />
         <div className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {FEATURES.map((f) => (
+          {FEATURES.map((f, i) => (
+            // Lift + gradient icon chip. Staggered entrance (capped at 6
+            // steps) so the grid assembles instead of snapping in at once.
             <article
               key={f.title}
-              className="rounded-2xl border bg-card p-5 transition-colors hover:border-primary/30"
+              style={{ animationDelay: `${Math.min(i, 5) * 60}ms` }}
+              className="group animate-fade-up rounded-2xl border bg-card p-5 shadow-elev-1 transition-all duration-300 [transition-timing-function:var(--ease-out-soft)] hover:-translate-y-1 hover:border-primary/30 hover:shadow-elev-3"
             >
-              <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <span className="flex size-9 items-center justify-center rounded-lg bg-linear-to-br from-primary/15 to-primary/5 text-primary ring-1 ring-inset ring-primary/15 transition-transform duration-300 [transition-timing-function:var(--ease-spring)] group-hover:scale-105">
                 <f.icon className="size-4" />
               </span>
               <h3 className="mt-3 text-[15px]">{f.title}</h3>

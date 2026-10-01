@@ -31,9 +31,9 @@ export function HowItWorks() {
           {STEPS.map((s) => (
             <li
               key={s.n}
-              className="rounded-2xl border bg-background p-5"
+              className="group rounded-2xl border bg-card p-5 shadow-elev-1 transition-all duration-300 [transition-timing-function:var(--ease-out-soft)] hover:-translate-y-1 hover:shadow-elev-3"
             >
-              <span className="flex size-7 items-center justify-center rounded-full bg-primary text-[13px] font-semibold tabular-nums text-primary-foreground">
+              <span className="flex size-7 items-center justify-center rounded-full bg-linear-to-br from-primary to-primary/80 text-[13px] font-semibold tabular-nums text-primary-foreground shadow-elev-1 transition-transform duration-300 [transition-timing-function:var(--ease-spring)] group-hover:scale-110">
                 {s.n}
               </span>
               <h3 className="mt-3 text-[15px]">{s.title}</h3>

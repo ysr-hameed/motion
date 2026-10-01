@@ -69,8 +69,8 @@ export function Pricing() {
             <article
               key={p.name}
               className={cn(
-                "relative flex flex-col rounded-2xl border bg-card p-6",
-                p.featured && "border-primary/40 shadow-lg shadow-primary/10"
+                "relative flex flex-col rounded-2xl border bg-card p-6 transition-all duration-300 [transition-timing-function:var(--ease-out-soft)] hover:-translate-y-1 hover:shadow-elev-3",
+                p.featured && "border-primary/40 shadow-elev-4 ring-gradient"
               )}
             >
               {p.featured && (

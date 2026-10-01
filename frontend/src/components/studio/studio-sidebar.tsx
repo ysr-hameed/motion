@@ -61,7 +61,7 @@ function NavItem({
       aria-current={active ? "page" : undefined}
       title={hint ?? label}
       className={cn(
-        "group flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-sm font-medium transition-colors",
+        "group flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-sm font-medium outline-none interactive focus-ring",
         active
           ? "bg-primary/10 text-foreground"
           : "text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -131,7 +131,7 @@ function ProjectRow({
   return (
     <div
       className={cn(
-        "group flex h-9 items-center gap-0.5 rounded-lg py-0 pl-2.5 pr-1 text-sm transition-colors",
+        "group flex h-9 items-center gap-0.5 rounded-lg py-0 pl-2.5 pr-1 text-sm outline-none interactive focus-ring",
         active
           ? "bg-primary/10 text-foreground"
           : "text-muted-foreground hover:bg-muted hover:text-foreground"
