@@ -154,16 +154,36 @@ function collectTools(content: ModelPart[]): ToolInvocation[] {
 }
 
 /**
- * What the SDK reports when the response ran into `maxOutputTokens`.
+ * Why a turn was truncated, in a form that works on BOTH channels.
  *
- * The whole step is still HTTP 200 — the model simply stopped mid-sentence.
- * For a whole-file tool call like `write_composition` that means the JSON
- * arguments never closed, so `execute` never ran. Saying so beats letting
- * the card spin on a tool that is never going to resolve.
+ * This text lands in the tool part the user sees AND in the persisted
+ * message the model reads on its next step, so it has to do two jobs: be
+ * honest for the person, and be a correction the model can act on.
+ *
+ * The second job is the one that matters. Truncation used to surface as a
+ * bare "The tool failed.", which told the model nothing — so it re-issued
+ * the identical oversized write, hit the identical cap, and did so five more
+ * times (~8 minutes, ~$0.015) while the transcript filled with the same plan.
  */
 const TRUNCATED_ERROR =
-  "The scene was cut off before it finished writing, so nothing was changed. " +
-  "Try a simpler scene, or ask for one beat at a time, and I'll build it in pieces."
+  "This write was cut off at the response limit before the file was finished, " +
+  "so nothing was saved. The usual cause is bulk the file does not need — an " +
+  "embedded image or base64 blob. Rebuild it leaner: noise2D() for grain instead of an image, " +
+  "fewer lines, then write it again. Do NOT resend the same file — that fails the same way."
+
+/**
+ * Did this step get cut off mid tool-call?
+ *
+ * The SDK only executes tools when the finish reason allows it, so on
+ * `length` every tool call in the step is left unresolved. That is the
+ * signature of this failure and the route uses it to inject a correction
+ * the model will actually read.
+ */
+export function truncatedByLength(content: unknown, finishReason?: string): boolean {
+  if (finishReason !== "length") return false
+  const parts = Array.isArray(content) ? (content as ModelPart[]) : []
+  return parts.some((p) => isRecord(p) && p?.type === "tool-call" && typeof p.toolCallId === "string")
+}
 
 /** Extra facts about the finished step that change how parts are rendered. */
 export interface StepContext {

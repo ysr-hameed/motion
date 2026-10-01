@@ -467,6 +467,18 @@ function friendlyError(raw: string): string {
   // Worker was killed): never show the raw sentence, it says nothing.
   if (/^an error occurred\.?$/i.test(s)) return "Interrupted mid-step — retry and I'll continue."
   if (/aborted|abort/i.test(s)) return "Stopped — nothing from this run was saved."
+  // Truncated tool arguments. The SDK reports this as an invalid tool call
+  // carrying a JSON/parse reason, which is long, so without this branch it
+  // fell through to the generic "Something went wrong" and the user had no
+  // idea the response had simply run out of room.
+  if (/cut off|unterminated string|unexpected end of json|json parse|invalid input for tool/i.test(s)) {
+    return "The write ran out of room before it finished, so nothing was saved. I'll rebuild it leaner."
+  }
+  // Inline binary in a composition — the concrete cause behind most of the
+  // above, and the one the model needs to hear about.
+  if (/base64|data uri|data:image/i.test(s)) {
+    return "It tried to embed an image in the file, which makes it too large to write. I'll use noise2D instead."
+  }
   if (/failed to fetch|networkerror|load failed|backend didn't respond|can't reach|couldn't reach/i.test(s))
     return backendDownCopy()
   if (/not found|conversation not found/i.test(s))
@@ -1114,6 +1126,20 @@ function AgentThread({
             )
         ))
     const stepCap = advanced ? STEP_LIMITS.advanced : STEP_LIMITS.standard
+    // Don't auto-chain past a tool that just failed. The server already
+    // pushes an assistant correction for a cut-off write, so the next step
+    // has something new to act on; chaining blindly is what produced six
+    // identical plans against an identical failure.
+    const lastFailed = lastTools.some((p) => (p.state ?? "") === "output-error")
+    const sawCorrection = last?.parts.some(
+      (p) => p.type === "text" && /didn't complete|ran out of room/i.test((p as { text?: string }).text ?? "")
+    )
+    if (lastFailed && !sawCorrection) {
+      // No correction to act on: stop and let the user read the failure
+      // rather than spending another 16K tokens on the same call.
+      turnActiveRef.current = false
+      return
+    }
     if ((lastTools.length > 0 && !asked && steps < stepCap) || zeroTrace) {
       // Turn stays open; the chained step releases inFlight on settle.
       void sendContinue().then((ok) => {

@@ -448,6 +448,47 @@ const hasDefaultExportRe = /^\s*export\s+default\b/m
 const asDefaultRe = /^\s*export\s*\{[^}]*\bas\s+default\b/m
 
 /**
+ * Inline binary payloads: `data:` URIs and `base64,` blobs.
+ *
+ * This is here because of how it actually failed. A brief asked for a
+ * cursor reveal, the model "added film grain" by embedding a base64 PNG
+ * data URI in the composition, and that single string was larger than the
+ * entire rest of the file. The consequences all compound:
+ *
+ *   1. `write_composition` carries the file as TOOL-CALL ARGUMENTS, so the
+ *      response blew past `maxOutputTokens` (16.2K emitted against a 16K
+ *      cap, twice in a row), the JSON arguments never closed, and the SDK
+ *      marked the call invalid WITHOUT running it. The gateway logged 200,
+ *      the Worker logged nothing, and the user got "Something went wrong".
+ *   2. The model then retried the same oversized write five more times,
+ *      burning ~$0.015 and eight minutes, because the failure never told
+ *      it what was wrong.
+ *   3. Nothing else in the pipeline would have caught it: staticFile()
+ *      cannot resolve an inline blob, so the preview could not play it.
+ *
+ * So it is a BLOCKING error, checked in both the cheap and the full lint,
+ * and it is a single regex — the point is to reject the write in about a
+ * millisecond instead of discovering it 88 seconds and 16K tokens later.
+ * The fix is always the same and always cheap: `noise2D()` from
+ * `@remotion/noise` for grain, or `staticFile()` for a real asset.
+ */
+const dataUriRe = /data:(?:image|video|audio|application|font)\/[a-z0-9.+-]+\s*;\s*base64,/i
+
+function dataUriIssue(code: string): LintIssue | null {
+  const m = code.match(dataUriRe)
+  if (!m) return null
+  return {
+    severity: "error",
+    code: "data-uri",
+    message:
+      `The file embeds a base64 data URI (${m[0].slice(0, 24)}…). Inline binary is ` +
+      "never correct here and it is what makes a composition too large to write. " +
+      "For grain and texture use noise2D()/noise3D() from @remotion/noise; for a real " +
+      "asset use staticFile() or an uploaded reference. Remove the blob and re-validate.",
+  }
+}
+
+/**
  * CPU-aware size ceiling for the static gate.
  *
  * Measured: the lint is linear at ~0.42ms/KB (2KB → 2.9ms, 61KB → 25.5ms).
@@ -492,6 +533,10 @@ function lintOversized(code: string, meta?: { durationInFrames?: number }): Lint
       message: "The file has no default export, so nothing can mount it.",
     })
   }
+  // Inline binary. Checked on the cheap path too: this is precisely the
+  // oversized-file case, and it is the reason files get oversized.
+  const inline = dataUriIssue(code)
+  if (inline) issues.push(inline)
   const bal = balanceError(code)
   if (bal) {
     issues.push({ severity: "error", code: "balance", message: `Syntax: ${bal}.` })
@@ -552,6 +597,9 @@ export function lintComposition(
       message: "The file has no default export, so nothing can mount it.",
     })
   }
+
+  const inlineFull = dataUriIssue(code)
+  if (inlineFull) issues.push(inlineFull)
 
   const bal = balanceError(code)
   if (bal) {

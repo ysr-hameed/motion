@@ -123,7 +123,13 @@ import {
   resolveMode,
   stepsUsedOf,
 } from "../lib/agent/turns"
-import { isEmptyParts, toSseChunks, toUiParts, toolActivity } from "../lib/agent/nonstream-ui"
+import {
+  isEmptyParts,
+  toSseChunks,
+  toUiParts,
+  toolActivity,
+  truncatedByLength,
+} from "../lib/agent/nonstream-ui"
 import { loadTurnPreamble } from "../lib/agent/preamble"
 
 /**
@@ -458,6 +464,25 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
       // step still returns HTTP 200 and throws nothing, which is why it
       // used to reach the user as an unexplained failure.
       const parts = toUiParts(result.content, { finishReason: result.finishReason })
+      // A cut-off tool call is invisible to the model as a tool error: the
+      // SDK never ran it, so nothing in the tool vocabulary tells the model
+      // WHY. Left alone it re-issues the identical oversized write, hits the
+      // identical cap, and repeats — which is exactly what happened: six
+      // identical plans, six 16.2K-token responses, no progress.
+      //
+      // An assistant text part is the reliable channel: it is read by the
+      // model on the next step AND shown in the transcript, so the
+      // correction and the explanation are the same sentence.
+      const truncated = truncatedByLength(result.content, result.finishReason)
+      if (truncated) {
+        parts.push({
+          type: "text",
+          text:
+            "That write didn't complete — the response ran out before the file " +
+            "finished, so nothing was saved and I won't resend it unchanged. Rebuilding " +
+            "it leaner now (grain via noise2D instead of an embedded image, fewer lines).",
+        } as unknown as UIMessage["parts"][number])
+      }
       const activity = toolActivity(parts)
       const toolParts = activity.length
       const elapsed = Date.now() - t0

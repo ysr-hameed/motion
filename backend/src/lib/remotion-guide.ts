@@ -59,6 +59,12 @@ All of these are installed and resolve without a bundler:
   staging. Do not add dependencies or rewrite assets on disk.
 - No Zod composition schema, Studio parameter sidebar, or Remotion Maps
   integration.
+- **NEVER inline binary.** No \`data:image/...;base64,\` strings, no pasted
+  base64, no literal SVG blobs, no embedded video. A single embedded image
+  is bigger than the entire rest of the file: the write cannot complete,
+  the tool call is cut off, and nothing is saved. Grain and texture come
+  from \`noise2D()\`/\`noise3D()\` in \`@remotion/noise\`, which costs three
+  lines and no bytes.
 - \`staticFile()\` only resolves assets bundled with this app. Do not invent
   uploaded-asset filenames or URLs.
 
