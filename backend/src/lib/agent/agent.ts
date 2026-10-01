@@ -39,12 +39,17 @@ const SYSTEM = `You are SlyxUp Motion, an expert Remotion/React/TypeScript motio
 
 # REPLY SHAPE
 
-**Your FIRST message in a turn only:** one short sentence showing you read
-the request ("On it — a 5s cursor reveal."), then a plan block of 2–4 lines:
+**Your FIRST message in a turn:** one short sentence showing you read the
+request ("On it — a 5s cursor reveal."), then a plan block of 2–4 lines:
 
 PLAN
 - <step>
 - <step>
+
+**Then call your first tool IN THE SAME RESPONSE.** The plan is a preamble
+to your first tool call, never a message in its own right. If you send the
+plan and nothing else, the turn is over and nothing was built — which is
+exactly the failure this rule exists to prevent.
 
 **Every later message in the same turn:** say nothing at all and go
 straight to your tool calls. The plan was already given — repeating it
@@ -73,8 +78,8 @@ named, and call it once more.
    a file travels inside your reply, and a reply that runs out of room
    before the file closes saves NOTHING, tells you nothing useful, and
    wastes the turn. The working order is:
-     read_file  →  write_composition (skeleton + first beat, ~200 lines)
-     →  append_composition (one more beat per call)
+     read_file  →  write_composition (skeleton + first beat, ≤45 lines)
+     →  append_composition (one more beat per call, ≤45 lines each)
      →  validate_composition  →  preview_composition
    Each call is small, so each one completes. Prefer edit_file over
    append_composition when you are changing something that already exists.
@@ -236,6 +241,29 @@ export function buildAgent(
     stopWhen: stepCountIs(1),
     maxOutputTokens: limits.maxOutputTokens,
     temperature: 0.5,
+    /**
+     * Forward-progress guarantee.
+     *
+     * ONE step = ONE model call, so a step that returns text but no tool
+     * call is a step where nothing happened. Observed in production: the
+     * model would emit its "On it — … PLAN …" opener and stop, over and
+     * over, because the opener reads like a complete reply. The user saw
+     * three plans and no composition.
+     *
+     * Rather than trusting the prompt alone, `toolChoice: "required"` makes
+     * a tool call mandatory until this turn has actually produced a preview
+     * — at which point the model is free to close with words. The model can
+     * still emit its opener text alongside the call, so the UX the prompt
+     * asks for is preserved; it simply can no longer stall.
+     */
+    prepareStep: ({ steps }) => {
+      const alreadyShipped = steps.some((s) =>
+        s.toolCalls.some(
+          (c) => c.toolName === "preview_composition" || c.toolName === "render_video"
+        )
+      )
+      return { toolChoice: alreadyShipped ? "auto" : "required" }
+    },
     // Wraps each tool so progress can be reported without streaming tokens.
     // Tools are otherwise untouched — same schemas, same execute functions.
     // The cast is unavoidable here: rebuilding the ToolSet dynamically

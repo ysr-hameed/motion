@@ -57,7 +57,7 @@ describe("continuation token", () => {
   })
 
   it("cap is a sane bound for inspect→write→validate→preview→fix", () => {
-    assert.ok(MAX_STEPS_PER_TURN >= 5 && MAX_STEPS_PER_TURN <= 20)
+    assert.ok(MAX_STEPS_PER_TURN >= 5 && MAX_STEPS_PER_TURN <= 30)
   })
 
   it("advanced mode allows a deeper loop than standard", () => {
@@ -67,11 +67,26 @@ describe("continuation token", () => {
     assert.equal(MAX_STEPS_PER_TURN, TURN_LIMITS.advanced.maxSteps)
   })
 
-  it("advanced raises the output budget, but stays bounded", () => {
-    assert.ok(TURN_LIMITS.advanced.maxOutputTokens > TURN_LIMITS.standard.maxOutputTokens)
-    // Parsing cost is linear in the response body, and the whole request has
-    // to fit a ~10ms CPU budget — an unbounded output budget would undo that.
-    assert.ok(TURN_LIMITS.advanced.maxOutputTokens <= TURN_LIMITS.standard.maxOutputTokens * 2)
+  it("the output budget stays inside the CPU ceiling in BOTH modes", () => {
+    // Streaming costs ~3.9us of CPU per output token (measured on this
+    // account), and Workers Free allows ~10ms per request. 16K tokens was
+    // 62ms — a guaranteed kill mid-write, which users saw as
+    // "Interrupted mid-step". Advanced buys MORE STEPS, never a longer
+    // single response, so the two modes must share this ceiling.
+    const BUDGET_MS = 10
+    const US_PER_TOKEN = 0.0039
+    for (const mode of ["standard", "advanced"] as const) {
+      const est = TURN_LIMITS[mode].maxOutputTokens * US_PER_TOKEN
+      assert.ok(
+        est < BUDGET_MS,
+        `${mode}: ${TURN_LIMITS[mode].maxOutputTokens} tokens ≈ ${est.toFixed(1)}ms of streaming CPU, over the ${BUDGET_MS}ms budget`
+      )
+    }
+    assert.equal(
+      TURN_LIMITS.advanced.maxOutputTokens,
+      TURN_LIMITS.standard.maxOutputTokens,
+      "advanced must not raise the per-response ceiling"
+    )
   })
 
   it("resolveMode only accepts known modes", () => {

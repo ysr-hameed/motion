@@ -45,6 +45,38 @@ export const CONTINUE_TOKEN = "[continue-turn]"
  * description so the model sizes its own output far more reliably than a
  * token ceiling it cannot see.
  */
+/**
+ * Turn depth.
+ *
+ * `standard` is the default and stays small: most briefs resolve in a
+ * handful of steps, and every extra step is another round-trip the user
+ * waits through.
+ *
+ * `advanced` is for briefs that genuinely need more — a full piece rather
+ * than a tweak. It raises the step cap and the output budget so the agent
+ * can compose, preview, critique and revise in one turn instead of being
+ * cut off mid-scene.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY maxOutputTokens IS SMALL — read this before "just raise it"
+ * ---------------------------------------------------------------------------
+ * A streamed response costs roughly 3.9µs of CPU PER OUTPUT TOKEN, because
+ * every SSE frame is parsed and re-serialized in the Worker. Measured on
+ * this account:
+ *
+ *     500 tokens ->  5.3ms      8,000 ->  37ms
+ *   2,000 tokens -> 13.1ms     16,000 ->  62ms
+ *
+ * The Workers Free plan allows ~10ms CPU per request. So a 16K budget was
+ * guaranteed to be killed mid-write every single time — which is exactly
+ * what users saw as "Interrupted mid-step". Raising this number cannot be
+ * fixed by prompt engineering; it is arithmetic.
+ *
+ * The composition is therefore built INCREMENTALLY across several steps via
+ * `append_composition`, not in one enormous response. That is both cheaper
+ * AND more robust: a step that dies costs one chunk, not the whole cut, and
+ * each chunk is small enough to be inspected and validated as it lands.
+ */
 export type TurnMode = "standard" | "advanced"
 
 export interface TurnLimits {
@@ -53,19 +85,25 @@ export interface TurnLimits {
 }
 
 export const TURN_LIMITS: Record<TurnMode, TurnLimits> = {
-  // 16K ≈ a full dense 5s composition with headroom.
-  standard: { maxSteps: 7, maxOutputTokens: 16000 },
-  // 24K ≈ the ceiling the repairer already uses, for scenes that genuinely
-  // need a longer timeline or more beats.
-  advanced: { maxSteps: 14, maxOutputTokens: 24000 },
+  // ~1200 tokens ≈ 4.7ms of streaming CPU — inside the per-request budget
+  // with room for the tools and D1 writes in the same request. Roughly
+  // 40-60 lines of composition per step, so a full cut takes 4-8 appends.
+  standard: { maxSteps: 12, maxOutputTokens: 1200 },
+  // Same ceiling: a bigger number does not buy a bigger cut, it just kills
+  // the request. Advanced buys MORE STEPS (more passes of refine), not a
+  // longer single response — which is what actually improves the output.
+  advanced: { maxSteps: 24, maxOutputTokens: 1200 },
 }
 
 /**
  * Lines a written composition should stay under so it fits one response.
  * Stated in the system prompt and the tool description: the model sizes
- * its own output far more reliably than a token ceiling.
+ * its own output far more reliably than a token ceiling it cannot see.
+ *
+ * This is PER WRITE, not per composition — the whole file is assembled
+ * from several of these.
  */
-export const COMPOSITION_LINE_BUDGET = 900
+export const COMPOSITION_LINE_BUDGET = 45
 
 export const DEFAULT_MODE: TurnMode = "standard"
 

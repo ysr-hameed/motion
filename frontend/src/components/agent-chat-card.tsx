@@ -1147,6 +1147,42 @@ function AgentThread({
       })
       return
     }
+
+    /**
+     * A step that produced ONLY words is a step where nothing happened.
+     *
+     * One server request = one model call, so when the model spends that
+     * call on its "On it — … PLAN …" opener and no tool runs, the turn
+     * would otherwise close having built nothing. Observed in production:
+     * the user got three consecutive plans and an empty preview.
+     *
+     * If the turn has not shipped anything yet, keep chaining instead of
+     * closing — the step cap above still bounds the loop, so this cannot
+     * run away. Once a preview exists the model is free to close with
+     * words, which is what a finished turn should look like.
+     */
+    const shippedSomething = visible.some((m) =>
+      m.role === "assistant" &&
+      toolPartsOf(m).some((p) => {
+        const n = toolNameOf(p)
+        return (
+          (n === "preview_composition" || n === "render_video") &&
+          p.state === "output-available"
+        )
+      })
+    )
+    const wordsOnly =
+      last?.role === "assistant" &&
+      lastTools.length === 0 &&
+      Boolean(assistantText(last).trim()) &&
+      !asked
+    if (wordsOnly && !shippedSomething && steps < stepCap) {
+      void sendContinue().then((ok) => {
+        if (!ok) turnActiveRef.current = false
+      })
+      return
+    }
+
     turnActiveRef.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, advanced])
