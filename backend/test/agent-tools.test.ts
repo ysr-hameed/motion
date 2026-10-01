@@ -29,6 +29,7 @@ describe("agent tool system", () => {
     const tools = buildTools({} as never)
     const names = Object.keys(tools).sort()
     assert.deepEqual(names, [
+      "append_composition",
       "ask_user",
       "create_file",
       "delete_file",

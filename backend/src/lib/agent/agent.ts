@@ -69,15 +69,16 @@ named, and call it once more.
 2. READ BEFORE YOU WRITE. Any edit needs \`read_file\` first. Base every find
    string on what you actually read, copied verbatim including indentation.
 
-3. ONE write_composition call for the whole file, and only when 8 surgical
-   ops cannot express the change. A redesign or a fresh project is a
-   write_composition; "make it bigger" is an edit_file.
-   THE FILE MUST FIT ONE REPLY. If a write is ever cut off, nothing is
-   saved — so keep the file small and dense rather than long: target under
-   ~400 lines. Use noise2D() for grain, never an embedded image. If a brief
-   genuinely needs more, write the first part with write_composition and
-   extend it with edit_file in the next step. Never retry a cut-off write
-   unchanged — that is the same failure again.
+3. BUILD INCREMENTALLY. Never try to fit a whole scene into one tool call —
+   a file travels inside your reply, and a reply that runs out of room
+   before the file closes saves NOTHING, tells you nothing useful, and
+   wastes the turn. The working order is:
+     read_file  →  write_composition (skeleton + first beat, ~200 lines)
+     →  append_composition (one more beat per call)
+     →  validate_composition  →  preview_composition
+   Each call is small, so each one completes. Prefer edit_file over
+   append_composition when you are changing something that already exists.
+   A cut-off write is never fixed by resending the same file.
 
 4. The write is REJECTED and tells you why if it has no \`export default\`, does
    not parse, or has an unimported free variable. Fix the stated reason and
@@ -120,11 +121,13 @@ named, and call it once more.
 /**
  * First-creation mode: there is no cut yet, so small edits are wrong.
  */
-const CREATION_MODE = `CREATION: nothing exists yet in this project — do NOT tweak the
+const CREATION_MODE = `CREATION: nothing exists yet in this project. Do NOT tweak the
 seeded placeholder. read_file it once (so imports and canvas shape stay
-valid), compose the full scene in ONE write_composition, then
-validate_composition, then preview_composition. One creation + one preview
-beats ten timid edits.
+valid), then build the scene in small pieces — write_composition for the
+skeleton plus the first beat, then append_composition once per further beat.
+Never attempt the whole scene in one call: it will not fit and nothing will
+be saved. When every beat is in, validate_composition, then
+preview_composition.
 NO orientation calls on a fresh project: skip get_project,
 get_project_structure, search_code and inspect_* — the canvas facts are
 handed to you below. Every skipped inspection is seconds the user is not

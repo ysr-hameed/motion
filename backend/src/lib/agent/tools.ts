@@ -22,6 +22,16 @@ import {
 } from "./store"
 import { COMPOSITION_LINE_BUDGET } from "./turns"
 
+/**
+ * Splice point for incremental composition building.
+ *
+ * `write_composition` guarantees this exists, `append_composition` inserts
+ * immediately above it, and it survives every append — so "add another
+ * beat" is always a bounded call no matter how big the scene gets. See
+ * `append_composition` for why a whole-file write cannot work here.
+ */
+const BEATS_MARKER = "/* @@BEATS@@ */"
+
 const MAX_OUTPUT = 12000
 const truncate = (s: string, n = MAX_OUTPUT) =>
   s.length > n ? `${s.slice(0, n)}\n…[truncated ${s.length - n} chars]` : s
@@ -267,13 +277,14 @@ export function buildTools(ctx: AgentContext) {
     write_composition: tool({
       description:
         "Replace the ENTIRE main composition (src/Composition.tsx) with new full-file content. " +
-        "Use it for first creation on a fresh project and for redesign/remake/start-over requests — " +
-        "anywhere 8 surgical ops cannot express the change. You MUST call read_file first (keep imports, " +
-        "canvas shape and the default export valid). The result is gated exactly like edit_file: " +
-        "default export + static lint must pass or the write is rejected with reasons. " +
-        `The whole file travels inside THIS reply, so keep it under ${COMPOSITION_LINE_BUDGET} lines — ` +
-        "beyond that the reply is cut off mid-file and nothing is written. If the scene needs more, " +
-        "write the first part here and extend it with edit_file in a following step. " +
+        "Use it for a redesign/remake/start-over, and for the FIRST write of a new scene. " +
+        "You MUST call read_file first (keep imports, canvas shape and the default export valid). " +
+        "The result is gated exactly like edit_file: default export + static lint must pass or the " +
+        "write is rejected with reasons. " +
+        "IMPORTANT — a whole file travels inside THIS reply, so this call fails if the file is big. " +
+        "Write the SKELETON here (imports, component shell, the first beat) and then call " +
+        "append_composition for every further beat. Never try to fit a whole large scene into one call. " +
+        `Keep this one under ~${COMPOSITION_LINE_BUDGET / 2} lines. ` +
         "When NOT to use: small tweaks (use edit_file), new side files (use create_file).",
       inputSchema: z.object({
         content: z
@@ -281,7 +292,7 @@ export function buildTools(ctx: AgentContext) {
           .min(200)
           .max(120000)
           .describe(
-            `Complete new file content for src/Composition.tsx (keep under ${COMPOSITION_LINE_BUDGET} lines)`
+            `New file content for src/Composition.tsx — the skeleton plus the first beat only (~${COMPOSITION_LINE_BUDGET / 2} lines max). Add more with append_composition.`
           ),
       }),
       execute: async ({ content }) => {
@@ -304,14 +315,114 @@ export function buildTools(ctx: AgentContext) {
             hint: "The replacement does not parse. Fix the flagged issues and retry.",
           }
         }
-        const res = await writeFileContent(ctx, COMPOSITION_PATH, content)
+        // Guarantee the splice point rather than asking the model to
+        // remember it. `append_composition` inserts immediately ABOVE this
+        // marker, so it survives every append and is always available —
+        // which is what makes incremental building impossible to get wrong.
+        const next = content.includes(BEATS_MARKER) ? content : `${content}\n${BEATS_MARKER}\n`
+        const res = await writeFileContent(ctx, COMPOSITION_PATH, next)
         return {
           ok: true as const,
           path: res.path,
           bytes: res.bytes,
-          lines: content.split("\n").length,
+          lines: next.split("\n").length,
           applied: 1,
           strategy: "rewrite",
+          hint: "Added more beats with append_composition — do not resend this whole file.",
+        }
+      },
+    }),
+
+    /**
+     * Incremental build. The structural answer to "the file does not fit in
+     * one reply".
+     *
+     * Every failure of this kind is the same failure: a whole-file tool call
+     * is emitted, it exceeds `maxOutputTokens`, the JSON arguments never
+     * close, the SDK discards the call WITHOUT running it, nothing throws,
+     * and the model is told only "The tool failed." — so it resends the
+     * identical oversized payload. Six identical plans, six 16.2K-token
+     * responses, no progress.
+     *
+     * Splicing above a marker that `write_composition` guarantees means
+     * every call is bounded by the per-call cap rather than by the size of
+     * the scene. A 2,000-line composition becomes six honest tool calls
+     * instead of one impossible one. This is the same reason Claude Code
+     * and Codex emit targeted replacements rather than whole files.
+     */
+    append_composition: tool({
+      description:
+        "Add ONE more beat to src/Composition.tsx without resending the file. " +
+        "This is the normal way to build a scene that is too large for a single reply: " +
+        "write_composition for the skeleton, then append_composition once per beat. " +
+        "The code is inserted just above the splice marker at the end of the file, " +
+        "so put only the new beat here — no imports, no default export, no wrapping " +
+        "component. If your beat needs a new import, add it with edit_file first. " +
+        `Keep each call under ~${COMPOSITION_LINE_BUDGET / 2} lines. ` +
+        "The whole file is linted after the splice, so a broken beat is rejected with reasons.",
+      inputSchema: z.object({
+        content: z
+          .string()
+          .min(40)
+          .max(80000)
+          .describe(
+            `One new beat for src/Composition.tsx — code only, spliced above the marker (~${COMPOSITION_LINE_BUDGET / 2} lines max)`
+          ),
+      }),
+      execute: async ({ content }) => {
+        const current = await readFileContent(ctx, COMPOSITION_PATH)
+        const at = current.indexOf(BEATS_MARKER)
+        if (at === -1) {
+          return {
+            ok: false as const,
+            path: COMPOSITION_PATH,
+            applied: 0,
+            misses: ["the composition has no splice marker"],
+            hint:
+              "Call write_composition once to rewrite the file (it adds the marker), then append beats to it.",
+          }
+        }
+        if (/^\s*(import\b|export\b)/m.test(content)) {
+          return {
+            ok: false as const,
+            path: COMPOSITION_PATH,
+            applied: 0,
+            misses: ["a beat must not contain import or export statements"],
+            hint:
+              "Imports belong at the top of the file — add them with edit_file, then append the beat again.",
+          }
+        }
+        const head = current.slice(0, at).replace(/\s*$/, "\n")
+        const tail = current.slice(at + BEATS_MARKER.length)
+        const next = `${head}\n${content.replace(/\s*$/, "")}\n\n${BEATS_MARKER}${tail}`
+        if (!hasDefaultExport(next)) {
+          return {
+            ok: false as const,
+            path: COMPOSITION_PATH,
+            applied: 0,
+            misses: ["the append would remove the default export"],
+            hint: "Keep `export default function Composition` in the file.",
+          }
+        }
+        const blocking = blockingIssues(lintComposition(next))
+        if (blocking.length > 0) {
+          return {
+            ok: false as const,
+            path: COMPOSITION_PATH,
+            applied: 0,
+            misses: blocking.map((i) => `[${i.code}] ${i.message}`),
+            hint: "That beat does not parse. Fix the flagged issues and append again.",
+          }
+        }
+        const res = await writeFileContent(ctx, COMPOSITION_PATH, next)
+        return {
+          ok: true as const,
+          path: res.path,
+          bytes: res.bytes,
+          lines: next.split("\n").length,
+          added: content.split("\n").length,
+          applied: 1,
+          strategy: "append",
         }
       },
     }),
