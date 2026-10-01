@@ -3,25 +3,28 @@ import { Button } from "@/components/ui/button"
 
 export function Cta() {
   return (
-    <section className="py-20 sm:py-28">
+    <section className="py-16 sm:py-24">
       <div className="mx-auto max-w-6xl px-4">
-        <div className="relative overflow-hidden rounded-3xl border bg-card px-6 py-16 text-center sm:py-20">
+        <div className="relative overflow-hidden rounded-2xl border bg-zinc-950 px-6 py-14 text-center sm:py-16">
           <div
             aria-hidden
-            className="pointer-events-none absolute inset-0 bg-grid [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,black,transparent)]"
+            className="pointer-events-none absolute inset-0 bg-grid-dark opacity-60"
           />
-          <div className="relative mx-auto flex max-w-2xl flex-col items-center gap-5">
-            <h2 className="text-2xl font-bold tracking-tight sm:text-4xl">
-              Your next video deserves better than a static title.
+          <div
+            aria-hidden
+            className="pointer-events-none absolute left-1/2 top-0 h-48 w-[36rem] -translate-x-1/2 rounded-full bg-primary/25 blur-3xl"
+          />
+          <div className="relative mx-auto flex max-w-xl flex-col items-center gap-4">
+            <h2 className="text-2xl text-white sm:text-3xl">
+              Make your next video move
             </h2>
-            <p className="text-muted-foreground">
-              Prompt your first clip free, then chat it perfect. No credit
-              card, no keyframes.
+            <p className="text-[15px] text-zinc-400">
+              Describe your first clip — free, no credit card, no keyframes.
             </p>
             <Button size="lg" asChild>
-              <a href="#hero-generate">
+              <a href="/studio">
                 <Sparkles />
-                Generate your first clip
+                Start creating
               </a>
             </Button>
           </div>

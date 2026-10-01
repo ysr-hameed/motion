@@ -48,27 +48,10 @@ export interface StepBudget {
 
 /**
  * No token limits in the strict sense — budgets are high enough that
- * quality never gets truncated. Timeouts stay so the UI never shows
- * "in model queue… 49s" forever.
- *
- * The choreographer runs hot on purpose. It writes the whole composition,
- * so it gets the largest budget and the highest temperature; a JSON
- * schema used to make low temperature safe, and that constraint is gone.
+ * quality never gets truncated. Timeouts stay so the UI never waits
+ * forever on a queued model.
  */
-export const STEP_BUDGETS: Record<
-  "director" | "choreographer" | "editor" | "repairer" | "voice",
-  StepBudget
-> = {
-  director: { maxTokens: 1500, temperature: 0.75, timeoutMs: 45000, idleMs: 30000, totalMs: 90000, retries: 2 },
-  // Runs hot for maximum creativity — geometry is enforced by the render,
-  // not by a cold temperature. Hard briefs need 2-4 min to write.
-  choreographer: { maxTokens: 32000, temperature: 0.95, timeoutMs: 240000, idleMs: 60000, totalMs: 420000, retries: 2 },
-  // Editor prefers edit ops, which are tiny; the budget covers the
-  // full-rewrite fallback on a large file.
-  editor: { maxTokens: 24000, temperature: 0.6, timeoutMs: 180000, idleMs: 45000, totalMs: 240000, retries: 2 },
+export const STEP_BUDGETS: Record<"repairer", StepBudget> = {
   // Repairer is cold and precise — it is fixing, not designing.
   repairer: { maxTokens: 24000, temperature: 0.15, timeoutMs: 150000, idleMs: 45000, totalMs: 200000, retries: 2 },
-  // Voice: the reply plus at most one follow-up, in one call. It used to
-  // be two — a critic at 40s and a talker at 16s — for the same result.
-  voice: { maxTokens: 1500, temperature: 0.6, timeoutMs: 60000, idleMs: 30000, totalMs: 90000, retries: 2 },
 }

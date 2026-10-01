@@ -51,6 +51,7 @@ describe("agent tool system", () => {
       "search_assets",
       "search_code",
       "validate_composition",
+      "write_composition",
     ])
   })
 })

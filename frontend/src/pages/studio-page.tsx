@@ -9,7 +9,6 @@ import {
   Play,
   Plus,
   Search,
-  Sparkles,
   Trash2,
   Zap,
 } from "lucide-react"
@@ -23,7 +22,7 @@ import { smalltalkReply } from "@/lib/motion"
 import { navigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
-function gotoPlayground(id?: number) {
+function gotoEditor(id?: number) {
   navigate(id == null ? "/playground" : `/playground/${id}`)
 }
 
@@ -46,19 +45,21 @@ function timeAgo(ts: number): string {
   return new Date(ts).toLocaleDateString()
 }
 
+type CardProject = {
+  id: number
+  name: string
+  spec: { style: string; format: string; duration: string } | null
+  versions: number
+  attachments: unknown[]
+  updatedAt: number
+}
+
 function ProjectCard({
   project,
   onOpen,
   onDelete,
 }: {
-  project: {
-    id: number
-    name: string
-    spec: { style: string; format: string; duration: string } | null
-    versions: number
-    attachments: unknown[]
-    updatedAt: number
-  }
+  project: CardProject
   onOpen: () => void
   onDelete: () => void
 }) {
@@ -71,85 +72,72 @@ function ProjectCard({
   }, [arming])
 
   return (
-    <article className="group relative overflow-hidden rounded-2xl border bg-card text-left transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-xl hover:shadow-primary/5">
+    <article className="group relative overflow-hidden rounded-2xl border bg-card transition-all hover:border-primary/30 hover:shadow-md">
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`Open ${project.name}`}
+        aria-label={`Open ${project.name} in the editor`}
         className="block w-full text-left"
       >
-        {/* film-frame thumb: sprocket edging + style identity */}
-        <span className="relative flex aspect-[16/8] items-center justify-center overflow-hidden bg-neutral-950">
+        <span className="relative flex aspect-video items-center justify-center overflow-hidden bg-zinc-950">
+          <span aria-hidden className="absolute inset-0 bg-grid-dark opacity-60" />
           <span
             aria-hidden
-            className="absolute inset-0 bg-grid-dark opacity-70"
-          />
-          <span
-            aria-hidden
-            className="absolute inset-x-0 top-0 h-3 film-sprockets"
-          />
-          <span
-            aria-hidden
-            className="absolute inset-x-0 bottom-0 h-3 film-sprockets"
+            className="absolute left-1/2 top-1/2 size-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20 blur-3xl"
           />
           {project.spec ? (
             <span className="relative flex flex-col items-center gap-1 px-4">
-              <span
-                aria-hidden
-                className="font-display text-4xl font-bold tracking-tight text-white/90"
-              >
-                {project.spec.style.charAt(0).toUpperCase()}
-              </span>
-              <span className="text-center text-[10px] font-semibold uppercase tracking-[0.22em] text-white/50">
+              <Clapperboard className="size-5 text-zinc-500" />
+              <span className="text-sm font-medium capitalize text-zinc-200">
                 {project.spec.style}
+              </span>
+              <span className="text-[11px] tabular-nums text-zinc-500">
+                {project.spec.format} · {project.spec.duration}
               </span>
             </span>
           ) : (
             <span className="relative flex flex-col items-center gap-1.5">
-              <Clapperboard className="size-6 text-white/40" />
-              <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">
-                Draft
-              </span>
+              <Clapperboard className="size-5 text-zinc-600" />
+              <span className="text-xs font-medium text-zinc-500">Draft</span>
             </span>
           )}
-          {project.spec && (
-            <span className="absolute left-2.5 top-5 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-medium tabular-nums text-white backdrop-blur">
-              {project.spec.format}
-            </span>
-          )}
-          <span className="absolute bottom-5 right-2.5 rounded-full bg-black/60 px-2 py-0.5 text-[10px] tabular-nums text-white backdrop-blur">
+          <span className="absolute left-2.5 top-2.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white backdrop-blur">
+            {project.spec?.format ?? "Draft"}
+          </span>
+          <span className="absolute bottom-2.5 right-2.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] tabular-nums text-white backdrop-blur">
             {project.versions === 0 ? "No versions" : `v${project.versions}`}
           </span>
-          {/* hover: dim + play reveal — this opens the motion */}
           <span
             aria-hidden
-            className="absolute inset-0 bg-black/0 transition-colors duration-300 group-hover:bg-black/35"
+            className="absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/30"
           />
           <span
             aria-hidden
-            className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+            className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
           >
-            <span className="flex size-11 scale-90 items-center justify-center rounded-full bg-white text-black shadow-xl transition-transform duration-300 group-hover:scale-100">
-              <Play className="size-4 translate-x-[2px] fill-current" />
+            <span className="flex size-10 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg">
+              <Play className="size-4 translate-x-[1px] fill-current" />
             </span>
           </span>
         </span>
         <span className="block p-3.5">
           <span className="flex items-start justify-between gap-2">
-            <span className="truncate text-[13px] font-semibold tracking-[-0.01em]">
+            <span className="truncate text-sm font-semibold">
               {project.name}
             </span>
-            <ArrowUpRight className="size-4 shrink-0 text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-primary" />
+            <ArrowUpRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
           </span>
-          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-            {project.spec
-              ? `${project.spec.style} · ${project.spec.duration}`
-              : "Draft — generate to start versioning"}
+          <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span className="truncate">
+              {project.spec
+                ? `${project.spec.style} · ${project.spec.duration}`
+                : "Describe it to render version 1"}
+            </span>
           </span>
           <span className="mt-2.5 block border-t pt-2.5 text-[11px] tabular-nums text-muted-foreground">
             {timeAgo(project.updatedAt)}
             {project.attachments.length > 0 &&
-              ` · ${project.attachments.length} ref${project.attachments.length > 1 ? "s" : ""}`}
+              ` · ${project.attachments.length} reference${project.attachments.length > 1 ? "s" : ""}`}
           </span>
         </span>
       </button>
@@ -164,14 +152,14 @@ function ProjectCard({
           }
         }}
         aria-label={arming ? "Confirm delete" : `Delete ${project.name}`}
-        title={arming ? "Click again to confirm" : "Delete project"}
+        title={arming ? "Click again to confirm" : "Delete video"}
         className={
           arming
-            ? "absolute right-2.5 top-5 rounded-full bg-destructive px-2.5 py-1 text-[10px] font-bold text-white shadow-lg"
-            : "absolute right-2.5 top-5 flex size-6 items-center justify-center rounded-full bg-black/60 text-white opacity-0 backdrop-blur transition-opacity hover:bg-destructive focus-visible:opacity-100 group-hover:opacity-100"
+            ? "absolute right-2.5 top-2.5 rounded-lg bg-destructive px-2.5 py-1 text-[11px] font-semibold text-white shadow-lg"
+            : "absolute right-2.5 top-2.5 flex size-7 items-center justify-center rounded-lg bg-black/50 text-white opacity-0 backdrop-blur transition-opacity hover:bg-destructive focus-visible:opacity-100 group-hover:opacity-100"
         }
       >
-        {arming ? "Sure?" : <Trash2 className="size-3" />}
+        {arming ? "Confirm?" : <Trash2 className="size-3.5" />}
       </button>
     </article>
   )
@@ -182,14 +170,7 @@ function ProjectListRow({
   onOpen,
   onDelete,
 }: {
-  project: {
-    id: number
-    name: string
-    spec: { style: string; format: string; duration: string } | null
-    versions: number
-    attachments: unknown[]
-    updatedAt: number
-  }
+  project: CardProject
   onOpen: () => void
   onDelete: () => void
 }) {
@@ -202,32 +183,32 @@ function ProjectListRow({
   }, [arming])
 
   return (
-    <div className="group flex items-center gap-3 rounded-2xl border bg-card px-3 py-2.5 transition-colors hover:border-primary/40">
+    <div className="group flex items-center gap-3 rounded-xl border bg-card px-3 py-2.5 transition-colors hover:border-primary/30">
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`Open ${project.name}`}
+        aria-label={`Open ${project.name} in the editor`}
         className="flex min-w-0 flex-1 items-center gap-3 text-left"
       >
         <span
           aria-hidden
-          className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-neutral-950 text-[13px] font-bold text-white"
+          className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-zinc-400"
         >
-          {project.spec ? project.spec.style.charAt(0).toUpperCase() : "–"}
+          <Clapperboard className="size-4" />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
-            <span className="truncate text-[13px] font-semibold tracking-[-0.01em]">
+            <span className="truncate text-sm font-semibold">
               {project.name}
             </span>
-            <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] tabular-nums text-secondary-foreground">
-              {project.versions === 0 ? "No versions" : `v${project.versions}`}
+            <span className="shrink-0 rounded-md bg-secondary px-1.5 py-0.5 text-[10px] tabular-nums text-secondary-foreground">
+              {project.versions === 0 ? "Draft" : `v${project.versions}`}
             </span>
           </span>
-          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
             {project.spec
               ? `${project.spec.style} · ${project.spec.format} · ${project.spec.duration}`
-              : "Draft — generate to start versioning"}
+              : "Draft — render version 1 to begin"}
           </span>
         </span>
       </button>
@@ -242,17 +223,16 @@ function ProjectListRow({
           else setArming(true)
         }}
         aria-label={arming ? "Confirm delete" : `Delete ${project.name}`}
-        title={arming ? "Click again to confirm" : "Delete project"}
+        title={arming ? "Click again to confirm" : "Delete video"}
         className={cn(
-          "flex h-7 shrink-0 items-center justify-center rounded-full transition-colors",
+          "flex h-7 shrink-0 items-center justify-center rounded-lg transition-colors",
           arming
-            ? "bg-destructive px-2.5 text-[11px] font-bold text-white"
+            ? "bg-destructive px-2.5 text-[11px] font-semibold text-white"
             : "size-7 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
         )}
       >
-        {arming ? "Sure?" : <Trash2 className="size-3.5" />}
+        {arming ? "Confirm?" : <Trash2 className="size-3.5" />}
       </button>
-      <ArrowUpRight className="size-4 shrink-0 text-muted-foreground transition-all group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-primary" />
     </div>
   )
 }
@@ -280,11 +260,6 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
       /* storage unavailable */
     }
   }
-
-  const totalVersions = useMemo(
-    () => t.projects.reduce((n, p) => n + p.versions, 0),
-    [t.projects]
-  )
 
   const term = query.trim().toLowerCase()
   const visible = useMemo(
@@ -314,20 +289,19 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
 
   const handleGenerate = (prompt: string, format: string, secs: number) => {
     stashPendingPrompt(prompt, format, t.staged, smalltalkReply(prompt) ?? undefined, secs)
-    gotoPlayground()
+    gotoEditor()
   }
 
   const openProject = (id: number) => {
     t.selectProject(id)
-    gotoPlayground(id)
+    gotoEditor(id)
   }
 
   return (
     <div className="flex min-h-svh bg-background text-foreground">
-      {/* desktop sidebar */}
       <aside
         className={cn(
-          "sticky top-0 hidden h-svh shrink-0 overflow-hidden border-r border-border/50 transition-all duration-300 lg:block",
+          "sticky top-0 hidden h-svh shrink-0 overflow-hidden border-r transition-all duration-300 lg:block",
           collapsed ? "w-16" : "w-72"
         )}
       >
@@ -344,7 +318,6 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
         </div>
       </aside>
 
-      {/* mobile sidebar */}
       <div
         aria-hidden={!navOpen}
         className={cn(
@@ -361,11 +334,11 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
         />
         <aside
           className={cn(
-            "absolute left-0 top-0 h-full w-72 max-w-[85vw] overflow-hidden rounded-r-2xl bg-background shadow-2xl transition-transform duration-300 ease-out",
+            "absolute left-0 top-0 h-full w-72 max-w-[85vw] overflow-hidden bg-background shadow-2xl transition-transform duration-300 ease-out",
             navOpen ? "translate-x-0" : "-translate-x-full"
           )}
           role="dialog"
-          aria-label="Studio menu"
+          aria-label="Projects menu"
         >
           <StudioSidebar
             onNew={() => {
@@ -381,35 +354,34 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
         </aside>
       </div>
 
-      {/* main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/80 px-3.5 backdrop-blur-xl sm:px-4">
+        <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/90 px-3.5 backdrop-blur-xl sm:px-4">
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon"
             className="size-8 lg:hidden"
             onClick={() => setNavOpen(true)}
-            aria-label="Open studio menu"
+            aria-label="Open projects menu"
           >
             <PanelLeft />
           </Button>
           <div className="min-w-0">
-            <h1 className="truncate text-[15px] font-semibold tracking-tight">
-              Dashboard
+            <h1 className="truncate text-[15px] font-semibold">
+              Projects
             </h1>
-            <p className="hidden truncate text-[11px] text-muted-foreground sm:block">
+            <p className="hidden truncate text-xs text-muted-foreground sm:block">
               {t.projects.length === 0
-                ? "Describe a clip to create your first project"
-                : `${t.projects.length} project${t.projects.length === 1 ? "" : "s"} in your workspace`}
+                ? "Your video library — create your first clip below"
+                : `${t.projects.length} video${t.projects.length === 1 ? "" : "s"} in your library`}
             </p>
           </div>
           <div className="flex-1" />
           <button
             type="button"
             onClick={() => navigate("/settings")}
-            title="Plan & billing"
+            title="Plan and billing"
             aria-label="Plan and billing settings"
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <Zap className="size-3.5 text-primary" />
             <span className="hidden min-[420px]:inline">
@@ -422,80 +394,51 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
               id="studio-search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search projects"
-              aria-label="Search projects"
-              className="h-8 w-44 rounded-full border bg-background pl-8 pr-3 text-[13px] outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring lg:w-56"
+              placeholder="Search videos"
+              aria-label="Search videos"
+              className="h-8 w-44 rounded-lg border bg-background pl-8 pr-3 text-[13px] outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15 lg:w-56"
             />
           </label>
-          <Button
-            size="sm"
-            className="h-8 sm:hidden"
-            onClick={focusPrompt}
-            aria-label="New project"
-          >
+          <Button size="sm" className="h-8 sm:hidden" onClick={focusPrompt} aria-label="New video">
             <Plus />
             New
           </Button>
         </header>
 
-        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 p-4 sm:p-5">
-          {/* prompt entry */}
-          <div className="mx-auto flex w-full max-w-2xl flex-col items-center gap-4 pt-4 text-center">
-            {t.projects.length > 0 ? (
-              <span className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-medium tabular-nums text-muted-foreground">
-                <span
-                  aria-hidden
-                  className="size-1.5 animate-pulse rounded-full bg-primary"
-                />
-                {t.projects.length} project
-                {t.projects.length === 1 ? "" : "s"} · {totalVersions}{" "}
-                version{totalVersions === 1 ? "" : "s"} in the cutting room
-              </span>
-            ) : (
-              <Badge variant="secondary" className="gap-1.5 text-[11px]">
-                <Sparkles className="size-3" />
-                New generation
-              </Badge>
-            )}
-            <h2 className="text-xl font-bold tracking-tight sm:text-2xl">
-              What are we making today?
-            </h2>
-            <p className="-mt-2 text-[13px] text-muted-foreground sm:text-sm">
-              Describe a clip — the playground opens and your project lands
-              below with its first version.
-            </p>
-            <div className="relative w-full">
-              <div
-                aria-hidden
-                className="absolute -inset-2 rounded-[1.75rem] bg-primary/10 blur-2xl"
-              />
-              <div className="relative">
-                <PromptBox
-                  id="dashboard-prompt"
-                  onGenerate={handleGenerate}
-                  showHint={false}
-                  attachments={t.staged}
-                  onAttachFiles={t.stageFiles}
-                  onRemoveAttachment={t.removeStaged}
-                />
-              </div>
+        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 p-4 sm:p-6">
+          <section
+            aria-label="Create a new video"
+            className="rounded-2xl border bg-card p-5 sm:p-6"
+          >
+            <div className="flex flex-col gap-1">
+              <h2 className="text-lg">Create a new video</h2>
+              <p className="text-sm text-muted-foreground">
+                Describe the shot. The editor opens and renders version 1 —
+                it is saved here automatically.
+              </p>
             </div>
-          </div>
+            <div className="mt-4">
+              <PromptBox
+                id="dashboard-prompt"
+                onGenerate={handleGenerate}
+                showHint={false}
+                attachments={t.staged}
+                onAttachFiles={t.stageFiles}
+                onRemoveAttachment={t.removeStaged}
+              />
+            </div>
+          </section>
 
-          {/* my projects */}
-          <section aria-label="My projects">
+          <section aria-label="Your videos">
             <div className="flex items-center gap-2.5">
-              <h2 className="text-[15px] font-semibold tracking-tight">
-                My projects
-              </h2>
-              <Badge variant="secondary" className="text-[11px]">
+              <h2 className="text-[15px] font-semibold">Your videos</h2>
+              <Badge variant="secondary">
                 {term ? `${visible.length}/${t.projects.length}` : t.projects.length}
-              </Badge>
-              {term && (
+              </Badge>              {term && (
                 <button
                   type="button"
                   onClick={() => setQuery("")}
-                  className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
                 >
                   Clear “{query.trim()}”
                 </button>
@@ -504,8 +447,8 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
               {t.projects.length > 0 && (
                 <div
                   role="group"
-                  aria-label="Projects view"
-                  className="flex items-center gap-0.5 rounded-full border p-0.5"
+                  aria-label="Videos view"
+                  className="flex items-center gap-0.5 rounded-lg border p-0.5"
                 >
                   {(
                     [
@@ -521,7 +464,7 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
                       aria-pressed={view === v.id}
                       title={v.label}
                       className={cn(
-                        "flex size-7 items-center justify-center rounded-full transition-colors",
+                        "flex size-7 items-center justify-center rounded-md transition-colors",
                         view === v.id
                           ? "bg-primary text-primary-foreground"
                           : "text-muted-foreground hover:text-foreground"
@@ -533,24 +476,37 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
                 </div>
               )}
             </div>
+            {t.projects.length > 0 && (
+              <label className="relative mt-3 flex items-center sm:hidden">
+                <Search className="pointer-events-none absolute left-3 size-4 text-muted-foreground" />
+                <input
+                  id="studio-search-mobile"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search videos"
+                  aria-label="Search videos"
+                  className="h-9 w-full rounded-lg border bg-background pl-9 pr-3 text-base outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
+                />
+              </label>
+            )}
             {t.projects.length === 0 ? (
               <div className="mt-3.5 flex flex-col items-center gap-1.5 rounded-2xl border border-dashed px-6 py-10 text-center">
-                <span className="flex size-10 items-center justify-center rounded-full bg-secondary">
+                <span className="flex size-10 items-center justify-center rounded-xl bg-secondary">
                   <FolderOpen className="size-4 text-muted-foreground" />
                 </span>
-                <p className="text-[13px] font-semibold">No projects yet</p>
-                <p className="max-w-xs text-[13px] text-muted-foreground">
-                  Describe a clip above — the playground opens and your first
-                  project lands here.
+                <p className="text-sm font-semibold">No videos yet</p>
+                <p className="max-w-xs text-sm text-muted-foreground">
+                  Use the composer above — your first video and its version 1
+                  will appear here.
                 </p>
               </div>
             ) : visible.length === 0 ? (
               <div className="mt-3.5 flex flex-col items-center gap-1.5 rounded-2xl border border-dashed px-6 py-10 text-center">
-                <span className="flex size-10 items-center justify-center rounded-full bg-secondary">
+                <span className="flex size-10 items-center justify-center rounded-xl bg-secondary">
                   <Search className="size-4 text-muted-foreground" />
                 </span>
-                <p className="text-[13px] font-semibold">No matches</p>
-                <p className="max-w-xs text-[13px] text-muted-foreground">
+                <p className="text-sm font-semibold">No matches</p>
+                <p className="max-w-xs text-sm text-muted-foreground">
                   Nothing matches “{query.trim()}”. Try a different search.
                 </p>
               </div>
@@ -576,6 +532,12 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
                   />
                 ))}
               </div>
+            )}
+            {t.projects.length > 0 && (
+              <p className="mt-4 text-xs text-muted-foreground">
+                Tip: selecting a video opens it in the editor, where you
+                describe changes in the chat and compare versions.
+              </p>
             )}
           </section>
         </main>

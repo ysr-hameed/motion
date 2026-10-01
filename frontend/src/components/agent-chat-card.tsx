@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai"
 import { useChat } from "@ai-sdk/react"
 import {
@@ -18,7 +18,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { formatBytes, type Attachment } from "@/lib/attachments"
+import { formatBytes, downscaleDataUrl, type Attachment } from "@/lib/attachments"
 import { getAuthToken } from "@/lib/auth"
 import { asArtifact, type Artifact } from "@/lib/artifact"
 import {
@@ -43,6 +43,14 @@ import {
 } from "@/lib/agent"
 
 const API = import.meta.env.VITE_API_URL as string | undefined
+const IS_PROD = import.meta.env.PROD
+
+/** Production-safe backend copy — dev commands never leak to users. */
+function backendDownCopy(): string {
+  return IS_PROD
+    ? "Can't reach the AI service — check your connection, then retry."
+    : "Can't reach the backend — run `pnpm dev` (or `pnpm -C backend dev`), then retry."
+}
 
 /**
  * Human-friendly activity labels. This is a video studio, not a code
@@ -60,6 +68,8 @@ function toolLabel(name: string): string {
     case "create_file":
     case "edit_file":
       return "Updating the animation"
+    case "write_composition":
+      return "Composing the scene"
     case "delete_file":
     case "rename_file":
       return "Tidying up"
@@ -256,20 +266,35 @@ function ActivityLine({ parts }: { parts: ToolPart[] }) {
  */
 function friendlyError(raw: string): string {
   const s = raw.trim()
+  if (!s) return "Something interrupted that — retry and I'll pick it up."
+  // AI SDK's generic tool error when the stream dies mid-turn (e.g. the
+  // Worker was killed): never show the raw sentence, it says nothing.
+  if (/^an error occurred\.?$/i.test(s)) return "Interrupted mid-step — retry and I'll continue."
+  if (/aborted|abort/i.test(s)) return "Stopped — nothing from this run was saved."
+  if (/failed to fetch|networkerror|load failed|backend didn't respond|can't reach|couldn't reach/i.test(s))
+    return backendDownCopy()
+  if (/not found|conversation not found/i.test(s))
+    return "That chat is gone — start a new one below."
+  if (/unauthorized|401|forbidden|403/i.test(s))
+    return "Your session expired — sign in again, then retry."
+  if (/ai isn't set up|503/i.test(s))
+    return "The AI service is warming up — wait a moment, then retry."
   if (/blocking errors remain|Cannot preview/i.test(s)) return "needs a fix first — working on it"
   if (/not found/i.test(s)) return "couldn't find that — checking again"
   if (/confirmation required/i.test(s)) return "needs your confirmation"
   if (s.length <= 120) return s
-  return "something went wrong — retrying"
+  return "Something went wrong — retry and I'll pick it up."
 }
 
 function AskBlock({
   output,
   disabled,
+  answered,
   onAnswer,
 }: {
   output: unknown
   disabled: boolean
+  answered?: boolean
   onAnswer: (text: string) => void
 }) {
   const o = (output ?? {}) as { question?: unknown; options?: unknown; action?: unknown }
@@ -303,7 +328,9 @@ function AskBlock({
           ))}
         </div>
       )}
-      <p className="-mb-0.5 text-[10px] text-white/40">Tap an option to send it instantly</p>
+      <p className="-mb-0.5 text-[10px] text-white/40">
+        {answered ? "Answered — continue below" : "Tap an option to send it instantly"}
+      </p>
     </div>
   )
 }
@@ -314,6 +341,153 @@ function assistantText(msg: UIMessage): string {
     .map((p) => (p as { text?: string }).text ?? "")
     .join("")
     .trim()
+}
+
+/**
+ * Streaming "thinking" parts (AI SDK `reasoning`). The old renderer only
+ * read `text`, so a model that thinks before it writes showed a blank
+ * bubble — sometimes "Thinking…", sometimes nothing, depending on timing.
+ */
+function reasoningText(msg: UIMessage): string {
+  return msg.parts
+    .filter((p) => p.type === "reasoning")
+    .map((p) => (p as { text?: string }).text ?? "")
+    .join("")
+    .trim()
+}
+
+/** Collapsible thought trace — open while streaming, closed when done. */
+function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean }) {
+  const short = text.length > 220 ? `${text.slice(0, 220).trimEnd()}…` : text
+  return (
+    <details
+      open={streaming}
+      className="rounded-xl border border-border/60 bg-muted/40 px-2.5 py-1.5 text-[11px] leading-relaxed text-muted-foreground"
+    >
+      <summary className="cursor-pointer select-none font-medium">
+        {streaming ? "Thinking…" : "Thought process"}
+      </summary>
+      <p className="mt-1 whitespace-pre-wrap break-words">{streaming ? text : short}</p>
+      {!streaming && text.length > 220 && (
+        <p className="mt-1 whitespace-pre-wrap break-words">{text.slice(220)}</p>
+      )}
+    </details>
+  )
+}
+
+/**
+ * One assistant turn. Never renders an empty bubble: when the model has
+ * produced no text, no reasoning and no tool activity yet (the first
+ * second of a stream), a Thinking placeholder holds the place instead of
+ * a blank "SlyxUp" header. A settled tool-only turn that published a
+ * version falls back to a one-line summary (publishedVersion); anything
+ * else collapses to just its question cards.
+ */
+/**
+ * Latest published version inside a turn's tool results, if any.
+ */
+function publishedVersion(tools: ToolPart[]): number | null {
+  let v: number | null = null
+  for (const p of tools) {
+    const n = toolNameOf(p)
+    if ((n === "preview_composition" || n === "render_video") && p.state === "output-available") {
+      const out = p.output as { version?: unknown } | null
+      if (out && typeof out.version === "number") v = out.version
+    }
+  }
+  return v
+}
+
+function AssistantBubble({
+  message: m,
+  firstOfGroup,
+  streaming,
+  actionsOpen,
+  onAnswer,
+}: {
+  message: UIMessage
+  firstOfGroup: boolean
+  streaming: boolean
+  /**
+   * Whether this turn's question cards are still answerable: only the
+   * latest assistant turn. Older cards render answered/disabled so a tap
+   * can't re-send an already-handled question into a new turn (the
+   * "accept shows again for a bit" ghost).
+   */
+  actionsOpen: boolean
+  onAnswer: (text: string) => void
+}) {
+  const text = assistantText(m)
+  const reasoning = reasoningText(m)
+  const tools = toolPartsOf(m)
+  const asks = tools.filter((p) => {
+    const n = toolNameOf(p)
+    return (n === "ask_user" || n === "request_approval") && p.state === "output-available"
+  })
+  const hasVisible = text.length > 0 || reasoning.length > 0 || tools.length > 0 || asks.length > 0
+  // Settled turn, tools ran, model wrote no words: never leave a bare
+  // header — the version rail already moved, so say so in one line.
+  const published = !streaming && !text ? publishedVersion(tools) : null
+  if (!hasVisible) {
+    if (!streaming) return null
+    return (
+      <div className="msg-in flex min-w-0 max-w-full flex-col gap-1" aria-live="polite">
+        {firstOfGroup && (
+          <span className="flex items-center gap-1.5">
+            <span className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+              <Sparkles className="size-3" />
+            </span>
+            <span className="text-[11px] font-semibold tracking-[-0.01em]">SlyxUp</span>
+          </span>
+        )}
+        <div className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">
+          <Loader2 className="size-3 animate-spin text-primary" />
+          Thinking…
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div
+      className={cn(
+        "msg-in flex min-w-0 max-w-full flex-col gap-1.5",
+        !firstOfGroup && "-mt-1.5"
+      )}
+    >
+      {firstOfGroup && (
+        <span className="flex items-center gap-1.5">
+          <span className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+            <Sparkles className="size-3" />
+          </span>
+          <span className="text-[11px] font-semibold tracking-[-0.01em]">SlyxUp</span>
+        </span>
+      )}
+      <ActivityLine parts={tools} />
+      {reasoning && <ReasoningBlock text={reasoning} streaming={streaming} />}
+      {published != null && (
+        <div className="break-words text-sm leading-relaxed">
+          Saved as v{published} — it&apos;s on stage now. Tell me what to change next.
+        </div>
+      )}
+      {text && (
+        <div className="break-words text-sm leading-relaxed">
+          <RichText text={text} />
+          {streaming && (
+            <span aria-hidden className="ml-0.5 inline-block h-3.5 w-[7px] animate-pulse rounded-[2px] bg-primary/70 align-[-2px]" />
+          )}
+        </div>
+      )}
+      {asks.map((p, i) => (
+        <AskBlock
+          key={p.toolCallId ?? i}
+          output={p.output}
+          disabled={!actionsOpen}
+          answered={!actionsOpen}
+          onAnswer={onAnswer}
+        />
+      ))}
+    </div>
+  )
 }
 
 function AgentThread({
@@ -343,7 +517,6 @@ function AgentThread({
   const [input, setInput] = useState("")
   const fileRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
   const seenArtifacts = useRef(new Set<string>())
@@ -362,18 +535,48 @@ function AgentThread({
   }, [])
   useEffect(autosize, [input, autosize])
 
+  /**
+   * Memoized transport: the old code rebuilt `DefaultChatTransport` on
+   * every render (capturing a stale auth token), so an expired session
+   * failed every later send with a generic fetch error. The per-request
+   * hook below re-reads the token fresh on each send.
+   */
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: `${API}/api/agent/chat`,
+        body: { projectId: serverProjectId, conversationId },
+        prepareSendMessagesRequest: ({ body, messages, trigger, messageId }) => {
+          const headers: Record<string, string> = {}
+          const token = getAuthToken()
+          if (token) headers.Authorization = `Bearer ${token}`
+          // NOTE: the returned body is sent AS-IS — the SDK does not merge
+          // messages/trigger back in. Dropping them 400s the chat route
+          // (Zod: messages required). Always forward them.
+          // The server rebuilds full history from storage (dedupe by id),
+          // so resending the whole thread — base64 images included — on
+          // every turn only burns request bytes and Worker parse/validate
+          // CPU. The last 3 turns carry everything the server needs.
+          const tail = Array.isArray(messages) ? messages.slice(-3) : messages
+          return {
+            body: {
+              projectId: serverProjectId,
+              conversationId,
+              ...(body ?? {}),
+              messages: tail,
+              trigger,
+              messageId,
+            },
+            headers,
+          }
+        },
+      }),
+    [serverProjectId, conversationId]
+  )
+
   const chat = useChat({
     messages: initialMessages,
-    transport: new DefaultChatTransport({
-      api: `${API}/api/agent/chat`,
-      headers: (() => {
-        const h: Record<string, string> = {}
-        const token = getAuthToken()
-        if (token) h.Authorization = `Bearer ${token}`
-        return h
-      })(),
-      body: { projectId: serverProjectId, conversationId },
-    }),
+    transport,
     onError: (e) => console.error(JSON.stringify({ msg: "agent-chat-error", err: String(e) })),
   })
 
@@ -394,14 +597,27 @@ function AgentThread({
     if (!pending) inFlight.current = false
   }, [pending])
 
-  const filesFor = useCallback(
-    (): FileUIPart[] =>
-      attachments
-        .filter((a) => a.dataUrl.startsWith("data:image/"))
-        .slice(0, 3)
-        .map((a) => ({ type: "file" as const, mediaType: a.type || "image/png", url: a.dataUrl })),
-    [attachments]
-  )
+  /**
+   * Reference images, downscaled BEFORE send. The old code attached the
+   * original data URLs (up to 2.5 MB → ~3.3 MB base64 each): they were
+   * persisted to D1, re-sent every turn and re-serialized on every model
+   * step — a major share of the Worker's CPU budget and the reason long
+   * chats got slower and then died.
+   */
+  const filesFor = useCallback(async (): Promise<FileUIPart[]> => {
+    const out: FileUIPart[] = []
+    for (const a of attachments
+      .filter((x) => x.dataUrl.startsWith("data:image/"))
+      .slice(0, 3)) {
+      try {
+        const url = await downscaleDataUrl(a.dataUrl)
+        out.push({ type: "file" as const, mediaType: "image/jpeg", url })
+      } catch {
+        /* skip unreadable attachments */
+      }
+    }
+    return out
+  }, [attachments])
 
   // Auto-send the composer's opening prompt exactly once.
   const autoSent = useRef(false)
@@ -413,19 +629,27 @@ function AgentThread({
     // StrictMode's double-invoked effect the prop is still the old prompt
     // on the second pass and used to send it a second time.
     autoSent.current = true
-    const files = filesFor()
-    void chat
-      .sendMessage(files.length > 0 ? { text: initialPrompt, files } : { text: initialPrompt })
-      .catch(() => {
+    void (async () => {
+      try {
+        const files = await filesFor()
+        await chat.sendMessage(
+          files.length > 0 ? { text: initialPrompt, files } : { text: initialPrompt }
+        )
+      } catch {
         autoSent.current = false
-      })
+      }
+    })()
     onPromptSent()
   }, [initialPrompt, chat.messages.length, chat.status, chat, onPromptSent, filesFor])
 
   useEffect(() => {
+    // Follows the stream chunk-by-chunk (messages identity changes per
+    // chunk), not just per message — otherwise a long reply streams
+    // below the fold while the user stares at stale content up top.
     if (!stickRef.current) return
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-  }, [chat.messages.length, pending])
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [chat.messages, pending])
 
   // Bridge published previews into the local version rail + player.
   useEffect(() => {
@@ -450,13 +674,17 @@ function AgentThread({
     const value = (text ?? input).trim()
     if (!value || pending || inFlight.current) return
     inFlight.current = true
-    const files = filesFor()
-    void chat
-      .sendMessage(files.length > 0 ? { text: value, files } : { text: value })
-      .catch(() => {
-        inFlight.current = false
-      })
     setInput("")
+    void (async () => {
+      try {
+        const files = await filesFor()
+        await chat.sendMessage(
+          files.length > 0 ? { text: value, files } : { text: value }
+        )
+      } catch {
+        inFlight.current = false
+      }
+    })()
   }
 
   const starters = ["Neon countdown intro", "Lower third for interviews", "Earnings chart reveal"]
@@ -471,16 +699,16 @@ function AgentThread({
         onScroll={onScroll}
         role="log"
         aria-live="polite"
-        aria-label="Conversation"
-        className="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto scrollbar-chat px-4 py-4 text-left"
+        aria-label="Messages"
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto scrollbar-chat px-3 py-2.5 text-left"
       >
         {chat.messages.length === 0 && !pending && !initialPrompt && (
-          <div className="msg-in flex flex-col items-center gap-1.5 rounded-2xl border border-dashed px-6 py-8 text-center">
-            <span className="flex size-10 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-accent text-primary-foreground shadow-lg shadow-primary/25">
+          <div className="msg-in flex flex-col items-center gap-1 rounded-2xl border border-dashed px-5 py-6 text-center">
+            <span className="flex size-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
               <Sparkles className="size-4" />
             </span>
-            <p className="mt-1 text-[13px] font-semibold">Describe the clip or the change</p>
-            <p className="max-w-xs text-[12px] text-muted-foreground">
+            <p className="mt-1 text-sm font-semibold">Describe the clip or the change</p>
+            <p className="max-w-xs text-[13px] text-muted-foreground">
               I inspect the project first, then edit, validate and preview — each change saves as a
               new version.
             </p>
@@ -500,10 +728,12 @@ function AgentThread({
         )}
         {chat.messages.map((m, idx) => {
           const firstOfGroup = idx === 0 || chat.messages[idx - 1]?.role !== m.role
+          const isLast = idx === chat.messages.length - 1
+          const streamingThis = pending && isLast
           return m.role === "user" ? (
             <div
               key={m.id}
-              className="msg-in max-w-[85%] self-end break-words rounded-2xl rounded-tr-md bg-primary px-3.5 py-2 text-[13px] text-primary-foreground shadow-md shadow-primary/20"
+              className="msg-in max-w-[85%] self-end break-words rounded-2xl rounded-tr-md bg-primary px-3.5 py-2 text-sm text-primary-foreground"
             >
               {m.parts.filter((p) => p.type === "file").length > 0 && (
                 <span className="mb-1.5 flex gap-1.5">
@@ -530,49 +760,27 @@ function AgentThread({
                 ))}
             </div>
           ) : (
-            <div
+            <AssistantBubble
               key={m.id}
-              className={cn(
-                "msg-in flex min-w-0 max-w-full flex-col gap-1",
-                !firstOfGroup && "-mt-1.5"
-              )}
-            >
-              {firstOfGroup && (
-                <span className="flex items-center gap-1.5">
-                  <span className="flex size-5 items-center justify-center rounded-full bg-gradient-to-br from-primary to-accent text-primary-foreground">
-                    <Sparkles className="size-3" />
-                  </span>
-                  <span className="text-[11px] font-semibold tracking-[-0.01em]">SlyxUp</span>
-                </span>
-              )}
-              <ActivityLine parts={toolPartsOf(m)} />
-              {assistantText(m) && (
-                <div className="break-words text-[13px] leading-relaxed">
-                  <RichText text={assistantText(m)} />
-                </div>
-              )}
-              {toolPartsOf(m)
-                .filter((p) => {
-                  const n = toolNameOf(p)
-                  return (n === "ask_user" || n === "request_approval") && p.state === "output-available"
-                })
-                .map((p, i) => (
-                  <AskBlock
-                    key={p.toolCallId ?? i}
-                    output={p.output}
-                    disabled={pending}
-                    onAnswer={send}
-                  />
-                ))}
-            </div>
+              message={m}
+              firstOfGroup={firstOfGroup}
+              streaming={streamingThis}
+              actionsOpen={isLast && !pending}
+              onAnswer={send}
+            />
           )
         })}
-        {pending && chat.messages[chat.messages.length - 1]?.role !== "assistant" && (
-          <div className="msg-in flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground" aria-live="polite">
-            <Loader2 className="size-3 animate-spin text-primary" />
-            Thinking…
-          </div>
-        )}
+        {pending &&
+          (chat.messages.length === 0 ||
+            chat.messages[chat.messages.length - 1]?.role !== "assistant") && (
+            <div
+              className="msg-in flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground"
+              aria-live="polite"
+            >
+              <Loader2 className="size-3 animate-spin text-primary" />
+              Thinking…
+            </div>
+          )}
         {chat.error && (
           <div className="msg-in flex flex-col gap-2 rounded-2xl border border-destructive/40 bg-destructive/5 p-3 text-[12px] shadow-lg">
             <span className="flex items-center gap-1.5 font-medium text-destructive">
@@ -591,11 +799,10 @@ function AgentThread({
             </div>
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
 
-      <div className="px-4 pb-4">
-        <div className="rounded-[20px] border bg-card shadow-sm transition-all duration-300 focus-within:border-primary/50 focus-within:shadow-[0_0_36px_-12px_var(--color-primary)]">
+      <div className="px-2.5 pb-2.5">
+        <div className="rounded-2xl border bg-card transition-colors focus-within:border-primary/50">
           {attachments.length > 0 && (
             <div className="flex gap-1.5 overflow-x-auto px-3 pt-2.5">
               {attachments.map((a) => (
@@ -630,11 +837,11 @@ function AgentThread({
               }
             }}
             rows={1}
-            placeholder={pending ? "Working… press Stop to interrupt" : "Ask for a change… (Enter sends, Shift+Enter for a new line)"}
-            aria-label="Ask the agent"
-            className="max-h-[120px] w-full min-w-0 resize-none bg-transparent px-3.5 pb-1 pt-2.5 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground"
+            placeholder={pending ? "Working… press Stop to interrupt" : "Describe the change… (Enter sends)"}
+            aria-label="Message"
+            className="max-h-[120px] w-full min-w-0 resize-none bg-transparent px-3 pb-1 pt-2 text-base leading-relaxed outline-none placeholder:text-muted-foreground sm:text-sm"
           />
-          <div className="flex items-center gap-0.5 px-2 pb-2">
+          <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
             <Button
               type="button"
               variant="ghost"
@@ -653,8 +860,8 @@ function AgentThread({
               disabled={pending ? false : !input.trim()}
               onClick={pending ? () => chat.stop() : () => send()}
               className={cn(
-                "size-8 shrink-0 cursor-pointer rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/25 transition-all duration-200 hover:bg-primary/90 hover:shadow-primary/40 disabled:cursor-default disabled:shadow-none",
-                pending && "bg-destructive text-destructive-foreground shadow-destructive/25 hover:bg-destructive/90 hover:shadow-destructive/40"
+                "size-8 shrink-0 cursor-pointer rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-default disabled:opacity-50",
+                pending && "bg-destructive hover:bg-destructive/90"
               )}
             >
               {pending ? <Square className="size-3.5" /> : <Send className="size-3.5" />}
@@ -674,11 +881,6 @@ function AgentThread({
             e.target.value = ""
           }}
         />
-        {!pending && (
-          <p className="mt-1.5 text-center text-[10px] text-muted-foreground/70">
-            Enter sends · Shift+Enter for a new line
-          </p>
-        )}
       </div>
     </>
   )
@@ -798,7 +1000,11 @@ export function AgentChatCard({
   useEffect(() => {
     let live = true
     if (!agentConfigured()) {
-      setBootError("Backend not configured — start it with pnpm dev.")
+      setBootError(
+        IS_PROD
+          ? "The AI service isn't configured — try again in a moment."
+          : "Backend URL isn't set — add VITE_API_URL, then reload."
+      )
       return
     }
     if (sid) return
@@ -808,12 +1014,12 @@ export function AgentChatCard({
         if (!live) return
         setEnsuring(false)
         if (id) setSid(id)
-        else setBootError("You're offline — start the backend (pnpm dev) to chat with AI.")
+        else setBootError(backendDownCopy())
       })
       .catch(() => {
         if (live) {
           setEnsuring(false)
-          setBootError("Couldn't reach the backend.")
+          setBootError(backendDownCopy())
         }
       })
     return () => {
@@ -892,6 +1098,13 @@ export function AgentChatCard({
     }
   }, [sid])
 
+  /**
+   * Every entry point into a new chat funnels through here, so this ref is
+   * the one place that has to be synchronous: clearing the composer's text is
+   * a render away, which leaves a window where a second click, Enter, or
+   * Enter-then-click still sees the old value and starts a second
+   * conversation.
+   */
   const openConversation = async (id: string) => {
     if (!sid || id === activeId) return
     setListWarning(null)
@@ -904,13 +1117,6 @@ export function AgentChatCard({
     }
   }
 
-  /**
-   * Every entry point into a new chat funnels through here, so this ref is
-   * the one place that has to be synchronous: clearing the composer's text is
-   * a render away, which leaves a window where a second click, Enter, or
-   * Enter-then-click still sees the old value and starts a second
-   * conversation.
-   */
   const creating = useRef(false)
 
   const createConversation = async (firstMessage?: string) => {
@@ -985,8 +1191,8 @@ export function AgentChatCard({
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="flex items-center gap-2 border-b px-4 py-2.5">
-        <span className="flex size-6 items-center justify-center rounded-full bg-gradient-to-br from-primary to-accent text-primary-foreground shadow-md shadow-primary/25 ring-1 ring-primary/30">
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <span className="flex size-6 items-center justify-center rounded-full bg-primary text-primary-foreground">
           <Sparkles className="size-3.5" />
         </span>
         <span className="text-[13px] font-semibold tracking-[-0.01em]">SlyxUp</span>
@@ -1039,8 +1245,57 @@ export function AgentChatCard({
       </div>
 
       {bootError ? (
-        <div className="flex flex-1 items-center justify-center p-6 text-center text-[12px] text-muted-foreground">
-          {bootError}
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+          <span className="flex size-10 items-center justify-center rounded-2xl border border-destructive/30 bg-destructive/10">
+            <TriangleAlert className="size-4 text-destructive" />
+          </span>
+          <p className="max-w-xs text-[12px] leading-relaxed text-muted-foreground">{bootError}</p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-1 h-8 text-[12px]"
+            onClick={() => {
+              setBootError(null)
+              setEnsuring(false)
+              // Re-run the ensure step by clearing the sid when it was never set,
+              // otherwise just re-list.
+              if (!sid) {
+                setEnsuring(true)
+                onEnsureServerProject()
+                  .then((id) => {
+                    setEnsuring(false)
+                    if (id) setSid(id)
+                    else setBootError(backendDownCopy())
+                  })
+                  .catch(() => {
+                    setEnsuring(false)
+                    setBootError(backendDownCopy())
+                  })
+              } else {
+                setListed(false)
+                listAgentConversations(sid)
+                  .then((cs) => {
+                    setListed(true)
+                    setConversations(cs)
+                    if (cs.length > 0) {
+                      const latest = cs[0]!
+                      setActiveId(latest.id)
+                      loadAgentMessages(sid, latest.id)
+                        .then(setInitial)
+                        .catch(() => setInitial([]))
+                    } else {
+                      setInitial([])
+                    }
+                  })
+                  .catch(() => {
+                    setListed(true)
+                    setBootError(backendDownCopy())
+                  })
+              }
+            }}
+          >
+            Retry connection
+          </Button>
         </div>
       ) : sid && activeId && initial ? (
         <AgentThread
@@ -1108,11 +1363,11 @@ function NewChatComposer({
   }
 
   return (
-    <div className="px-4 pb-4 pt-4">
+    <div className="px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-4 sm:px-4">
       <p className="pb-3 text-[12px] text-muted-foreground">
         Describe your clip — pick a length and shape, clips run at most 15 seconds.
       </p>
-      <div className="rounded-[20px] border bg-card shadow-sm transition-all duration-300 focus-within:border-primary/50 focus-within:shadow-[0_0_36px_-12px_var(--color-primary)]">
+      <div className="rounded-2xl border bg-card transition-colors focus-within:border-primary/50">
         <textarea
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -1126,10 +1381,10 @@ function NewChatComposer({
           disabled={!sid || starting}
           placeholder="Describe your clip… (Enter sends, Shift+Enter for a new line)"
           aria-label="Start chatting"
-          className="max-h-[120px] w-full resize-none bg-transparent px-3.5 pb-1 pt-2.5 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground"
+          className="max-h-[120px] w-full resize-none bg-transparent px-3 pb-1 pt-2 text-base leading-relaxed outline-none placeholder:text-muted-foreground sm:text-sm"
         />
-        <div className="flex flex-wrap items-center gap-1.5 px-2 pb-2">
-          <span className="pl-1.5 text-[11px] text-muted-foreground">Length</span>
+        <div className="flex items-center gap-1.5 overflow-x-auto px-2 pb-2">
+          <span className="shrink-0 pl-1.5 text-[11px] text-muted-foreground">Length</span>
           {DURATIONS.map((n) => (
             <button
               key={n}
@@ -1138,7 +1393,7 @@ function NewChatComposer({
               aria-pressed={secs === n}
               title={`${n} seconds`}
               className={cn(
-                "cursor-pointer rounded-full border px-2.5 py-1 text-[11px] font-medium tabular-nums transition-all duration-200 active:scale-95",
+                "shrink-0 cursor-pointer rounded-full border px-2.5 py-1 text-[11px] font-medium tabular-nums transition-all duration-200 active:scale-95",
                 secs === n
                   ? "border-primary bg-primary text-primary-foreground shadow-md shadow-primary/25"
                   : "text-muted-foreground hover:border-primary/60 hover:text-foreground"
@@ -1147,7 +1402,7 @@ function NewChatComposer({
               {n}s
             </button>
           ))}
-          <div className="mx-1 hidden h-4 w-px bg-border min-[420px]:block" />
+          <div className="mx-1 hidden h-4 w-px shrink-0 bg-border min-[420px]:block" />
           {FORMATS.map((f) => {
             const Icon = formatIcon(f)
             return (
@@ -1158,7 +1413,7 @@ function NewChatComposer({
                 aria-pressed={format === f}
                 title={`${f} aspect ratio`}
                 className={cn(
-                  "flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium tabular-nums transition-all duration-200 active:scale-95",
+                  "flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium tabular-nums transition-all duration-200 active:scale-95",
                   format === f
                     ? "border-primary bg-primary text-primary-foreground shadow-md shadow-primary/25"
                     : "text-muted-foreground hover:border-primary/60 hover:text-foreground"
@@ -1169,13 +1424,13 @@ function NewChatComposer({
               </button>
             )
           })}
-          <div className="flex-1" />
+          <div className="min-w-2 flex-1" />
           <Button
             size="icon"
             disabled={!sid || !value.trim() || starting}
             onClick={send}
             aria-label="Send message"
-            className="size-8 cursor-pointer rounded-full shadow-lg shadow-primary/25 transition-all duration-200 hover:shadow-primary/40 disabled:cursor-default disabled:shadow-none"
+            className="size-9 shrink-0 cursor-pointer rounded-full shadow-lg shadow-primary/25 transition-all duration-200 hover:shadow-primary/40 disabled:cursor-default disabled:shadow-none sm:size-8"
           >
             {starting ? (
               <Loader2 className="size-3.5 animate-spin" />

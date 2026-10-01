@@ -395,8 +395,8 @@ export async function snapshotVersion(
   await ctx.db.insert(versions).values({
     projectId: ctx.projectId,
     versionNo: next,
-    note: opts.note?.slice(0, 500),
-    reply: opts.reply?.slice(0, 500),
+    note: opts.note?.slice(0, 500) ?? null,
+    reply: opts.reply?.slice(0, 500) ?? null,
     motionJson: artifact,
   })
   await ctx.db
@@ -455,15 +455,24 @@ export async function getConversation(
   return row
 }
 
-export async function loadMessages(ctx: AgentContext): Promise<StoredMessage[]> {
+export async function loadMessages(
+  ctx: AgentContext,
+  limit = 30
+): Promise<StoredMessage[]> {
   await requireProject(ctx)
+  // Bounded: unbounded history is what blew the Worker's CPU budget —
+  // every stored message (base64 images, full-code tool snapshots) is
+  // re-serialized on every model step. The route prunes further.
   const rows = await ctx.db
     .select()
     .from(messages)
     .where(eq(messages.conversationId, ctx.conversationId))
-    .orderBy(asc(messages.createdAt))
+    .orderBy(desc(messages.createdAt))
+    .limit(limit)
     .all()
-  return rows.map((r) => ({ id: r.id, role: r.role, parts: r.parts }))
+  return rows
+    .reverse()
+    .map((r) => ({ id: r.id, role: r.role, parts: r.parts }))
 }
 
 export async function appendMessage(

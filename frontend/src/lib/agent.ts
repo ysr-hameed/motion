@@ -27,10 +27,12 @@ function headers(): Record<string, string> {
  */
 const AGENT_TIMEOUT_MS = 20_000
 
-const TIMEOUT_MESSAGE = "The backend didn't respond — check that it's running."
+const TIMEOUT_MESSAGE = import.meta.env.PROD
+  ? "The AI service didn't respond — check your connection, then retry."
+  : "The backend didn't respond — make sure `pnpm dev` is running, then retry."
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  if (!API) throw new Error("Backend not configured")
+  if (!API) throw new Error(import.meta.env.PROD ? "AI service not configured" : "Backend not configured")
   const ctrl = new AbortController()
   const onAbort = () => ctrl.abort()
   if (init?.signal) {

@@ -282,12 +282,12 @@ export function ClipPlayer({
         )}
       </div>
 
-      <div className="flex items-center gap-2 border-t border-white/10 bg-black/60 px-3 py-2.5 backdrop-blur">
+      <div className="flex min-w-0 items-center gap-2 border-t border-white/10 bg-black/60 px-3 py-2.5 backdrop-blur">
         <button
           type="button"
           onClick={toggle}
           aria-label={playing ? "Pause" : "Play"}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105 active:scale-95 sm:size-8"
         >
           {playing ? (
             <Pause className="size-4" />
@@ -306,7 +306,7 @@ export function ClipPlayer({
           onChange={(e) => seek(Number(e.target.value))}
           aria-label="Seek"
           className={cn(
-            "h-1 flex-1 cursor-pointer appearance-none rounded-full bg-white/20",
+            "h-1 w-full min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-white/20",
             "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none",
             "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white",
             "[&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]:border-0",

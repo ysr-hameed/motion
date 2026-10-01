@@ -24,7 +24,7 @@ const PLANS = [
     name: "Pro",
     price: "$19",
     per: "per month",
-    cta: "Go Pro",
+    cta: "Start 7-day trial",
     action: () => navigate("/signup"),
     featured: true,
     features: [
@@ -57,44 +57,44 @@ const PLANS = [
 
 export function Pricing() {
   return (
-    <section id="pricing" className="scroll-mt-20 py-20 sm:py-28">
+    <section id="pricing" className="scroll-mt-20 border-t bg-muted/50 py-16 sm:py-24">
       <div className="mx-auto max-w-6xl px-4">
         <SectionHeading
           eyebrow="Pricing"
-          title="Pays for itself in one video"
+          title="Simple plans that scale"
           sub="Start free. Upgrade when your upload schedule demands it."
         />
-        <div className="mt-12 grid gap-4 lg:grid-cols-3">
+        <div className="mx-auto mt-10 grid max-w-4xl gap-3 lg:grid-cols-3">
           {PLANS.map((p) => (
             <article
               key={p.name}
               className={cn(
-                "relative flex flex-col rounded-3xl border bg-card p-7 transition-all duration-300 hover:-translate-y-1",
-                p.featured && "border-primary shadow-xl shadow-primary/10"
+                "relative flex flex-col rounded-2xl border bg-card p-6",
+                p.featured && "border-primary/40 shadow-lg shadow-primary/10"
               )}
             >
               {p.featured && (
-                <Badge className="absolute -top-3 left-1/2 -translate-x-1/2">
+                <Badge className="absolute -top-2.5 left-1/2 -translate-x-1/2">
                   Most popular
                 </Badge>
               )}
-              <h3 className="text-base font-bold">{p.name}</h3>
+              <h3 className="text-sm font-semibold">{p.name}</h3>
               <p className="mt-2 flex items-baseline gap-2">
-                <span className="font-display text-4xl font-bold">
+                <span className="text-4xl font-semibold tracking-tight tabular-nums">
                   {p.price}
                 </span>
                 <span className="text-sm text-muted-foreground">{p.per}</span>
               </p>
-              <ul className="mt-6 flex flex-1 flex-col gap-2.5">
+              <ul className="mt-5 flex flex-1 flex-col gap-2">
                 {p.features.map((f) => (
                   <li key={f} className="flex items-start gap-2 text-sm">
                     <Check className="mt-0.5 size-4 shrink-0 text-primary" />
-                    {f}
+                    <span className="text-muted-foreground">{f}</span>
                   </li>
                 ))}
               </ul>
               <Button
-                className="mt-7 w-full"
+                className="mt-6 w-full"
                 variant={p.featured ? "default" : "outline"}
                 onClick={p.action}
               >
@@ -102,11 +102,10 @@ export function Pricing() {
               </Button>
             </article>
           ))}
-        <p className="mt-8 text-center text-sm text-muted-foreground">
-          Free plan covers personal projects · Cancel in one click, keep your
-          clips · No credit card to start.
-        </p>
         </div>
+        <p className="mt-6 text-center text-[13px] text-muted-foreground">
+          Cancel anytime and keep your clips · No credit card to start
+        </p>
       </div>
     </section>
   )

@@ -23,10 +23,11 @@ test("a missing import is a blocking lint error", () => {
   assert.match(gw, /if \(!fixed\.advanced\)/)
 })
 
-test("code that is still broken is never returned", () => {
-  // It has to throw, not fall through to a return of broken source.
+test("code that is still broken is reported, never silently shipped", () => {
+  // Remaining blockers are re-checked after the loop and surfaced as
+  // warnings on the result — the caller can see the file still fails.
   assert.match(gw, /const remaining = blockingIssues\(/)
-  assert.match(gw, /if \(remaining\.length > 0\) \{[\s\S]*?throw new Error\(/)
+  assert.match(gw, /warnings: remaining\.map/)
   // A pass that made no progress is reported as such, not mistaken for a fix.
   assert.match(gw, /advanced: false/)
 })

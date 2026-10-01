@@ -1,8 +1,8 @@
 import { Hono } from "hono"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { getDb } from "../lib/db"
 import { requireAuth } from "../lib/auth"
-import { attachments } from "../db/schema"
+import { attachments, projects } from "../db/schema"
 import type { Env } from "../env"
 
 const app = new Hono<Env>()
@@ -13,6 +13,7 @@ const MAX_BYTES = 2.5 * 1024 * 1024
 
 app.post("/", async (c) => {
   const db = getDb(c.env.DB)
+  const user = c.get("user")
   const form = await c.req.formData()
   const file = form.get("file")
   const projectId =
@@ -27,6 +28,17 @@ app.post("/", async (c) => {
   }
   if (file.size > MAX_BYTES) {
     return c.json({ error: "File too large (max 2.5 MB)." }, 413)
+  }
+  // The project must exist and belong to the caller — otherwise uploads
+  // land orphaned on other users' projects (or nobody's).
+  if (projectId) {
+    const [proj] = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)))
+      .limit(1)
+      .all()
+    if (!proj) return c.json({ error: "Not found" }, 404)
   }
   const key = `refs/${crypto.randomUUID()}-${file.name.replace(/[^\w.\-]+/g, "_")}`
   await c.env.REFS.put(key, file, {
@@ -58,6 +70,7 @@ app.post("/", async (c) => {
 
 app.get("/:id", async (c) => {
   const db = getDb(c.env.DB)
+  const user = c.get("user")
   const id = c.req.param("id")
   const [row] = await db
     .select()
@@ -66,6 +79,17 @@ app.get("/:id", async (c) => {
     .limit(1)
     .all()
   if (!row) return c.json({ error: "Not found" }, 404)
+  // Attachments are private to the owning project's user — UUIDs are not
+  // a substitute for an ownership check.
+  if (row.projectId) {
+    const [proj] = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(eq(projects.id, row.projectId), eq(projects.userId, user.id)))
+      .limit(1)
+      .all()
+    if (!proj) return c.json({ error: "Not found" }, 404)
+  }
   const obj = await c.env.REFS.get(row.r2Key)
   if (!obj) return c.json({ error: "File missing" }, 404)
   return new Response(obj.body, {

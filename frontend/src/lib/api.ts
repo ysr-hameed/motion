@@ -6,66 +6,20 @@ import { getAuthToken } from "./auth"
 const KEY = "motion:projects:v1"
 const API = import.meta.env.VITE_API_URL as string | undefined
 
-export interface DirectorPlan {
-  concept: string
-  beats: string[]
-  signature?: string
-  palette?: { bg: string; hero: string; accent: string }
-}
-
-export interface DirectorQuestion {
-  text: string
-  options: string[]
-}
-
-export interface RemoteDirectResult {
-  /** The composition: TypeScript, ready to mount. */
-  artifact: Artifact
-  /** One conversational sentence from the director (user's language). */
-  reply?: string
-  /** The director's read of the brief, streamed into the chat. */
-  plan?: DirectorPlan | null
-  /** Zero to two, chosen and written by the director. Never blocking. */
-  questions?: DirectorQuestion[]
-  /** Model id that served this result (for transparency). */
-  model?: string
-  /** Render advisories only — never conversation. */
-  warnings?: string[]
-}
-
 export interface DirectorStreamEvent {
-  type:
-    | "stage"
-    | "progress"
-    | "report"
-    | "text"
-    | "plan"
-    | "output"
-    | "artifact"
-    | "offers"
-    | "final"
-    | "error"
+  type: "stage" | "progress" | "text" | "output" | "final" | "error"
   stage?: string
   tokens?: number
-  notes?: string[]
   /** Model output so far — the live progress signal. */
   chars?: number
   /** Raw model text delta (live stream view). */
   delta?: string
-  /** The director's read of the brief, sent before composing starts. */
-  concept?: string
-  beats?: string[]
-  signature?: string
-  /** The composition, sent the moment it runs — before the reply. */
-  artifact?: Artifact
-  /** Conversational follow-ups from the review. */
-  offers?: string[]
   result?: unknown
   message?: string
 }
 
-/** Director streams cap at ~600s (planner 90 + writer 280 + fixer 200 + talker 90 + margin) — a hung model returns null, never hangs the UI. Must stay ABOVE the backend chain or the client aborts a healthy run and the preview stays empty. */
-const STREAM_TIMEOUT_MS = 600_000
+/** Repair streams cap at ~200s (the backend repairer budget) — a hung model returns null, never hangs the UI. */
+const STREAM_TIMEOUT_MS = 220_000
 
 /** Plain JSON calls (projects mirror) cap at 20s. */
 const FETCH_TIMEOUT_MS = 20_000
@@ -238,58 +192,6 @@ async function apiStream<T>(
   }
 }
 
-export interface DirectorImage {
-  name: string
-  dataUrl: string
-}
-
-export async function apiDirect(
-  prompt: string,
-  format: string,
-  onEvent?: (e: DirectorStreamEvent) => void,
-  images: DirectorImage[] = [],
-  projectId: string | null = null
-): Promise<RemoteDirectResult | null> {
-  if (!(await apiHealth())) return null
-  return apiStream<RemoteDirectResult>(
-    { kind: "direct", prompt, format, formatLocked: true, images, projectId },
-    onEvent
-  )
-}
-
-export async function apiRefine(
-  args: {
-    artifact: Artifact | null
-    prompt: string
-    history: Array<{ role: "ai" | "user"; text: string }>
-    note: string
-    images?: DirectorImage[]
-    projectId?: string | null
-  },
-  onEvent?: (e: DirectorStreamEvent) => void
-): Promise<{
-  reply: string
-  artifact: Artifact
-  model?: string
-  offers?: string[]
-  warnings?: string[]
-} | null> {
-  if (!(await apiHealth())) return null
-  return apiStream<{
-    reply: string
-    artifact: Artifact
-    model?: string
-    offers?: string[]
-    warnings?: string[]
-  }>({ kind: "refine", ...args }, onEvent)
-}
-
-/**
- * Render-error repair. This is the loop the JSON pipeline could not have:
- * the browser mounts the composition, so it is the only place that can
- * prove the file runs. When it throws, the real error is posted here and
- * a corrected file comes back.
- */
 export async function apiRepair(
   args: {
     code: string
@@ -308,13 +210,6 @@ export async function apiRepair(
     { kind: "repair", ...args },
     onEvent
   )
-}
-
-/** Session restore — versions table is truth, localStorage is cache. */
-export async function apiThread(
-  projectId: string
-): Promise<{ thread: Array<{ role: string; text: string }>; versions: number } | null> {
-  return apiFetch(`/api/ai/thread/${projectId}`)
 }
 
 export interface ServerProject {

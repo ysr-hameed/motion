@@ -6,7 +6,7 @@ import { applyEdits, coerceOps } from "../agents/edit-ops"
 import { blockingIssues, describeIssues, lintComposition } from "../code-lint"
 import { hasDefaultExport } from "../code-block"
 import type { AgentContext } from "./context"
-import { requireProject } from "./context"
+import { ProjectAccessError, requireProject } from "./context"
 import {
   COMPOSITION_PATH,
   assertSafePath,
@@ -115,7 +115,7 @@ export function buildTools(ctx: AgentContext) {
         try {
           re = regex ? new RegExp(pattern, "i") : new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
         } catch {
-          throw new Error(`Invalid regex: ${pattern}`)
+          return { ok: false as const, pattern, error: `Invalid regex: ${pattern.slice(0, 100)}` }
         }
         const hits: Array<{ path: string; line: number; text: string }> = []
         for (const f of files) {
@@ -144,7 +144,7 @@ export function buildTools(ctx: AgentContext) {
         const safe = assertSafePath(path)
         try {
           await readFileContent(ctx, safe)
-          throw new Error(`File already exists: ${safe} — use edit_file to modify it.`)
+          return { ok: false as const, path: safe, error: `File already exists: ${safe} — use edit_file to modify it.` }
         } catch (err) {
           if (err instanceof Error && !err.message.startsWith("File not found")) throw err
         }
@@ -190,7 +190,14 @@ export function buildTools(ctx: AgentContext) {
         const current = await readFileContent(ctx, safe)
         const parsed = coerceOps(ops ?? [])
         if (parsed.length === 0 && !instruction) {
-          throw new Error("Provide `ops` (preferred) or a precise `instruction`.")
+          return {
+            ok: false as const,
+            path: safe,
+            applied: 0,
+            misses: [],
+            error: "Provide `ops` (preferred) or a precise `instruction`.",
+            hint: "Copy `find` text verbatim from read_file, 1-8 ops.",
+          }
         }
         let next = current
         let strategy = "ops"
@@ -252,6 +259,53 @@ export function buildTools(ctx: AgentContext) {
           applied: parsed.length - misses.length,
           strategy,
           ...(misses.length > 0 ? { partialMisses: misses } : {}),
+        }
+      },
+    }),
+
+    write_composition: tool({
+      description:
+        "Replace the ENTIRE main composition (src/Composition.tsx) with new full-file content. " +
+        "Use it for first creation on a fresh project and for redesign/remake/start-over requests — " +
+        "anywhere 8 surgical ops cannot express the change. You MUST call read_file first (keep imports, " +
+        "canvas shape and the default export valid). The result is gated exactly like edit_file: " +
+        "default export + static lint must pass or the write is rejected with reasons. " +
+        "When NOT to use: small tweaks (use edit_file), new side files (use create_file).",
+      inputSchema: z.object({
+        content: z
+          .string()
+          .min(200)
+          .max(120000)
+          .describe("Complete new file content for src/Composition.tsx"),
+      }),
+      execute: async ({ content }) => {
+        if (!hasDefaultExport(content)) {
+          return {
+            ok: false as const,
+            path: COMPOSITION_PATH,
+            applied: 0,
+            misses: ["replacement would remove the default export"],
+            hint: "Keep `export default function Composition` in the new file.",
+          }
+        }
+        const blocking = blockingIssues(lintComposition(content))
+        if (blocking.length > 0) {
+          return {
+            ok: false as const,
+            path: COMPOSITION_PATH,
+            applied: 0,
+            misses: blocking.map((i) => `[${i.code}] ${i.message}`),
+            hint: "The replacement does not parse. Fix the flagged issues and retry.",
+          }
+        }
+        const res = await writeFileContent(ctx, COMPOSITION_PATH, content)
+        return {
+          ok: true as const,
+          path: res.path,
+          bytes: res.bytes,
+          lines: content.split("\n").length,
+          applied: 1,
+          strategy: "rewrite",
         }
       },
     }),
@@ -402,10 +456,27 @@ export function buildTools(ctx: AgentContext) {
         const code = await readFileContent(ctx, COMPOSITION_PATH)
         const blocking = blockingIssues(lintComposition(code))
         if (blocking.length > 0) {
-          throw new Error(`Cannot preview: blocking errors remain: ${blocking.map((i) => i.message).join("; ").slice(0, 400)}`)
+          // Structured, not thrown: the error-recovery loop reads this and
+          // repairs instead of dying with "An error occurred".
+          return {
+            ok: false as const,
+            blocking: blocking.map((i) => `[${i.code}] ${i.message}`),
+            error: `Cannot preview: blocking errors remain: ${blocking.map((i) => i.message).join("; ").slice(0, 400)}`,
+          }
         }
-        const { versionNo, artifact, durationClamped } = await snapshotVersion(ctx, { note, reply: note })
-        if (artifact.kind !== "code") throw new Error("Snapshot failed")
+        let snap: Awaited<ReturnType<typeof snapshotVersion>>
+        try {
+          snap = await snapshotVersion(ctx, { note, reply: note })
+        } catch (err) {
+          return {
+            ok: false as const,
+            error: `Couldn't save the version — retry previewing: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`,
+          }
+        }
+        const { versionNo, artifact, durationClamped } = snap
+        if (artifact.kind !== "code") {
+          return { ok: false as const, error: "Snapshot failed — retry previewing." }
+        }
         return {
           ok: true as const,
           version: versionNo,
@@ -428,10 +499,25 @@ export function buildTools(ctx: AgentContext) {
         const code = await readFileContent(ctx, COMPOSITION_PATH)
         const blocking = blockingIssues(lintComposition(code))
         if (blocking.length > 0) {
-          throw new Error(`Cannot render: fix blocking errors first: ${blocking.map((i) => i.message).join("; ").slice(0, 400)}`)
+          return {
+            ok: false as const,
+            blocking: blocking.map((i) => `[${i.code}] ${i.message}`),
+            error: `Cannot render: fix blocking errors first: ${blocking.map((i) => i.message).join("; ").slice(0, 400)}`,
+          }
         }
-        const { versionNo, artifact, durationClamped } = await snapshotVersion(ctx, { note: "Render snapshot" })
-        if (artifact.kind !== "code") throw new Error("Snapshot failed")
+        let snap: Awaited<ReturnType<typeof snapshotVersion>>
+        try {
+          snap = await snapshotVersion(ctx, { note: "Render snapshot" })
+        } catch (err) {
+          return {
+            ok: false as const,
+            error: `Couldn't save the version — retry: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`,
+          }
+        }
+        const { versionNo, artifact, durationClamped } = snap
+        if (artifact.kind !== "code") {
+          return { ok: false as const, error: "Snapshot failed — retry." }
+        }
         return {
           ok: true as const,
           version: versionNo,
@@ -526,7 +612,9 @@ export function buildTools(ctx: AgentContext) {
       execute: async ({ assetId, usage }) => {
         const rows = await listAttachments(ctx)
         const found = rows.find((a) => a.id === assetId)
-        if (!found) throw new Error(`Asset not found: ${assetId}. Call search_assets for valid ids.`)
+        if (!found) {
+          return { ok: false as const, assetId, error: `Asset not found: ${assetId}. Call search_assets for valid ids.` }
+        }
         return {
           ok: true as const,
           id: found.id,
@@ -545,7 +633,9 @@ export function buildTools(ctx: AgentContext) {
       execute: async ({ assetId }) => {
         const rows = await listAttachments(ctx)
         const found = rows.find((a) => a.id === assetId)
-        if (!found) throw new Error(`Asset not found: ${assetId}`)
+        if (!found) {
+          return { ok: false as const, assetId, error: `Asset not found: ${assetId}` }
+        }
         return { ok: true as const, id: found.id, name: found.name, mime: found.mime, size: found.size, url: `/api/uploads/${found.id}` }
       },
     }),
@@ -605,10 +695,13 @@ export function buildTools(ctx: AgentContext) {
 }
 
 /**
- * Universal observability: every tool call logs duration + outcome, and
- * every failure logs the full error server-side (never secrets, never
- * file contents). A tool that fails in production must leave a trace —
- * the client only ever sees the message, the log keeps the cause.
+ * Universal observability + failure containment: every tool call logs
+ * duration + outcome, every failure logs server-side — and NO expected
+ * failure ever kills the turn with a throw. A thrown tool error used to
+ * surface in chat as "Updating the animation: An error occurred" and
+ * could abort the whole run; now the model gets a structured
+ * {ok:false, error} result it can repair from, and the loop survives.
+ * Only the ownership boundary (ProjectAccessError) still throws.
  */
 function withLogging<T extends Record<string, { execute?: unknown }>>(
   projectId: string,
@@ -637,7 +730,11 @@ function withLogging<T extends Record<string, { execute?: unknown }>>(
             err: String(err)?.slice(0, 800),
           })
         )
-        throw err
+        if (err instanceof ProjectAccessError) throw err
+        return {
+          ok: false as const,
+          error: (err instanceof Error ? err.message : String(err)).slice(0, 500),
+        }
       }
     }) as (...args: never[]) => Promise<unknown>
   }

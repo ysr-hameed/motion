@@ -81,6 +81,9 @@ app.post("/", zValidator("json", createSchema), async (c) => {
   const db = getDb(c.env.DB)
   const user = c.get("user")
   const body = c.req.valid("json")
+  // Send every NOT NULL column explicitly — never depend on DB-level
+  // defaults, so a database migrated on an older schema revision still
+  // accepts the row instead of 500ing on a missing default.
   const [row] = await db
     .insert(projects)
     .values({
@@ -90,9 +93,9 @@ app.post("/", zValidator("json", createSchema), async (c) => {
       format: body.format,
       style: body.style ?? "Auto",
       durationSecs: body.durationSecs ?? 5,
-      vibe: body.vibe,
-      ...(body.design ? { design: body.design } : {}),
-      ...(body.exportSettings ? { exportSettings: body.exportSettings } : {}),
+      vibe: body.vibe ?? null,
+      design: body.design ?? { bg: "#09090b", fg: "#ffffff", align: "center" },
+      exportSettings: body.exportSettings ?? { quality: "1080p", fps: 30, container: "MP4" },
       status: "draft",
     })
     .returning()
@@ -201,8 +204,8 @@ app.post("/:id/versions", zValidator("json", versionSchema), async (c) => {
     .values({
       projectId: id,
       versionNo: next,
-      note: body.note,
-      reply: body.reply,
+      note: body.note ?? null,
+      reply: body.reply ?? null,
       motionJson: body.motionJson ?? null,
     })
     .returning()

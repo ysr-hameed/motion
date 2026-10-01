@@ -49,23 +49,23 @@ function Item({
 }) {
   const panelId = `faq-panel-${index}`
   return (
-    <div className="rounded-3xl border bg-card px-6 transition-colors">
+    <div className="rounded-2xl border bg-card px-5 transition-colors">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={panelId}
-        className="flex w-full items-center justify-between gap-4 py-5 text-left"
+        className="flex w-full items-center justify-between gap-4 py-4 text-left"
       >
-        <span className="text-sm font-bold">{q}</span>
+        <span className="text-sm font-medium">{q}</span>
         <span
           aria-hidden
           className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary transition-transform",
+            "flex size-7 shrink-0 items-center justify-center rounded-lg bg-secondary transition-transform",
             open && "rotate-45 bg-primary text-primary-foreground"
           )}
         >
-          <Plus className="size-4" />
+          <Plus className="size-3.5" />
         </span>
       </button>
       <div
@@ -86,7 +86,7 @@ function Item({
 export function Faq() {
   const [open, setOpen] = useState(0)
   return (
-    <section id="faq" className="scroll-mt-20 bg-muted/40 py-20 sm:py-28">
+    <section id="faq" className="scroll-mt-20 border-t bg-muted/50 py-16 sm:py-24">
       <div className="mx-auto max-w-3xl px-4">
         <SectionHeading
           eyebrow="FAQ"

@@ -54,7 +54,10 @@ app.route("/api/motion", motion)
 
 app.notFound((c) => c.json({ error: "Not found" }, 404))
 app.onError((err, c) => {
-  console.error(JSON.stringify({ msg: "unhandled", err: String(err) }))
+  // D1/Drizzle wraps the real failure in `cause` — log it, or every DB
+  // error looks like an identical "Failed query" with no actionable detail.
+  const cause = (err as { cause?: unknown }).cause
+  console.error(JSON.stringify({ msg: "unhandled", err: String(err), cause: String(cause ?? "").slice(0, 500) }))
   return c.json({ error: "Something went wrong" }, 500)
 })
 

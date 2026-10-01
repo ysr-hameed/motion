@@ -35,16 +35,16 @@ interface PromptBoxProps {
 }
 
 /**
- * Shared prompt composer — prompt box with glow, typewriter examples,
- * real file picker, voice dictation, format picker and Enter-to-generate.
- * Reuse anywhere (landing, studio).
+ * Shared prompt composer — one input that starts every video.
+ * Used on the landing page and in Projects. Submitting opens the
+ * editor, where the first version is rendered.
  */
 export function PromptBox({
   id,
   onGenerate,
   examples = PROMPT_EXAMPLES,
   formats = FORMATS,
-  placeholder = "Describe your clip…",
+  placeholder = "Describe the clip you want to make…",
   showHint = true,
   autoFocus = false,
   attachments = [],
@@ -67,12 +67,11 @@ export function PromptBox({
     const el = taRef.current
     if (!el) return
     el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 192)}px`
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }
 
   useEffect(autosize, [value])
 
-  // typewriter: cycles example prompts while the box is empty + idle
   useEffect(() => {
     if (
       value ||
@@ -115,6 +114,7 @@ export function PromptBox({
   }, [value, focused, examples])
 
   const showTyping = !value && !focused && examples.length > 0
+  const canSubmit = value.trim().length > 0
 
   const submit = () => {
     const prompt = value.trim()
@@ -125,9 +125,15 @@ export function PromptBox({
 
   return (
     <div id={id} className="w-full scroll-mt-24">
-      {/* light glow */}
-      <div className="rounded-[22px] border border-primary/25 bg-card p-1.5 shadow-[0_0_70px_-18px_var(--color-primary)] transition-all duration-300 focus-within:border-primary/50 focus-within:shadow-[0_0_100px_-18px_var(--color-primary),0_0_45px_-10px_var(--color-primary)]">
-        <div className="relative rounded-[19px] bg-card p-1.5">
+      <div
+        className={cn(
+          "rounded-2xl border bg-card shadow-sm transition-all",
+          focused
+            ? "border-primary/50 ring-2 ring-primary/15"
+            : "border-border hover:border-muted-foreground/30"
+        )}
+      >
+        <div className="relative">
           <textarea
             ref={taRef}
             value={value}
@@ -144,12 +150,12 @@ export function PromptBox({
             autoFocus={autoFocus}
             placeholder={showTyping ? "" : placeholder}
             aria-label="Describe your clip"
-            className="max-h-48 w-full resize-none bg-transparent px-3 pb-1.5 pt-2.5 text-base outline-none placeholder:text-muted-foreground"
+            className="max-h-40 w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-base leading-relaxed outline-none placeholder:text-muted-foreground sm:text-[15px]"
           />
           {showTyping && (
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-x-0 top-0 px-3 pb-1.5 pt-2.5 text-left text-base text-muted-foreground"
+              className="pointer-events-none absolute inset-x-0 top-0 px-4 pb-1 pt-3.5 text-left text-base text-muted-foreground sm:text-[15px]"
             >
               {typed}
               <span className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[3px] animate-pulse bg-primary" />
@@ -157,16 +163,16 @@ export function PromptBox({
           )}
 
           {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-1.5 pb-1.5">
+            <div className="flex flex-wrap gap-1.5 px-3 pb-2">
               {attachments.map((a) => (
                 <span
                   key={a.id}
-                  className="flex items-center gap-1.5 rounded-xl border bg-background py-0.5 pl-0.5 pr-1.5"
+                  className="flex items-center gap-1.5 rounded-lg border bg-background py-0.5 pl-0.5 pr-1.5"
                 >
                   <img
                     src={a.dataUrl}
                     alt={a.name}
-                    className="size-8 rounded-lg object-cover"
+                    className="size-8 rounded-md object-cover"
                   />
                   <span className="max-w-32">
                     <span className="block truncate text-[11px] font-medium">
@@ -180,7 +186,7 @@ export function PromptBox({
                     type="button"
                     onClick={() => onRemoveAttachment?.(a.id)}
                     aria-label={`Remove ${a.name}`}
-                    className="flex size-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    className="flex size-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   >
                     <X className="size-3" />
                   </button>
@@ -202,12 +208,12 @@ export function PromptBox({
               e.target.value = ""
             }}
           />
-          <div className="flex items-center gap-1 px-1.5 pb-0.5">
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-2 px-3 pb-3">
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="size-8 rounded-full"
+              className="size-8"
               aria-label="Attach reference image"
               onClick={() => fileRef.current?.click()}
             >
@@ -219,7 +225,7 @@ export function PromptBox({
                 variant="ghost"
                 size="icon"
                 className={cn(
-                  "size-8 rounded-full",
+                  "size-8",
                   voice.listening && "bg-destructive/10 text-destructive"
                 )}
                 aria-label={voice.listening ? "Stop dictation" : "Voice input"}
@@ -228,7 +234,7 @@ export function PromptBox({
                 <Mic />
               </Button>
             )}
-            <div className="mx-1 hidden h-4 w-px bg-border min-[420px]:block" />
+            <div className="mx-1 hidden h-4 w-px bg-border min-[480px]:block" />
             <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Aspect ratio">
               {formats.map((f) => {
                 const Icon = formatIcon(f)
@@ -241,10 +247,10 @@ export function PromptBox({
                     title={`${f} aspect ratio`}
                     onClick={() => setFormat(f)}
                     className={cn(
-                      "flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums transition-colors",
+                      "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium tabular-nums transition-colors",
                       format === f
-                        ? "bg-secondary text-secondary-foreground"
-                        : "text-muted-foreground hover:text-foreground"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     )}
                   >
                     <Icon className="size-3" />
@@ -253,7 +259,7 @@ export function PromptBox({
                 )
               })}
             </div>
-            <div className="mx-1 hidden h-4 w-px bg-border min-[420px]:block" />
+            <div className="mx-1 hidden h-4 w-px bg-border min-[480px]:block" />
             <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Clip length">
               {DURATIONS.map((n) => (
                 <button
@@ -264,10 +270,10 @@ export function PromptBox({
                   title={`${n} seconds`}
                   onClick={() => setSecs(n)}
                   className={cn(
-                    "cursor-pointer rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums transition-colors",
+                    "rounded-md px-2 py-1 text-xs font-medium tabular-nums transition-colors",
                     secs === n
-                      ? "bg-secondary text-secondary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                 >
                   {n}s
@@ -277,21 +283,21 @@ export function PromptBox({
             <div className="flex-1" />
             <Button
               type="button"
-              size="icon"
-              aria-label="Generate clip"
-              disabled={!value.trim()}
+              aria-label="Create clip"
+              disabled={!canSubmit}
               onClick={submit}
-              className="size-8 shadow-lg shadow-primary/30"
+              className="h-8 gap-1.5 px-3.5"
             >
-              <ArrowUp />
+              <ArrowUp className="size-4" />
+              <span className="hidden sm:inline">Create</span>
             </Button>
           </div>
         </div>
       </div>
 
       {showHint && (
-        <p className="mt-3 text-center text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
-          Press Enter to generate · Shift + Enter for a new line
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          Enter to create · Shift + Enter for a new line · Opens in the editor
         </p>
       )}
     </div>

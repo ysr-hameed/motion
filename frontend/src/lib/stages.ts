@@ -91,19 +91,3 @@ export function liveStatus(progress: RunProgress | null | undefined): LiveLine |
     pct: 62,
   }
 }
-
-/**
- * The whole vocabulary, so the copy can be checked in one place. Three
- * states, no overlap, and each one maps to a thing that is observably
- * different rather than to an internal stage boundary.
- */
-export const LIVE_STATUS_VOCAB = {
-  /** Request sent, nothing back yet. */
-  waiting: "Waiting for the model",
-  /** Tokens arriving — the real count is the reassurance. */
-  writing: "Writing the animation",
-  /** Composed; checking it actually runs. */
-  fixing: "Checking it runs",
-  /** Done writing; wrapping up. */
-  wrapping: "Wrapping up",
-} as const

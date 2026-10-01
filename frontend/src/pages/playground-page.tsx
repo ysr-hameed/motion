@@ -24,19 +24,9 @@ import type { Artifact } from "@/lib/artifact"
 import { cn } from "@/lib/utils"
 
 /**
- * The waiting state, shown on the stage until there is something to play.
- *
- * It used to cycle three invented phrases on a timer — "Directing your
- * scenes…", "Composing motion layers…", "Painting preview…" — behind an
- * indeterminate bar. None of that was true, it told the user nothing, and
- * on a run that takes 90 seconds to compose it read as a stall. Now it
- * shows the real stage and a real count of what has been written.
- */
-/**
- * Stage frame sizing. Landscape fills the width; portrait and square must
- * also fit the stage *height* — a width-driven 9:16 at 400px wide is 711px
- * tall and blows out the viewport. The min() caps width by the available
- * stage height so the frame always fits without scrolling.
+ * Projects = your video library. Editor = the workspace for one video,
+ * with the assistant on the left and the preview on the right.
+ * The route is still /playground/:id — only the labels changed.
  */
 function stageFrameClass(format: string | undefined) {
   if (format === "9:16")
@@ -46,7 +36,7 @@ function stageFrameClass(format: string | undefined) {
   return "aspect-video w-full"
 }
 
-function GeneratingShimmer({
+function GeneratingCard({
   format,
   onStop,
   progress,
@@ -70,89 +60,57 @@ function GeneratingShimmer({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-white/10 bg-neutral-950",
+        "relative overflow-hidden rounded-xl border border-white/10 bg-zinc-950",
         stageFrameClass(format)
       )}
     >
-      <div aria-hidden className="absolute inset-0 bg-grid-dark" />
+      <div aria-hidden className="absolute inset-0 bg-grid-dark opacity-70" />
       <div
         aria-hidden
-        className="absolute left-1/2 top-[38%] size-72 -translate-x-1/2 -translate-y-1/2 animate-pulse rounded-full bg-primary/20 blur-3xl"
+        className="absolute left-1/2 top-1/3 size-64 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20 blur-3xl"
       />
-      {/* film edging */}
-      <div aria-hidden className="absolute inset-x-0 top-0 flex justify-between px-3 pt-2 opacity-40">
-        {Array.from({ length: 24 }).map((_, i) => (
-          <span key={i} className="h-1.5 w-2.5 rounded-[2px] bg-white/25" />
-        ))}
-      </div>
-      <div aria-hidden className="absolute inset-x-0 bottom-0 flex justify-between px-3 pb-2 opacity-40">
-        {Array.from({ length: 24 }).map((_, i) => (
-          <span key={i} className="h-1.5 w-2.5 rounded-[2px] bg-white/25" />
-        ))}
-      </div>
-      <span className="absolute left-3 top-6 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium tabular-nums text-white backdrop-blur">
+      <span className="absolute left-3 top-3 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white">
         {format}
       </span>
-      <span className="absolute right-3 top-6 rounded-full border border-primary/30 bg-primary/15 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-rose-200 backdrop-blur">
+      <span className="absolute right-3 top-3 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] tabular-nums text-zinc-300">
         {elapsed}s
       </span>
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
-        {/* equalizer mark */}
-        <span className="flex h-12 items-end gap-1.5" aria-hidden>
-          {[0.55, 0.9, 0.4, 1, 0.65].map((h, i) => (
-            <span
-              key={i}
-              className="w-2.5 rounded-full bg-gradient-to-t from-primary to-rose-300"
-              style={{
-                height: `${h * 100}%`,
-                opacity: 0.65,
-                animation: `genbar ${1.4 + i * 0.18}s ease-in-out ${i * 0.12}s infinite alternate`,
-              }}
-            />
-          ))}
-        </span>
         <div className="flex flex-col items-center gap-1">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rose-200/70">
-            SlyxUp Motion
-          </p>
-          <p
-            aria-live="polite"
-            className="text-sm font-medium tabular-nums text-white/90"
-          >
+          <p className="text-sm font-medium tabular-nums text-white" aria-live="polite">
             {line?.text ?? "Starting"}
-            {line?.detail ? ` ${line.detail}` : ""}
+            {line?.detail ? ` — ${line.detail}` : ""}
           </p>
+          <p className="text-xs text-zinc-400">Rendering version… you can stop anytime</p>
         </div>
         <div className="flex w-full max-w-56 flex-col gap-1.5">
           <div
             role="progressbar"
-            aria-label="Progress"
+            aria-label="Render progress"
             aria-valuenow={line?.pct ?? 0}
             aria-valuemin={0}
             aria-valuemax={100}
-            className="h-1 w-full overflow-hidden rounded-full bg-white/15"
+            className="h-1.5 w-full overflow-hidden rounded-full bg-white/10"
           >
             <div
-              className="h-full rounded-full bg-gradient-to-r from-primary to-rose-300 shadow-[0_0_12px_var(--color-primary)] transition-[width] duration-500"
+              className="h-full rounded-full bg-primary transition-[width] duration-500"
               style={{ width: `${line?.pct ?? 4}%` }}
             />
           </div>
-          <div className="flex justify-between text-[10px] tabular-nums text-white/40">
-            <span>Composing your cut</span>
+          <div className="flex justify-between text-[11px] tabular-nums text-zinc-500">
+            <span>Composing</span>
             <span>{line?.pct ?? 4}%</span>
           </div>
         </div>
         <button
           type="button"
           onClick={onStop}
-          className="flex cursor-pointer items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-xs font-medium text-white backdrop-blur transition-all duration-200 hover:bg-white/20 active:scale-95"
+          className="flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/10 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20"
         >
           <Square className="size-3" />
           Stop
         </button>
       </div>
-      <style>{`@keyframes genbar{from{transform:scaleY(0.3);opacity:.4}to{transform:scaleY(1);opacity:.9}}
-@media (prefers-reduced-motion: reduce){@keyframes genbar{from{transform:none;opacity:.6}to{transform:none;opacity:.6}}}`}</style>
     </div>
   )
 }
@@ -161,31 +119,29 @@ function agentFooter(t: MotionStudio): string | undefined {
   const active = t.active
   if (!active) return undefined
   const artifact = active.artifacts[active.activeVersion] as Artifact | undefined
-  // No footer until something actually exists — no placeholder export line.
   if (!artifact) return undefined
   return active.spec
-    ? `${active.spec.format} · v${active.activeVersion}`
-    : `v${active.activeVersion}`
+    ? `${active.spec.format} · Version ${active.activeVersion}`
+    : `Version ${active.activeVersion}`
 }
 
-function StatusDot({ phase }: { phase: Phase }) {
+function StatusPill({ phase }: { phase: Phase }) {
   const meta = {
-    thinking: { dot: "bg-sky-400", pulse: true, label: "Thinking" },
-    generating: { dot: "bg-amber-400", pulse: true, label: "Composing" },
-    ready: { dot: "bg-emerald-400", pulse: false, label: "Ready" },
-    idle: { dot: "bg-muted-foreground/40", pulse: false, label: "Draft" },
-  }[phase] ?? { dot: "bg-muted-foreground/40", pulse: false, label: "Draft" }
+    thinking: { dot: "bg-sky-400", pulse: true, label: "Working" },
+    generating: { dot: "bg-amber-400", pulse: true, label: "Rendering" },
+    ready: { dot: "bg-emerald-500", pulse: false, label: "Ready" },
+    idle: { dot: "bg-zinc-400", pulse: false, label: "Draft" },
+  }[phase] ?? { dot: "bg-zinc-400", pulse: false, label: "Draft" }
   return (
-    <span className="flex shrink-0 items-center" title={meta.label}>
+    <span
+      className="flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium"
+      title={meta.label}
+    >
       <span
         aria-hidden
-        className={cn(
-          "size-2 rounded-full",
-          meta.dot,
-          meta.pulse && "animate-pulse"
-        )}
+        className={cn("size-1.5 rounded-full", meta.dot, meta.pulse && "animate-pulse")}
       />
-      <span className="sr-only">{meta.label}</span>
+      {meta.label}
     </span>
   )
 }
@@ -204,8 +160,6 @@ export function PlaygroundPage({
   const [mobileTab, setMobileTab] = useState<"chat" | "preview">("chat")
   const [firstPrompt, setFirstPrompt] = useState<string | null>(null)
 
-  // Route-driven project: slug wins, else pending handoff, else most
-  // recent, else back to the dashboard. Runs once per mount.
   useEffect(() => {
     if (consumed.current) return
     consumed.current = true
@@ -252,8 +206,6 @@ export function PlaygroundPage({
   }, [navOpen])
 
   const active = t.active
-  // Preview shows ONLY composed versions — never a synthetic render.
-  // No artifact means nothing was actually made (show the honest empty card).
   const preview = (active?.artifacts[active.activeVersion] as Artifact) ?? null
 
   useEffect(() => {
@@ -274,22 +226,20 @@ export function PlaygroundPage({
     }
   }
 
-  /** Jump to the chat and focus the composer — the empty stage's CTA. */
   const goToChat = () => {
     setMobileTab("chat")
     window.setTimeout(() => {
       document
-        .querySelector<HTMLTextAreaElement>('textarea[aria-label="Ask the agent"]')
+        .querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')
         ?.focus()
     }, 60)
   }
 
   return (
     <div className="flex min-h-svh bg-background text-foreground">
-      {/* collapsible desktop sidebar — rail, never fully hidden */}
       <aside
         className={cn(
-          "sticky top-0 hidden h-svh shrink-0 overflow-hidden border-r border-border/50 transition-all duration-300 lg:block",
+          "sticky top-0 hidden h-svh shrink-0 overflow-hidden border-r transition-all duration-300 lg:block",
           sideOpen ? "w-72" : "w-16"
         )}
       >
@@ -309,7 +259,6 @@ export function PlaygroundPage({
         </div>
       </aside>
 
-      {/* mobile slide-over */}
       <div
         aria-hidden={!navOpen}
         className={cn(
@@ -326,11 +275,11 @@ export function PlaygroundPage({
         />
         <aside
           className={cn(
-            "absolute left-0 top-0 h-full w-72 max-w-[85vw] overflow-hidden rounded-r-2xl bg-background shadow-2xl transition-transform duration-300 ease-out",
+            "absolute left-0 top-0 h-full w-72 max-w-[85vw] overflow-hidden bg-background shadow-2xl transition-transform duration-300 ease-out",
             navOpen ? "translate-x-0" : "-translate-x-full"
           )}
           role="dialog"
-          aria-label="Studio menu"
+          aria-label="Projects menu"
         >
           <StudioSidebar
             onNew={() => {
@@ -349,29 +298,28 @@ export function PlaygroundPage({
         </aside>
       </div>
 
-      {/* main column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 px-3.5 backdrop-blur-xl sm:px-4">
+        <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/90 px-3.5 backdrop-blur-xl sm:px-4">
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon"
             className="size-8 lg:hidden"
             onClick={() => setNavOpen(true)}
-            aria-label="Open studio menu"
+            aria-label="Open projects menu"
           >
             <PanelLeft />
           </Button>
           <button
             type="button"
             onClick={() => navigate("/studio")}
-            aria-label="Back to all projects"
-            title="Back to all projects"
-            className="hidden size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
+            aria-label="Back to projects"
+            title="Back to projects"
+            className="hidden size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
           >
             <ArrowLeft className="size-4" />
           </button>
           <nav
-            className="flex min-w-0 items-center gap-1.5 truncate text-[13px]"
+            className="flex min-w-0 items-center gap-2 truncate text-sm"
             aria-label="Breadcrumb"
           >
             <button
@@ -379,32 +327,24 @@ export function PlaygroundPage({
               onClick={() => navigate("/studio")}
               className="hidden shrink-0 font-medium text-muted-foreground transition-colors hover:text-foreground sm:block"
             >
-              All projects
+              Projects
             </button>
             <span aria-hidden className="hidden shrink-0 text-border sm:block">
               /
             </span>
-            <span className="truncate font-semibold tracking-[-0.01em]">
-              {active ? active.name : "Playground"}
+            <span className="truncate font-semibold">
+              {active ? active.name : "Editor"}
             </span>
-            {active && <StatusDot phase={active.phase} />}
+            {active && <StatusPill phase={active.phase} />}
           </nav>
           <div className="flex-1" />
-          {active?.designedBy && (
-            <span
-              title={`Composed by ${active.designedBy}`}
-              className="hidden shrink-0 text-[11px] tabular-nums text-muted-foreground md:block"
-            >
-              by {active.designedBy.split("/").pop()}
-            </span>
-          )}
           {active && (
             <button
               type="button"
               onClick={shareProject}
-              aria-label={shared ? "Link copied" : "Copy link to project"}
-              title={shared ? "Link copied" : "Copy link to project"}
-              className="hidden size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
+              aria-label={shared ? "Link copied" : "Copy link to video"}
+              title={shared ? "Link copied" : "Copy link to video"}
+              className="hidden size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
             >
               {shared ? (
                 <Check className="size-4 text-primary" />
@@ -423,28 +363,27 @@ export function PlaygroundPage({
           )}
         </header>
 
-        <main className="flex flex-1 flex-col p-3 sm:p-4">
+        <main className="flex min-h-0 flex-1 flex-col p-2 sm:p-3">
           {!active ? (
-            <div className="flex flex-col items-center gap-1.5 rounded-2xl border border-dashed px-6 py-14 text-center">
-              <span className="flex size-10 items-center justify-center rounded-full bg-secondary">
+            <div className="flex flex-col items-center gap-1 rounded-2xl border border-dashed px-6 py-12 text-center">
+              <span className="flex size-10 items-center justify-center rounded-xl bg-secondary">
                 <FolderOpen className="size-4 text-muted-foreground" />
               </span>
-              <p className="text-[13px] font-semibold">No project open</p>
-              <p className="max-w-xs text-[13px] text-muted-foreground">
-                Generate a clip from the dashboard to open it here.
+              <p className="text-sm font-semibold">No video open</p>
+              <p className="max-w-xs text-sm text-muted-foreground">
+                Create a video from Projects to open it in the editor.
               </p>
               <Button size="sm" className="mt-1.5 h-8" asChild>
-                <a href="/studio">Go to dashboard</a>
+                <a href="/studio">Go to projects</a>
               </Button>
             </div>
           ) : (
-            /* chat + preview side by side, always — no full-page takeover */
-            <div className="flex h-[calc(100svh-5rem)] flex-col gap-3 xl:h-[calc(100svh-4.5rem)] xl:flex-row">
-              <div className="sticky top-14 z-20 -mx-3 bg-background/90 px-3 py-2 backdrop-blur-xl xl:hidden">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 xl:h-[calc(100svh-4.5rem)] xl:flex-row xl:overflow-hidden">
+              <div className="shrink-0 xl:hidden">
                 <div
                   role="tablist"
-                  aria-label="Playground view"
-                  className="grid shrink-0 grid-cols-2 gap-1 rounded-full border bg-card p-1"
+                  aria-label="Editor view"
+                  className="grid shrink-0 grid-cols-2 gap-1 rounded-xl border bg-card p-1"
                 >
                 {(
                   [
@@ -459,7 +398,7 @@ export function PlaygroundPage({
                     type="button"
                     onClick={() => setMobileTab(tab.id)}
                     className={cn(
-                      "flex items-center justify-center gap-1.5 rounded-full py-1.5 text-[13px] font-medium transition-colors",
+                      "flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[13px] font-medium transition-colors",
                       mobileTab === tab.id
                         ? "bg-primary text-primary-foreground"
                         : "text-muted-foreground hover:text-foreground"
@@ -467,18 +406,30 @@ export function PlaygroundPage({
                   >
                     <tab.icon className="size-4" />
                     {tab.label}
+                    {tab.id === "preview" && active.versions > 0 && (
+                      <span
+                        className={cn(
+                          "rounded-md px-1.5 py-px text-[10px] font-semibold tabular-nums",
+                          mobileTab === tab.id
+                            ? "bg-white/20 text-white"
+                            : "bg-muted text-muted-foreground"
+                        )}
+                      >
+                        v{active.activeVersion}
+                      </span>
+                    )}
                   </button>
                 ))}
                 </div>
               </div>
 
-              {/* left: AI bar */}
               <section
-                aria-label="AI chat"
+                aria-label="Chat"
                 className={cn(
-                  "min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card",
-                  mobileTab === "chat" ? "flex" : "hidden",
-                  "xl:flex xl:h-full xl:w-96 xl:flex-none"
+                  "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card",
+                  "h-[calc(100dvh-10rem)] min-h-[420px]",
+                  mobileTab === "chat" ? "flex flex-1" : "hidden",
+                  "xl:flex xl:h-full xl:min-h-0 xl:w-[400px] xl:max-w-[440px] xl:flex-none"
                 )}
               >
                 {active && (
@@ -499,15 +450,56 @@ export function PlaygroundPage({
                 )}
               </section>
 
-              {/* right: screening room */}
               <section
                 aria-label="Preview"
                 className={cn(
-                  "min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950 p-3 shadow-2xl sm:p-4",
-                  mobileTab === "preview" ? "flex" : "hidden",
-                  "xl:flex xl:h-full xl:flex-1"
+                  "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-950",
+                  "h-[calc(100dvh-10rem)] min-h-[420px]",
+                  mobileTab === "preview" ? "flex flex-1" : "hidden",
+                  "xl:flex xl:h-full xl:min-h-0 xl:flex-1"
                 )}
               >
+                <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2">
+                  <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-400">
+                    <MonitorPlay className="size-3.5" />
+                    Preview
+                  </span>
+                  <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white">
+                    {active.spec?.format ?? "16:9"}
+                  </span>
+                  <div className="flex-1" />
+                  {active.versions > 1 && (
+                    <div
+                      role="group"
+                      aria-label="Versions"
+                      className="flex max-w-[50vw] items-center gap-1 overflow-x-auto sm:max-w-none"
+                    >
+                      {Array.from(
+                        { length: active.versions },
+                        (_, i) => i + 1
+                      ).map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => t.setActiveVersion(v)}
+                          aria-label={`View version ${v}`}
+                          aria-current={
+                            v === active.activeVersion ? "true" : undefined
+                          }
+                          className={cn(
+                            "shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold tabular-nums transition-colors",
+                            v === active.activeVersion
+                              ? "bg-white text-zinc-950"
+                              : "bg-white/10 text-zinc-300 hover:bg-white/20 hover:text-white"
+                          )}
+                        >
+                          v{v}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-2 sm:p-3">
                 <div
                   className={cn(
                     "m-auto w-full",
@@ -516,42 +508,9 @@ export function PlaygroundPage({
                       : "max-w-3xl"
                   )}
                 >
-                  {/* version rail — only when there is something to compare */}
-                  {active.versions > 1 && (
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 pb-3">
-                      <div
-                        role="group"
-                        aria-label="Versions"
-                        className="flex max-w-full items-center gap-1 overflow-x-auto"
-                      >
-                        {Array.from(
-                          { length: active.versions },
-                          (_, i) => i + 1
-                        ).map((v) => (
-                          <button
-                            key={v}
-                            type="button"
-                            onClick={() => t.setActiveVersion(v)}
-                            aria-label={`View version ${v}`}
-                            aria-current={
-                              v === active.activeVersion ? "true" : undefined
-                            }
-                            className={cn(
-                              "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums transition-colors",
-                              v === active.activeVersion
-                                ? "bg-white text-black"
-                                : "bg-white/10 text-white/70 hover:bg-white/20 hover:text-white"
-                            )}
-                          >
-                            v{v}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
 
                   {(active.phase === "generating" || active.phase === "thinking") && (
-                    <GeneratingShimmer
+                    <GeneratingCard
                       format={active.spec?.format ?? "16:9"}
                       onStop={() => t.stopGeneration()}
                       progress={t.genProgress}
@@ -573,66 +532,42 @@ export function PlaygroundPage({
                   {active.phase !== "generating" && active.phase !== "thinking" && !preview && (
                     <div
                       className={cn(
-                        "relative m-auto w-full overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 shadow-2xl",
+                        "relative m-auto w-full overflow-hidden rounded-xl border border-white/10 bg-zinc-950",
                         stageFrameClass(active.spec?.format)
                       )}
                     >
-                      <div aria-hidden className="absolute inset-0 bg-grid-dark" />
-                      <div
-                        aria-hidden
-                        className="absolute left-1/2 top-1/2 size-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20 blur-3xl"
-                      />
-                      {/* film edging — centered, clipped, never stretched */}
-                      <div aria-hidden className="absolute inset-x-0 top-0 flex justify-center gap-1.5 overflow-hidden px-4 pt-2 opacity-40">
-                        {Array.from({ length: 40 }).map((_, i) => (
-                          <span key={i} className="h-1.5 w-2.5 shrink-0 rounded-[2px] bg-white/25" />
-                        ))}
-                      </div>
-                      <div aria-hidden className="absolute inset-x-0 bottom-0 flex justify-center gap-1.5 overflow-hidden px-4 pb-2 opacity-40">
-                        {Array.from({ length: 40 }).map((_, i) => (
-                          <span key={i} className="h-1.5 w-2.5 shrink-0 rounded-[2px] bg-white/25" />
-                        ))}
-                      </div>
-                      <span className="absolute left-3 top-6 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium tabular-nums text-white backdrop-blur">
+                      <div aria-hidden className="absolute inset-0 bg-grid-dark opacity-70" />
+                      <span className="absolute left-3 top-3 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white">
                         {active.spec?.format ?? "16:9"}
                       </span>
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
-                        <span className="relative flex size-16 items-center justify-center">
-                          <span
-                            aria-hidden
-                            className="absolute inset-0 animate-ping rounded-2xl bg-primary/20"
-                          />
-                          <span className="relative flex size-16 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-accent text-white shadow-xl shadow-primary/40 ring-1 ring-white/25">
-                            <Clapperboard className="size-7" />
-                          </span>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-5 text-center">
+                        <span className="flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+                          <Clapperboard className="size-6" />
                         </span>
                         <div className="flex flex-col items-center gap-1">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-rose-200/70">
-                            Screening room
+                          <p className="text-base font-semibold text-white">
+                            {active.versions === 0 ? "No preview yet" : "Select a version"}
                           </p>
-                          <p className="text-lg font-semibold tracking-tight text-white">
-                            {active.versions === 0 ? "Nothing here yet" : "Pick a version"}
-                          </p>
-                          <p className="max-w-xs text-[13px] leading-relaxed text-white/60">
+                          <p className="max-w-xs text-[13px] leading-relaxed text-zinc-400">
                             {active.versions === 0
-                              ? "Describe the motion in the chat — the first cut premieres on this screen."
-                              : "The first cut is done — use the version rail above to compare, or ask for a change."}
+                              ? "Describe the clip in the chat — version 1 will render here."
+                              : "Use the version buttons above to compare, or ask for a change."}
                           </p>
                         </div>
                         {active.versions === 0 ? (
                           <Button
                             size="sm"
-                            className="mt-1 h-8 cursor-pointer shadow-lg shadow-primary/30"
+                            className="mt-1 h-8"
                             onClick={goToChat}
                           >
                             <MessageSquare />
-                            Start in chat
+                            Describe your clip
                           </Button>
                         ) : (
                           <Button
                             size="sm"
                             variant="secondary"
-                            className="mt-1 h-8 cursor-pointer xl:hidden"
+                            className="mt-1 h-8 xl:hidden"
                             onClick={() => setMobileTab("chat")}
                           >
                             <MessageSquare />
@@ -643,6 +578,7 @@ export function PlaygroundPage({
                     </div>
                   )}
 
+                </div>
                 </div>
               </section>
             </div>

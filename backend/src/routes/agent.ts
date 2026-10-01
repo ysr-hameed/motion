@@ -1,12 +1,19 @@
 import { Hono } from "hono"
+import { bodyLimit } from "hono/body-limit"
 import { zValidator } from "@hono/zod-validator"
 import { z } from "zod"
-import { convertToModelMessages, type ModelMessage, type UIMessage } from "ai"
+import {
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  type ModelMessage,
+  type UIMessage,
+} from "ai"
 import { and, eq } from "drizzle-orm"
 import { requireAuth } from "../lib/auth"
 import { AiNotConfiguredError } from "../lib/ai-types"
 import { getDb } from "../lib/db"
-import { conversations, messages, projects, renderErrors } from "../db/schema"
+import { conversations, messages, projects, renderErrors, versions } from "../db/schema"
 import { createAgentContext } from "../lib/agent/context"
 import { buildAgent } from "../lib/agent/agent"
 import { buildTools } from "../lib/agent/tools"
@@ -23,6 +30,23 @@ import type { Env } from "../env"
 const app = new Hono<Env>()
 
 app.use("/*", requireAuth)
+
+/**
+ * Reject oversize payloads before JSON parse + Zod walk burn Worker CPU.
+ * The client sends at most the last 3 turns (≤3 downscaled images ≈ 2MB),
+ * so anything past 6MB is junk or abuse — 413 immediately.
+ */
+app.use(
+  "/*",
+  bodyLimit({
+    maxSize: 6 * 1024 * 1024,
+    onError: (c) =>
+      c.json(
+        { error: "Request too large — remove reference images and retry." },
+        413
+      ),
+  })
+)
 
 /** Minimal UIMessage validation — parts stay opaque (rich, never plain text). */
 const uiMessageSchema = z.object({
@@ -74,6 +98,9 @@ async function ownedConversation(
   return !!row
 }
 
+import { pruneForModel, userTextOf } from "../lib/agent/history"
+import { smalltalkReply } from "../lib/smalltalk"
+
 /**
  * Agent chat (AI SDK UIMessage stream).
  *
@@ -81,7 +108,8 @@ async function ownedConversation(
  * The SDK manages the multi-step tool loop, streaming, stop conditions and
  * tool-result routing. History persists as rich UIMessage parts (text +
  * tool calls + tool results), so reloads and conversation switches keep
- * full fidelity.
+ * full fidelity. The MODEL gets the pruned copy (pruneForModel) — same
+ * conversation, a fraction of the serialization CPU per step.
  */
 app.post("/chat", zValidator("json", chatSchema), async (c) => {
   const user = c.get("user")
@@ -119,12 +147,48 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
     ...incoming.filter((m) => m.role === "user" && !stored.some((s) => s.id === m.id)),
   ]
 
-  const modelMessages = await convertToModelMessages(uiHistory)
+  // Smalltalk short-circuit: pure chit-chat never reaches the model.
+  // Deterministic, instant, zero gateway cost — and the model can never
+  // "inspect the project" in response to a "hi". Attachments mean task
+  // context, so image-bearing turns always go through.
+  const latestUser = [...uiHistory].reverse().find((m) => m.role === "user")
+  if (latestUser) {
+    const { text, hasFiles } = userTextOf(latestUser)
+    const canned = !hasFiles ? smalltalkReply(text) : null
+    if (canned) {
+      await appendMessage(ctx, { role: "assistant", parts: [{ type: "text", text: canned }] })
+      console.log(JSON.stringify({ msg: "agent-smalltalk", projectId: body.projectId }))
+      const short = createUIMessageStream({
+        execute: ({ writer }) => {
+          const id = crypto.randomUUID()
+          writer.write({ type: "text-start", id })
+          writer.write({ type: "text-delta", id, delta: canned })
+          writer.write({ type: "text-end", id })
+        },
+      })
+      return createUIMessageStreamResponse({ stream: short })
+    }
+  }
+
+  // History conversion must never kill the turn: malformed stored parts
+  // fall back to the latest user message alone instead of 500ing.
+  let modelMessages: ModelMessage[]
+  try {
+    modelMessages = await convertToModelMessages(pruneForModel(uiHistory))
+  } catch (err) {
+    console.error(JSON.stringify({ msg: "agent-history-fallback", err: String(err) }))
+    const last = latestUser ?? uiHistory[uiHistory.length - 1]
+    modelMessages = last
+      ? await convertToModelMessages(pruneForModel([last] as UIMessage[]))
+      : []
+  }
   // Lean per-request grounding (context management): the canvas contract
   // for THIS cut plus the typeface catalogue. The full Remotion skill
   // reference is not re-sent — validate/repair tools close that loop.
+  let canvasHint: string | undefined
   try {
     const canvas = await readCanvas(ctx)
+    canvasHint = `${canvas.width}x${canvas.height} @${canvas.fps}fps, ${canvas.durationInFrames} frames`
     const { contractsFor, fontRules } = await import("../lib/remotion-guide")
     const { fontCatalogue } = await import("../lib/font-catalogue.generated")
     const preamble: ModelMessage = {
@@ -138,18 +202,36 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
   const tools = buildTools(ctx)
   const t0 = Date.now()
 
+  // Fresh project (no versions yet) → creation mode: compose the full
+  // scene in one write instead of timid placeholder tweaks. One cheap
+  // indexed count query; advisory only.
+  let freshProject = false
+  try {
+    const db = getDb(c.env.DB)
+    const existing = await db
+      .select({ versionNo: versions.versionNo })
+      .from(versions)
+      .where(eq(versions.projectId, body.projectId))
+      .limit(1)
+      .all()
+    freshProject = existing.length === 0
+  } catch {
+    /* creation flag is advisory */
+  }
+
   console.log(
     JSON.stringify({
       msg: "agent-start",
       projectId: body.projectId,
       conversationId: body.conversationId,
       history: uiHistory.length,
+      fresh: freshProject,
     })
   )
 
   let built: ReturnType<typeof buildAgent>
   try {
-    built = buildAgent(c.env, tools)
+    built = buildAgent(c.env, tools, { freshProject, canvasHint })
   } catch (err) {
     if (err instanceof Error && /not configured/i.test(err.message)) {
       return c.json({ error: "AI isn't set up on this server yet. Try again in a moment." }, 503)
@@ -166,9 +248,17 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
     })
   )
 
-  const result = built.agent.stream({
-    messages: modelMessages,
-  })
+  // Stream setup itself must not 500 the turn: a gateway hiccup here
+  // becomes a retryable JSON error, not a dead SSE connection.
+  let result: ReturnType<typeof built.agent.stream>
+  try {
+    result = built.agent.stream({
+      messages: modelMessages,
+    })
+  } catch (err) {
+    console.error(JSON.stringify({ msg: "agent-stream-failed", err: String(err) }))
+    return c.json({ error: "The AI stumbled starting up — retry and I'll pick it up." }, 502)
+  }
 
   return result.toUIMessageStreamResponse<UIMessage>({
     originalMessages: incoming,

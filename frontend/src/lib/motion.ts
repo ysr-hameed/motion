@@ -107,13 +107,6 @@ export function parseSpec(prompt: string, fallbackFormat: string): ClipSpec {
   }
 }
 
-export const REFINE_REPLIES = [
-  "Applied — re-timed the cut and saved it.",
-  "Done — adjusted easing and spacing, renders cleaner now.",
-  "On it — pushed that change through and tightened the rhythm.",
-  "Got it — rebalanced the motion around your note.",
-]
-
 const SMALLTALK: Array<{ match: RegExp; replies: string[] }> = [
   {
     match: /^(hi+|hello|hey|yo|hiya|namaste|namaskar)\b[!.\s]*$/,

@@ -22,9 +22,9 @@ FUNDAMENTAL WORKFLOW (follow it every time):
 INSPECT → UNDERSTAND → MODIFY → VALIDATE → PREVIEW → INSPECT RESULT → FIX IF NECESSARY → VERIFY → RESPOND
 
 RULES
-0. NO TOOLS FOR SMALLTALK. If the message is a greeting ("hi", "hey", "hello"), thanks, acknowledgement ("ok", "nice", "cool"), or has no actionable request, reply with ONE brief friendly text and call NO tools. Ask what they'd like to make. Never start inspecting or editing on a "hi".
-1. INSPECT BEFORE EDITING. For any modification request, first call get_project / inspect_composition / search_code / read_file. Never blindly regenerate the whole project — make targeted edits.
-2. read_file is MANDATORY before edit_file. Base every find string on what you actually read, copied verbatim including indentation.
+0. NO TOOLS FOR SMALLTALK. If the message is a greeting ("hi", "hey", "hello"), thanks, acknowledgement ("ok", "nice", "cool"), or has no actionable request, reply with ONE brief friendly text and call NO tools. Ask what they'd like to make. Never start inspecting or editing on a "hi". (Pure greetings are additionally answered by the server without you — but anything ambiguous reaches you, so still obey this.)
+1. INSPECT BEFORE EDITING. For any modification request, first call get_project / inspect_composition / search_code / read_file. Never blindly regenerate the whole project — make targeted edits. EXCEPTION: a fresh project with no versions, or a "redesign/remake/start over" request — there use write_composition for the full scene (see CREATION below).
+2. read_file is MANDATORY before edit_file AND before write_composition. Base every find string on what you actually read, copied verbatim including indentation.
 3. After every edit: validate_composition. Only call preview_composition when validation is clean.
 4. NEVER claim an edit succeeded unless the tool result confirms it (ok:true, applied>0). If ops miss, re-read and retry with corrected finds.
 5. ERROR-RECOVERY LOOP: when validation or render errors appear: get_errors or inspect_render_error → read the relevant code → edit_file → validate again → preview again. Keep repairing until clean or until you have tried 3 repair rounds, then report honestly.
@@ -36,8 +36,44 @@ RULES
 11. Your final reply is ONE short paragraph for the chat: what changed on screen, in the user's language. No code, no pipeline jargon, no "JSON"/"tool" talk.
 12. Deterministic motion only: interpolate() with extrapolateLeft/Right "clamp", random("seed") from remotion instead of Math.random, no window/document at module scope, every Sequence inside the composition length. Read width/height/fps/durationInFrames from useVideoConfig(), never hardcode 1920.
 13. LENGTH: every clip is AT MOST 15 seconds. Default to 5 seconds when the user says nothing. When creating without a stated length, ask via ask_user with exactly the options 5s, 10s, 15s — then build that length (durationInFrames = seconds × fps). If the user asks for more than 15s, build 15s and say plainly that clips cap at 15 seconds. Never plan, promise, or write a longer timeline. A stated duration or format (e.g. "(Duration: 5 seconds. Format: 9:16.)" from the composer's pickers) is FINAL: build exactly that length and canvas with NO ask_user about time or shape.
+14. CONVERSE LIKE A CHATBOT, NOT A BUILD SCRIPT. Every working turn OPENS with one short text reply BEFORE any tool call: acknowledge the request and say what you are about to do ("On it — composing your 5s countdown…"). Put a sentence of thinking-out-loud between long tool batches. ALWAYS END with a text reply — never finish a turn with bare tool calls and no words. The turn is only done when the user can read what happened.
 
-${EDIT_RULES}`
+ ${EDIT_RULES}`
+
+/**
+ * Motion-design bar. The agent kept shipping the seeded placeholder with
+ * tweaks ("basic prototype") because nothing told it what good looks
+ * like. This is the bar every cut is held to — a motion designer, not a
+ * slideshow maker.
+ */
+const DESIGN_BAR = `DESIGN BAR (every cut, no exceptions):
+- Depth in layers: a graded background (radial/linear gradient + vignette
+  + film grain via @remotion/noise or subtle opacity noise), a mid-ground
+  with real content, and a foreground (light leaks, particles, lower-third
+  accents). Never a flat solid background with centered text.
+- Kinetic typography: staggered per-word/line entrances with spring() or
+  interpolate + Easing.out, tracking/weight shifts, overshoot on the hero
+  word. Display faces come from the Fonts catalogue, never system sans.
+- Camera life: a slow 1.03–1.08x scale push or drift on the whole scene,
+  parallax between layers (background moves least).
+- Transitions between beats: TransitionSeries (fade/slide/clockWipe) or
+  masked wipes — never hard cuts inside a 5–15s clip unless the style
+  demands it.
+- Texture: vignette, subtle grain, glow (boxShadow/textShadow) on the
+  hero element. Dark scenes get rim light; light scenes get soft shadows.
+- Sound-off storytelling: every beat must read visually at 2x speed.`
+
+/** First-creation mode: there is no cut yet, so small edits are wrong. */
+const CREATION_MODE = `CREATION: this project has NO versions yet — nothing exists. Do NOT
+make small tweaks to the seeded placeholder. Compose the full scene in
+ONE write_composition call (read the placeholder first so imports and
+canvas shape stay valid), then validate_composition, fix if needed, then
+preview_composition. One creation + one preview beats ten timid edits.
+NO orientation calls on a fresh project: skip get_project,
+get_project_structure, search_code and inspect_* — the workspace holds
+only the seeded placeholder plus remotion.config.json, and the canvas
+facts are handed to you below. Every skipped inspection is seconds the
+user is not waiting.`
 
 export interface AgentBuild {
   agent: ToolLoopAgent<AgentTools>
@@ -49,21 +85,27 @@ export function buildAgent(
     AI_MODEL: string
     AI_GATEWAY_API_KEY?: string
   },
-  tools: AgentTools
+  tools: AgentTools,
+  opts?: { freshProject?: boolean; canvasHint?: string }
 ): AgentBuild {
   const key = env.AI_GATEWAY_API_KEY
   if (!key) throw new Error("AI provider is not configured (missing API key)")
   const chain = resolveModels(env.AI_MODEL)
   const modelId = chain[0]!
   const openai = createOpenAI({ baseURL: GATEWAY_BASE, apiKey: key })
+  const creation =
+    `\n\n${CREATION_MODE}` +
+    (opts?.canvasHint ? `\nCurrent canvas: ${opts.canvasHint}.` : "")
   const agent = new ToolLoopAgent({
     model: openai.chat(modelId),
-    system: SYSTEM,
+    system: opts?.freshProject ? `${SYSTEM}\n\n${DESIGN_BAR}${creation}` : `${SYSTEM}\n\n${DESIGN_BAR}`,
     tools,
-    // Multi-step tool loop with a safe ceiling: enough for
-    // inspect→edit→validate→preview→fix cycles, never infinite.
-    stopWhen: stepCountIs(25),
-    maxOutputTokens: 16000,
+    // Bounded loop: inspect→write→validate→preview→fix fits in ~8 steps.
+    // 25 let the model circle on failures until the Worker ran out of CPU
+    // (and the user out of patience) — "fix it" retries re-enter here, so
+    // each run must terminate fast on its own.
+    stopWhen: stepCountIs(14),
+    maxOutputTokens: 12000,
     temperature: 0.7,
   })
   return { agent, modelId }
