@@ -8,6 +8,7 @@ import {
   Copy,
   CreditCard,
   Download,
+  Loader2,
   LogOut,
   Monitor,
   Moon,
@@ -24,6 +25,13 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { StudioSidebar } from "@/components/studio/studio-sidebar"
 import { auth, useUser, userInitials } from "@/lib/auth"
+import {
+  formatAmount,
+  isBillingConfigured,
+  notifyBillingChanged,
+  useBilling,
+  usePlan,
+} from "@/lib/billing"
 import { navigate } from "@/lib/router"
 import {
   getThemePref,
@@ -168,6 +176,7 @@ function downloadJson(filename: string, data: unknown) {
 
 function ProfileTab() {
   const user = useUser()
+  const { name: planName } = usePlan(user?.email ?? null, user?.plan ?? "Free plan")
   const [copied, setCopied] = useState(false)
 
   if (!user) {
@@ -209,7 +218,7 @@ function ProfileTab() {
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
               <Badge variant="secondary" className="text-[11px]">
-                {user.plan}
+                {planName}
               </Badge>
               <Badge variant="outline" className="text-[11px] capitalize">
                 {user.provider}
@@ -373,35 +382,152 @@ function WorkspaceTab({ studio }: { studio: MotionStudio }) {
 
 function SubscriptionTab({ studio }: { studio: MotionStudio }) {
   const user = useUser()
+  const billing = useBilling(user?.email ?? null)
+  const [armingCancel, setArmingCancel] = useState(false)
+  const [checkoutError, setCheckoutError] = useState<string | null>(null)
+  const [paidReturn] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("billing") === "success"
+    } catch {
+      return false
+    }
+  })
 
-  const goPricing = () => {
-    navigate("/?plan=pro#pricing")
+  // Returning from Paddle checkout: refresh everything, drop the query flag.
+  useEffect(() => {
+    if (!paidReturn) return
+    notifyBillingChanged()
+    billing.refresh()
+    try {
+      window.history.replaceState({}, "", "/settings")
+    } catch {
+      /* noop */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paidReturn])
+
+  const sub = billing.subscription
+  const liveSub = sub && (sub.status === "active" || sub.status === "trialing") ? sub : null
+  const currentPlan = liveSub
+    ? billing.plans.find((p) => p.id === liveSub.planId) ?? null
+    : null
+
+  const startCheckout = async (planId: string) => {
+    setCheckoutError(null)
+    try {
+      await billing.checkout(planId)
+    } catch (e) {
+      setCheckoutError(e instanceof Error ? e.message : "Checkout failed — try again.")
+    }
+  }
+
+  const statusLabel: Record<string, string> = {
+    active: "Active",
+    trialing: "Trial",
+    past_due: "Past due",
+    paused: "Paused",
+    canceled: "Canceled",
   }
 
   return (
     <div className="flex flex-col gap-4">
+      {paidReturn && (
+        <div className="flex items-start gap-2.5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3.5">
+          <Check className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold">Payment received</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              Your plan activates automatically once confirmed — usually under a minute. This page refreshes itself.
+            </p>
+          </div>
+        </div>
+      )}
+
       <Card
         title="Current plan"
-        description="Your subscription and billing cycle."
+        description="Live from your SlyxUp billing account."
       >
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted/50 px-4 py-3.5">
-          <div className="flex items-center gap-2.5">
-            <span className="flex size-9 items-center justify-center rounded-full bg-primary/10">
-              <Zap className="size-4 text-primary" />
-            </span>
-            <div>
-              <p className="text-[13px] font-semibold">
-                {user?.plan ?? "Free plan"}
-              </p>
-              <p className="text-[11px] text-muted-foreground">
-                {user ? "Renews monthly · cancel anytime" : "Sign in to upgrade"}
-              </p>
-            </div>
+        {billing.loading ? (
+          <div className="flex items-center gap-2.5 rounded-xl bg-muted/50 px-4 py-3.5" aria-live="polite">
+            <Loader2 className="size-4 animate-spin text-primary" />
+            <p className="text-[13px] text-muted-foreground">Loading your plan…</p>
           </div>
-          <Badge className="text-[11px]">{user ? "Active" : "Sign in to activate"}</Badge>
-        </div>
+        ) : billing.error && !liveSub && billing.plans.length === 0 ? (
+          <div className="rounded-xl border border-dashed px-4 py-6 text-center">
+            <p className="text-[13px] text-muted-foreground">{billing.error}</p>
+            <Button size="sm" variant="outline" className="mt-2 h-8" onClick={billing.refresh}>
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted/50 px-4 py-3.5">
+              <div className="flex items-center gap-2.5">
+                <span className="flex size-9 items-center justify-center rounded-full bg-primary/10">
+                  <Zap className="size-4 text-primary" />
+                </span>
+                <div>
+                  <p className="text-[13px] font-semibold">
+                    {currentPlan?.name ?? "Free plan"}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {liveSub?.currentPeriodEnd
+                      ? `Renews ${new Date(liveSub.currentPeriodEnd).toLocaleDateString()} · cancel anytime`
+                      : liveSub
+                        ? "Cancel anytime"
+                        : "Free forever · upgrade for more"}
+                  </p>
+                </div>
+              </div>
+              <Badge className="text-[11px]">
+                {sub ? (statusLabel[sub.status] ?? sub.status) : "Free"}
+              </Badge>
+            </div>
+            {liveSub && !liveSub.cancelAtPeriodEnd && sub?.status === "active" && (
+              <div className="mt-3 flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={cn("h-8", !armingCancel && "text-destructive")}
+                  disabled={billing.actionBusy === "cancel"}
+                  onClick={() => {
+                    if (!armingCancel) {
+                      setArmingCancel(true)
+                      window.setTimeout(() => setArmingCancel(false), 3000)
+                      return
+                    }
+                    setArmingCancel(false)
+                    void billing.cancel().catch(() => {})
+                  }}
+                >
+                  {billing.actionBusy === "cancel" ? (
+                    <Loader2 className="animate-spin" />
+                  ) : null}
+                  {armingCancel ? "Click again to confirm" : "Cancel subscription"}
+                </Button>
+              </div>
+            )}
+            {liveSub?.cancelAtPeriodEnd && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+                <p className="text-[12px] text-amber-700 dark:text-amber-300">
+                  Cancels at period end — resubscribe anytime to keep it.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={billing.actionBusy === "resume"}
+                  onClick={() => void billing.resume().catch(() => {})}
+                >
+                  {billing.actionBusy === "resume" ? <Loader2 className="animate-spin" /> : null}
+                  Keep my plan
+                </Button>
+              </div>
+            )}
+          </>
+        )}
         <div className="mt-4 grid grid-cols-2 gap-3">
-          <Stat value={String(studio.projects.length)} label="Projects" />
+          <Stat value={String(studio.projects.length)} label="Videos" />
           <Stat
             value={String(
               studio.projects.reduce((n, p) => n + p.versions, 0)
@@ -412,26 +538,121 @@ function SubscriptionTab({ studio }: { studio: MotionStudio }) {
       </Card>
 
       <Card
-        title="Billing history"
-        description="Receipts for past payments live here."
+        title="Plans"
+        description="Real plans from SlyxUp billing — checkout opens secure Paddle payment."
       >
-        <p className="rounded-xl border border-dashed px-4 py-6 text-center text-[12px] text-muted-foreground">
-          No invoices yet.
-        </p>
+        {!isBillingConfigured() ? (
+          <p className="rounded-xl border border-dashed px-4 py-6 text-center text-[12px] text-muted-foreground">
+            Billing isn&apos;t configured on this build.
+          </p>
+        ) : billing.loading ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[0, 1].map((i) => (
+              <div key={i} className="h-36 animate-pulse rounded-xl border bg-muted/40" aria-hidden />
+            ))}
+          </div>
+        ) : billing.plans.length === 0 ? (
+          <p className="rounded-xl border border-dashed px-4 py-6 text-center text-[12px] text-muted-foreground">
+            No paid plans published yet — you&apos;re on the free plan.
+          </p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {billing.plans.map((p) => {
+              const isCurrent = liveSub?.planId === p.id
+              const busy = billing.actionBusy === p.id
+              return (
+                <article
+                  key={p.id}
+                  className={cn(
+                    "flex flex-col rounded-xl border p-4",
+                    (p.isPopular || isCurrent) && "border-primary/40"
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold">{p.name}</h3>
+                    {isCurrent ? (
+                      <Badge className="text-[10px]">Current</Badge>
+                    ) : p.isPopular ? (
+                      <Badge variant="secondary" className="text-[10px]">Popular</Badge>
+                    ) : null}
+                  </div>
+                  <p className="mt-1.5 flex items-baseline gap-1.5">
+                    <span className="text-2xl font-semibold tabular-nums">
+                      {formatAmount(p.amount, p.currency)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">/ {p.interval}</span>
+                  </p>
+                  {p.trialDays ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {p.trialDays}-day free trial included
+                    </p>
+                  ) : null}
+                  {p.features.length > 0 && (
+                    <ul className="mt-3 flex flex-1 flex-col gap-1.5">
+                      {p.features.slice(0, 5).map((f) => (
+                        <li key={f} className="flex items-start gap-1.5 text-[12px] text-muted-foreground">
+                          <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <Button
+                    size="sm"
+                    className="mt-4 h-8 w-full"
+                    variant={isCurrent ? "outline" : "default"}
+                    disabled={isCurrent || busy}
+                    onClick={() => void startCheckout(p.id)}
+                  >
+                    {busy ? <Loader2 className="animate-spin" /> : null}
+                    {isCurrent ? "Current plan" : `Upgrade to ${p.name}`}
+                  </Button>
+                </article>
+              )
+            })}
+          </div>
+        )}
+        {checkoutError && (
+          <p className="mt-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-[12px] text-destructive">
+            {checkoutError}
+          </p>
+        )}
       </Card>
 
       <Card
-        title="Upgrade"
-        description="More generations, longer clips and priority rendering."
+        title="Billing history"
+        description="Real receipts from SlyxUp billing."
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-[13px] text-muted-foreground">
-            Compare plans and pick what fits your output.
+        {billing.loading ? (
+          <div className="h-16 animate-pulse rounded-xl border bg-muted/40" aria-hidden />
+        ) : billing.invoices.length === 0 ? (
+          <p className="rounded-xl border border-dashed px-4 py-6 text-center text-[12px] text-muted-foreground">
+            No invoices yet.
           </p>
-          <Button size="sm" className="h-8" onClick={goPricing}>
-            View plans
-          </Button>
-        </div>
+        ) : (
+          <ul className="flex flex-col divide-y divide-border rounded-xl border">
+            {billing.invoices.map((inv) => (
+              <li key={inv.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-medium">
+                    {inv.invoiceNumber ?? "Invoice"}
+                  </p>
+                  <p className="text-[11px] tabular-nums text-muted-foreground">
+                    {inv.billedAt ? new Date(inv.billedAt).toLocaleDateString() : "—"}
+                  </p>
+                </div>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span className="text-[13px] font-semibold tabular-nums">
+                    {formatAmount(inv.amount, inv.currency)}
+                  </span>
+                  <Badge variant={inv.status === "paid" ? "default" : "secondary"} className="text-[10px] capitalize">
+                    {inv.status}
+                  </Badge>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
     </div>
   )

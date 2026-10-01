@@ -249,6 +249,16 @@ export function getAuthToken(): string | null {
 }
 
 export function useUser(): AuthUser | null {
+  return useAuthState().user
+}
+
+/**
+ * Session + load state. `loading` is true until the single shared
+ * restore request resolves — unlike useUser (null for both "loading"
+ * and "signed out"), this lets route guards wait instead of flashing
+ * the login page on every refresh.
+ */
+export function useAuthState(): { user: AuthUser | null; loading: boolean } {
   const [, bump] = useReducer((n: number) => n + 1, 0)
   useEffect(() => {
     userSubs.add(bump)
@@ -261,7 +271,7 @@ export function useUser(): AuthUser | null {
       window.removeEventListener(EVENT, handleAuthEvent)
     }
   }, [bump])
-  return userSnapshot ?? null
+  return { user: userSnapshot ?? null, loading: userSnapshot === undefined }
 }
 
 export function userInitials(user: Pick<AuthUser, "name">): string {

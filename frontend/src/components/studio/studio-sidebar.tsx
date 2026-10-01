@@ -16,8 +16,15 @@ import { Button } from "@/components/ui/button"
 import { Logo } from "@/components/logo"
 import { UserButton } from "@/components/user-button"
 import { useUser, userInitials } from "@/lib/auth"
+import { usePlan } from "@/lib/billing"
 import { navigate, usePathRoute } from "@/lib/router"
 import { cn } from "@/lib/utils"
+
+/** Live plan name under the account (cached, silent fallback). */
+function SidebarPlan({ email, fallback }: { email: string; fallback: string }) {
+  const { name } = usePlan(email, fallback)
+  return <>{name}</>
+}
 
 export interface SidebarProjectItem {
   id: number
@@ -450,7 +457,7 @@ export function StudioSidebar({
             <div className="min-w-0 text-left">
               <p className="truncate text-[13px] font-semibold">{user.name}</p>
               <p className="truncate text-[11px] text-muted-foreground">
-                {user.plan}
+                <SidebarPlan email={user.email} fallback={user.plan} />
               </p>
             </div>
           </div>

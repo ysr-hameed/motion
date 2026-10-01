@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button"
 import { PromptBox } from "@/components/prompt-box"
 import { StudioSidebar } from "@/components/studio/studio-sidebar"
 import { useUser } from "@/lib/auth"
+import { usePlan } from "@/lib/billing"
 import { stashPendingPrompt, type MotionStudio } from "@/lib/use-motion-studio"
 import { smalltalkReply } from "@/lib/motion"
 import { navigate } from "@/lib/router"
@@ -247,8 +248,14 @@ function ProjectListRow({
   )
 }
 
-export function StudioPage({ studio: t }: { studio: MotionStudio }) {
+/** Live plan name for the header pill (cached, silent fallback). */
+function PlanPill() {
   const user = useUser()
+  const { name } = usePlan(user?.email ?? null, user?.plan ?? "Free plan")
+  return <>{name}</>
+}
+
+export function StudioPage({ studio: t }: { studio: MotionStudio }) {
   const [navOpen, setNavOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [query, setQuery] = useState("")
@@ -396,7 +403,7 @@ export function StudioPage({ studio: t }: { studio: MotionStudio }) {
           >
             <Zap className="size-3.5 text-primary" />
             <span className="hidden min-[420px]:inline">
-              {user?.plan ?? "Free plan"}
+              <PlanPill />
             </span>
           </button>
           <label className="relative hidden items-center sm:flex">

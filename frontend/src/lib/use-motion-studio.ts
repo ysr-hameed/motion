@@ -9,10 +9,12 @@ import {
 import { filesToAttachments, type Attachment } from "@/lib/attachments"
 import {
   api,
+  accountKey,
   apiCreateProject,
   apiRecordVersion,
   apiRepair,
 } from "@/lib/api"
+import { useUser } from "@/lib/auth"
 import { reportRenderError } from "@/lib/agent"
 import { asArtifact, type Artifact } from "@/lib/artifact"
 
@@ -195,8 +197,37 @@ export function useMotionStudio() {
     setProjects(projectsRef.current)
   }
 
+  // Account-scoped library: each sign-in gets its own studio. The seed
+  // loads the legacy store; once the session resolves we move to (or
+  // migrate into) that account's key. Signing out drops back to the
+  // guest library, so accounts never see each other's videos.
+  const user = useUser()
+  const accountRef = useRef<string | null>(null)
   useEffect(() => {
-    api.saveProjects(projects)
+    const key = accountKey(user?.email)
+    if (accountRef.current === key) return
+    if (accountRef.current != null) {
+      // Leaving an account: persist what it had, then load the next one.
+      api.saveProjects(projectsRef.current, accountRef.current)
+    } else if (key !== "guest") {
+      api.migrateLegacyTo(key)
+    }
+    accountRef.current = key
+    const next = api.listProjects(key)
+    projectsRef.current = next
+    setProjects(next)
+    setActiveId(null)
+    projectId.current = next.reduce((m, p) => Math.max(m, p.id), 0) + 1
+    let m = 0
+    for (const p of next) {
+      for (const msg of p.thread ?? []) m = Math.max(m, msg.id)
+    }
+    msgId.current = m + 1
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.email])
+
+  useEffect(() => {
+    api.saveProjects(projects, accountRef.current ?? "guest")
   }, [projects])
 
   const active = projects.find((p) => p.id === activeId) ?? null

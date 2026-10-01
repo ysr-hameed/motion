@@ -4,6 +4,17 @@ import type { ProjectState } from "./use-motion-studio"
 import { getAuthToken } from "./auth"
 
 const KEY = "motion:projects:v1"
+
+/** Account-scoped library key — every sign-in gets its own studio. */
+function keyFor(account: string): string {
+  return account === "guest" ? KEY : `motion:projects:${account}:v1`
+}
+
+/** Stable account id for the project store (email, lowercased). */
+export function accountKey(email: string | null | undefined): string {
+  const e = (email ?? "").trim().toLowerCase()
+  return e ? `u:${e}` : "guest"
+}
 const API = import.meta.env.VITE_API_URL as string | undefined
 
 export interface DirectorStreamEvent {
@@ -242,11 +253,11 @@ export async function apiRecordVersion(
   })
 }
 
-/** Local persistence (used until server sync lands). */
+/** Local persistence, scoped per account (used until server sync lands). */
 export const api = {
-  listProjects(): ProjectState[] {
+  listProjects(account = "guest"): ProjectState[] {
     try {
-      const raw = localStorage.getItem(KEY)
+      const raw = localStorage.getItem(keyFor(account))
       if (!raw) return []
       const parsed = JSON.parse(raw)
       return Array.isArray(parsed) ? (parsed as ProjectState[]) : []
@@ -255,19 +266,44 @@ export const api = {
     }
   },
 
-  saveProjects(projects: ProjectState[]) {
+  saveProjects(projects: ProjectState[], account = "guest") {
     try {
-      localStorage.setItem(KEY, JSON.stringify(projects))
+      localStorage.setItem(keyFor(account), JSON.stringify(projects))
     } catch {
       try {
         const slim = projects.map((p) => ({
           ...p,
           attachments: p.attachments.map((a) => ({ ...a, dataUrl: "" })),
         }))
-        localStorage.setItem(KEY, JSON.stringify(slim))
+        localStorage.setItem(keyFor(account), JSON.stringify(slim))
       } catch {
         /* storage unavailable — session-only mode */
       }
+    }
+  },
+
+  /**
+   * One-time move of the pre-account library into the signed-in account.
+   * Returns true when something moved. Guests keep using the legacy key
+   * directly, so nothing is ever stranded.
+   */
+  migrateLegacyTo(account: string): boolean {
+    if (account === "guest") return false
+    try {
+      if (localStorage.getItem(`motion:projects:migrated:${account}`)) return false
+      const raw = localStorage.getItem(KEY)
+      const target = localStorage.getItem(keyFor(account))
+      const hasLegacy = !!raw && raw !== "[]"
+      const targetEmpty = !target || target === "[]"
+      localStorage.setItem(`motion:projects:migrated:${account}`, "1")
+      if (hasLegacy && targetEmpty) {
+        localStorage.setItem(keyFor(account), raw)
+        localStorage.removeItem(KEY)
+        return true
+      }
+      return false
+    } catch {
+      return false
     }
   },
 }
