@@ -1,17 +1,20 @@
-import path from 'node:path'
-import tailwindcss from '@tailwindcss/vite'
-import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import react from "@vitejs/plugin-react"
+import { defineConfig } from "vite"
 
-// https://vite.dev/config/
+/**
+ * The agent is reached over a WebSocket at /agents/*. Proxying it in dev makes
+ * the browser see one origin, so no CORS headers are needed in development and
+ * the dev setup matches production (where the Worker serves the built assets).
+ */
+const BACKEND = "http://localhost:8787"
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  resolve: {
-    alias: {
-      '@': path.resolve(import.meta.dirname, './src'),
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      "/agents": { target: BACKEND, ws: true, changeOrigin: true },
+      "/api": { target: BACKEND, changeOrigin: true },
     },
-    // Single React copy — @remotion/player crashes otherwise
-    // ("Invalid hook call" / null useContext in dev).
-    dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'remotion'],
   },
 })

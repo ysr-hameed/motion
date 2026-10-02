@@ -1,8 +1,8 @@
 # Local secrets — never commit. Copy to .dev.vars and fill in.
-# Vercel AI Gateway key (https://vercel.com/dashboard/.../ai-gateway).
+#
+# Vercel AI Gateway key (https://vercel.com/dashboard → AI Gateway).
 AI_GATEWAY_API_KEY=
-# Model chain (qwen only). Overrides wrangler.jsonc for `wrangler dev`.
-# Chain with comma for fallback: AI_MODEL=model-a,model-b
+
+# Model chain, comma-separated, tried in order. Overrides wrangler.jsonc for
+# local dev. Gateway model ids, e.g. alibaba/qwen3.7-flash
 AI_MODEL=alibaba/qwen3.7-flash
-# Set to "false" to require real auth even in local dev.
-ALLOW_ANON=true

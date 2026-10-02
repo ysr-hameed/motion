@@ -1,1 +1,0 @@
-ALTER TABLE `versions` ADD `motion_json` text;

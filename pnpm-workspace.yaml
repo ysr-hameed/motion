@@ -5,3 +5,14 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
+  core-js-pure: true
+
+# pnpm gates very fresh releases by default. These pins are deliberate and
+# verified, so exempt them explicitly rather than prompting on every install.
+minimumReleaseAgeExclude:
+  - "@ai-sdk/gateway@4.0.103"
+  - "@ai-sdk/mcp@2.0.66"
+  - "@ai-sdk/react@4.0.130"
+  - "ai@7.0.127"
+  - "vite@8.3.2"
+minimumReleaseAgeStrict: false

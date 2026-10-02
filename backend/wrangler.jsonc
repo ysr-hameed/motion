@@ -1,53 +1,33 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "slyxup-motion-api",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-09-27",
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "slyxup-motion",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-10-02",
   "compatibility_flags": ["nodejs_compat"],
-  // Pinned explicitly. This login can see several accounts (motion, auth,
-  // billing, prompt, soffice, plus the main Slyxup account), and without
-  // this wrangler resolves whichever it likes first — which silently
-  // targets an account that has none of the bindings below.
-  "account_id": "ff5e7d6dcf3eb86cd796263fbb3f0872",
-  // NOTE (2026-10-01): this account is on the Workers Free plan, which
-  // rejects "limits" AND caps requests at ~10ms CPU — the agent chat
-  // endpoint streams a multi-step model+tool loop (~100ms+ CPU), so
-  // /api/agent/chat cannot succeed until you upgrade to Workers Paid
-  // ($5/mo, https://dash.cloudflare.com/.../workers/plans) and restore:
-  //   "limits": { "cpu_ms": 30000 },
-  // Everything else in this deploy (credit diet, history caps, static
-  // imports) lowers per-request CPU as far as code alone can.
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1
+
+  // The chat loop, its transcript and stream state all live inside this
+  // Durable Object. That is the whole point of the rewrite: a request no
+  // longer carries the conversation, so Worker CPU per request stays flat
+  // however long the thread gets.
+  "durable_objects": {
+    "bindings": [{ "name": "Chat", "class_name": "Chat" }]
   },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Chat"] }],
+
+  "observability": { "enabled": true },
+
+  // The Worker serves the built frontend, so the browser sees ONE origin in
+  // production — no CORS anywhere. Build the frontend before deploying the
+  // Worker. run_worker_first keeps /agents/* on the Worker.
+  "assets": {
+    "directory": "../frontend/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+
   "vars": {
-    "AI_PROVIDER": "gateway",
-    "AI_MODEL": "alibaba/qwen3.7-flash,google/gemini-2.0-flash",
-    "AUTH_API_URL": "https://auth-slyxup-com.auth-0f4.workers.dev",
-    "BILLING_PROJECT_ID": "b52a7938-ec8d-4fdb-87fe-03d8d1d7ff4c",
-    "BILLING_PUBLISHABLE_KEY": "pk_daed7bd1745655af1ae217c59b848f00c8ccedda006dc429",
-    "ALLOW_ANON": "false",
-    "CORS_ORIGINS": "https://motion.slyxup.com,https://motion-frontend.pages.dev"
-  },
-  "kv_namespaces": [
-    {
-      "binding": "SESSIONS",
-      "id": "4ff813c4bf074537a472f1638f21c647"
-    }
-  ],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "slyxup-motion-db",
-      "database_id": "5873882e-b3fe-4cb2-acd1-4a779473ca00",
-      "migrations_dir": "drizzle"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "REFS",
-      "bucket_name": "slyxup-motion-refs"
-    }
-  ]
+    // Comma-separated fallback chain, tried in order. Vercel AI Gateway ids.
+    "AI_MODEL": "alibaba/qwen3.7-flash"
+  }
 }

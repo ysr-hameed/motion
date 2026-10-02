@@ -1,32 +1,26 @@
 {
   "name": "@slyxup-motion/backend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local",
+    "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "types": "wrangler types",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply DB --local",
-    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
-    "check": "tsc --noEmit",
-    "test": "node --import tsx --test 'test/*.test.ts'",
-    "skills:sync": "node scripts/sync-remotion-skills.mjs"
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc --noEmit",
+    "cf-typegen": "wrangler types",
+    "check": "pnpm run typecheck"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^2.0.131",
-    "@hono/zod-validator": "^0.9.1",
-    "@slyxup/core": "^3.0.1",
-    "ai": "^5.0.269",
-    "drizzle-orm": "^0.45.3",
-    "hono": "^4.13.9",
-    "zod": "^3.25.76"
+    "@ai-sdk/openai": "^4.0.83",
+    "@cloudflare/ai-chat": "^0.12.0",
+    "agents": "^0.24.0",
+    "ai": "^7.0.127",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260927.1",
-    "drizzle-kit": "^0.31.11",
-    "typescript": "^5.9.2",
-    "wrangler": "^4.128.0"
+    "@types/node": "^24.0.0",
+    "typescript": "~5.9.3",
+    "wrangler": "^4.145.0"
   }
 }
