@@ -612,6 +612,34 @@ function displayUserText(text: string): string {
   return text.replace(SPEC_SUFFIX_RE, "").trim()
 }
 
+/**
+ * Narration the model writes to ITSELF, not to the user.
+ *
+ * The prompt says to say nothing between tool calls, but a small model
+ * narrates anyway — and a real transcript was full of it: "The write was
+ * rejected because I didn't include the full file content", "Let me provide
+ * it properly", "I see the issue - I need to provide the COMPLETE file
+ * content". That is private working notes shown in the user's transcript,
+ * and the worst part is it was often confidently WRONG about the cause.
+ *
+ * Hidden from the transcript only. The text stays in the conversation and
+ * still reaches the model on the next step, where it belongs.
+ */
+const SELF_NOTE_RE =
+  /^(?:well[,. ]|ok(?:ay)?[,. ]|so[,. ]|hmm|right[,. ]|let me\b|i (?:need|should|will|see|now)\b|the write (?:was|keeps|is)\b|i'?m going to\b|now i'?ll\b|first,?\b)/i
+
+/** True when a message is the model talking to itself, not to the user. */
+function isSelfNote(text: string): boolean {
+  const t = text.trim()
+  if (!t) return true
+  // Only ever hides short working notes. A long message is a real answer,
+  // and hiding it would be worse than showing a bit of process.
+  if (t.length > 320) return false
+  if (!SELF_NOTE_RE.test(t)) return false
+  // It still has to read like process, not an explanation of the result.
+  return /\b(write|writing|rejected|content|file|read|try|again|properly|truncated|issue|provide|provide)\b/i.test(t)
+}
+
 function assistantText(msg: UIMessage): string {  return msg.parts
     .filter((p) => p.type === "text")
     .map((p) => (p as { text?: string }).text ?? "")
@@ -700,7 +728,10 @@ function AssistantBubble({
    */
   isLast: boolean
 }) {
-  const text = assistantText(m)
+  // Working notes addressed to itself are dropped from the transcript. They
+  // remain in the message for the model to read next turn.
+  const rawText = assistantText(m)
+  const text = isSelfNote(rawText) ? "" : rawText
   const reasoning = reasoningText(m)
   const tools = toolPartsOf(m)
   const asks = tools.filter((p) => {
@@ -708,6 +739,10 @@ function AssistantBubble({
     return (n === "ask_user" || n === "request_approval") && p.state === "output-available"
   })
   const hasVisible = text.length > 0 || reasoning.length > 0 || tools.length > 0 || asks.length > 0
+  // A step whose only content was self-directed working notes shows nothing
+  // at all. Rendering the "That step finished without a visible reply" card
+  // for it would be alarming noise about a step that is behaving correctly.
+  const onlySelfNote = !hasVisible && rawText.length > 0
   // Settled turn, tools ran, model wrote no words: never leave a bare
   // header — the version rail already moved, so say so in one line.
   const published = !streaming && !text && isLast ? publishedVersion(tools) : null
@@ -719,6 +754,7 @@ function AssistantBubble({
   const settledSilent =
     isLast && !streaming && !text && published == null && asks.length === 0 && tools.length > 0
   if (!hasVisible) {
+    if (onlySelfNote) return null
     if (!streaming) {
       if (!isLast) return null
       return (

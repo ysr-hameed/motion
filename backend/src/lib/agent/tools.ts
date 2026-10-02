@@ -37,13 +37,69 @@ const truncate = (s: string, n = MAX_OUTPUT) =>
   s.length > n ? `${s.slice(0, n)}\n…[truncated ${s.length - n} chars]` : s
 
 /**
+ * One short imperative instruction for a rejected write.
+ *
+ * The `misses` array carries the technical detail, but the model was reading
+ * the generic `hint` instead and building a confident wrong story from it —
+ * observed: "the content keeps getting truncated", when the real blocker was
+ * an unbalanced `</span>`, and separately "I didn't include the full file
+ * content", when the real blocker was a base64 data URI. It then repeated the
+ * identical failing write up to four times.
+ *
+ * So the lead instruction now names the ACTUAL first problem and the exact
+ * remedy for it, in one sentence, with the full detail still underneath.
+ */
+function writeRejectionHint(blocking: Array<{ code: string; message: string }>): string {
+  const first = blocking[0]
+  if (!first) return "Fix the flagged issues and retry."
+  switch (first.code) {
+    case "data-uri":
+      return (
+        "Your content was COMPLETE — it was rejected for embedding a base64 image. " +
+        "Delete the base64 blob and get grain from noise2D() in @remotion/noise, then send the same file again."
+      )
+    case "balance":
+      return (
+        "Your content was COMPLETE — a brace/bracket/paren is unbalanced, so it cannot parse. " +
+        "Find the unclosed one and close it, then send the file again."
+      )
+    case "jsx":
+      return (
+        "Your content was COMPLETE — a JSX tag is closed that was never opened (or vice versa). " +
+        "Balance the tags, then send the file again."
+      )
+    case "no-default-export":
+      return (
+        "Your content was COMPLETE — it has no default export, so nothing can mount it. " +
+        "Add `export default function Composition`, then send the file again."
+      )
+    case "undefined-identifier":
+      return (
+        "Your content was COMPLETE — a name is used that is never imported or defined. " +
+        "Import it or define it in the file, then send the file again."
+      )
+    case "math-random":
+      return (
+        "Your content was COMPLETE — it uses Math.random(), which is not frame-deterministic. " +
+        "Use random(\"seed\") from remotion instead, then send the file again."
+      )
+    default:
+      return `Your content was COMPLETE. Fix this and resend: ${first.message}`
+  }
+}
+/**
  * Clean, bounded tool system for the Remotion coding agent.
  * Every tool is project-scoped: ownership is verified against the
  * request's runtime context, never against an id supplied by the model.
  * Tool outputs are bounded so a large file can never flood the context.
  */
+
+
 export function buildTools(ctx: AgentContext) {
   const tools = {
+
+
+
     get_project: tool({
       description:
         "Get the current project's metadata: name, format, style, status, canvas and version count. " +
@@ -314,7 +370,7 @@ export function buildTools(ctx: AgentContext) {
             path: COMPOSITION_PATH,
             applied: 0,
             misses: blocking.map((i) => `[${i.code}] ${i.message}`),
-            hint: "The replacement does not parse. Fix the flagged issues and retry.",
+            hint: writeRejectionHint(blocking),
           }
         }
         // Guarantee the splice point rather than asking the model to

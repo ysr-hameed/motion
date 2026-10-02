@@ -481,10 +481,15 @@ function dataUriIssue(code: string): LintIssue | null {
     severity: "error",
     code: "data-uri",
     message:
-      `The file embeds a base64 data URI (${m[0].slice(0, 24)}…). Inline binary is ` +
-      "never correct here and it is what makes a composition too large to write. " +
-      "For grain and texture use noise2D()/noise3D() from @remotion/noise; for a real " +
-      "asset use staticFile() or an uploaded reference. Remove the blob and re-validate.",
+      // LEAD WITH THE FIX, not the reason. This message is the model's next
+      // input, and an observed failure was it reading the prose explanation,
+      // missing the remedy, and re-issuing the identical write while
+      // confidently reporting a DIFFERENT cause ("I didn't include the full
+      // file content"). One imperative sentence first; the "why" after.
+      `FIX: delete the base64 image and get grain/texture from noise2D() in ` +
+      `@remotion/noise (or a real asset via staticFile()). Then write the file again. ` +
+      `WHY: the embedded blob was ${m[0].slice(0, 24)}… — inline binary is never ` +
+      `correct here and it is what makes a composition too large to write.`,
   }
 }
 
