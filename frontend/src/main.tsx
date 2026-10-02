@@ -1,19 +1,16 @@
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { useAgent } from "agents/react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
+import { Conversation } from "~/components/Conversation"
+import { Stage } from "~/components/Stage"
+import { fetchComposition, type MotionPlan } from "~/lib/composition"
+import { DEMO_CODE, DEMO_PLAN } from "~/lib/demo"
 import "./styles.css"
 
 /**
- * Where the backend Worker lives. Empty means "same origin", which is the
- * production case once the Worker serves the built assets. In local dev the
- * Worker runs on 8787 while Vite serves 5173, so VITE_API_HOST points across.
- */
-const API_HOST = import.meta.env.VITE_API_HOST ?? ""
-
-/**
- * One Durable Object instance per session id, so a reload reattaches to the
- * same transcript instead of silently starting a new conversation.
+ * One Durable Object instance per session, so a reload reattaches to the same
+ * transcript and the same cut rather than silently starting over.
  */
 function useSessionId() {
   const [id] = useState(() => {
@@ -27,178 +24,92 @@ function useSessionId() {
   return id
 }
 
-/** Renders one tool call: what was asked, and what came back. */
-function ToolPart({ part }: { part: Record<string, unknown> }) {
-  const name = String(part.toolName ?? String(part.type).replace(/^tool-/, ""))
-  const state = String(part.state ?? "pending")
-  const input = part.input as Record<string, unknown> | undefined
-  const output = part.output as Record<string, unknown> | undefined
-  const error = part.errorText as string | undefined
-
-  const done = state === "output-available" || state === "output-error"
-  const failed = state === "output-error"
-
-  return (
-    <div className={`tool ${failed ? "tool--error" : ""}`}>
-      <span className="tool__name">{name}</span>
-      {input && Object.keys(input).length > 0 && (
-        <code className="tool__input">{Object.values(input).join(", ")}</code>
-      )}
-      {done && output && (
-        <span className="tool__output">
-          {error ??
-            Object.entries(output)
-              .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
-              .join(" · ")}
-        </span>
-      )}
-      {!done && <span className="tool__state">{state}</span>}
-    </div>
-  )
-}
-
-function Bubble({ message }: { message: { role: string; parts: unknown[] } }) {
-  return (
-    <div className={`bubble bubble--${message.role}`}>
-      {message.parts.map((part, i) => {
-        const p = part as Record<string, unknown>
-        const text = typeof p?.text === "string" ? p.text : null
-        if (p?.type === "text" && text) return <p key={i}>{text}</p>
-        if (p?.type === "reasoning" && text) {
-          return (
-            <details key={i} className="reasoning">
-              <summary>thinking</summary>
-              <pre>{text}</pre>
-            </details>
-          )
-        }
-        if (typeof p?.type === "string" && p.type.startsWith("tool-")) {
-          return <ToolPart key={i} part={p} />
-        }
-        return null
-      })}
-    </div>
-  )
-}
+const API_HOST = import.meta.env.VITE_API_HOST ?? ""
 
 /**
- * A turn that produces nothing for this long is treated as failed.
- *
- * The gateway answers a rate limit with "Retry after 60s", and a model call can
- * stall outright. Without a deadline the turn stays in `streaming` and the UI
- * looks frozen forever. 45s is far longer than a normal first token, so this
- * only fires on a genuinely stuck turn.
+ * `?demo=1` renders a hand-written composition through the real compile path.
+ * It is how the browser compiler gets smoke-tested without spending model
+ * quota, and how the stage is checked when the agent has produced nothing yet.
  */
-const STALL_MS = 45_000
+const DEMO = new URLSearchParams(location.search).has("demo")
 
 function App() {
   const sessionId = useSessionId()
   const agent = useAgent({ agent: "Chat", name: sessionId, host: API_HOST })
-  const {
-    messages,
-    sendMessage,
-    clearHistory,
-    stop,
-    status,
-    isStreaming,
-    isRecovering,
-  } = useAgentChat({ agent })
+  const chat = useAgentChat({ agent })
 
-  const [draft, setDraft] = useState("")
-  const [stalled, setStalled] = useState(false)
-  const bottom = useRef<HTMLDivElement>(null)
+  const [code, setCode] = useState("")
+  const [plan, setPlan] = useState<MotionPlan | null>(null)
+  const [version, setVersion] = useState(0)
+  const [reloadKey, setReloadKey] = useState("0")
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  const busy = status === "submitted" || status === "streaming"
-  const lastActivity = useRef(Date.now())
-
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" })
-    // Any new message part means the turn is making progress.
-    lastActivity.current = Date.now()
-  }, [messages])
-
-  // Stall watchdog. Only runs while a turn is in flight.
-  useEffect(() => {
-    if (!busy) return
-    const timer = setInterval(() => {
-      if (Date.now() - lastActivity.current > STALL_MS) {
-        stop()
-        setStalled(true)
+  const reload = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const next = await fetchComposition(sessionId, signal)
+        setCode(next.code)
+        setPlan(next.plan)
+        setVersion(next.version)
+        // The version is the cache key: a new version is a new cut, so the
+        // stage recompiles from scratch rather than reusing a stale component.
+        setReloadKey(String(next.version))
+        setLoadError(null)
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") return
+        setLoadError(err instanceof Error ? err.message : String(err))
       }
-    }, 5_000)
-    return () => clearInterval(timer)
-  }, [busy, stop])
+    },
+    [sessionId]
+  )
 
-  const label = useMemo(() => {
-    if (isRecovering) return "recovering…"
-    if (status === "submitted") return "thinking…"
-    if (isStreaming) return "writing…"
-    return null
-  }, [isRecovering, status, isStreaming])
+  useEffect(() => {
+    if (DEMO) {
+      setCode(DEMO_CODE)
+      setPlan(DEMO_PLAN)
+      setVersion(1)
+      setReloadKey("demo")
+      return
+    }
+    const ac = new AbortController()
+    void reload(ac.signal)
+    return () => ac.abort()
+  }, [reload])
 
-  function submit(event: React.FormEvent) {
-    event.preventDefault()
-    const text = draft.trim()
-    if (!text || busy) return
-    setDraft("")
-    setStalled(false)
-    sendMessage({ text })
-  }
+  // The agent is the only writer of the composition, so poll while a turn is in
+  // flight and settle once it ends. Cheap: two rows out of the Durable
+  // Object's own SQLite, and the poll stops the moment the turn closes.
+  const busy = chat.status === "submitted" || chat.status === "streaming"
+  useEffect(() => {
+    if (DEMO || !busy) return
+    const t = setInterval(() => void reload(), 3_000)
+    return () => clearInterval(t)
+  }, [busy, reload])
 
   return (
-    <main className="app">
-      <header className="head">
-        <h1>SlyxUp Motion</h1>
-        <button className="ghost" onClick={clearHistory} disabled={isStreaming}>
-          New chat
-        </button>
-      </header>
+    <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[1fr_400px]">
+      <main className="flex min-h-0 min-w-0 flex-col gap-3 p-3 lg:h-full lg:p-4">
+        <TopBar version={version} loadError={loadError} />
+        <Stage code={code} plan={plan} version={version} reloadKey={reloadKey} />
+      </main>
+      <Conversation chat={chat} onFiles={() => {}} />
+    </div>
+  )
+}
 
-      <section className="thread">
-        {messages.length === 0 && (
-          <p className="empty">Ask something. The transcript is kept per session.</p>
-        )}
-        {messages.map((m) => (
-          <Bubble key={m.id} message={m} />
-        ))}
-        {label && <p className="status">{label}</p>}
-        {stalled && !busy && (
-          <p className="status status--error">
-            The model stopped responding — that was a stall, not your fault. Send again to
-            retry on the next model in the chain.
-          </p>
-        )}
-        {status === "error" && (
-          <p className="status status--error">Something broke — send again to retry.</p>
-        )}
-        <div ref={bottom} />
-      </section>
-
-      <form className="composer" onSubmit={submit}>
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault()
-              submit(e)
-            }
-          }}
-          placeholder="Send a message…"
-          rows={1}
-          disabled={busy}
-        />
-        {busy ? (
-          <button type="button" className="stop" onClick={stop}>
-            Stop
-          </button>
+function TopBar({ version, loadError }: { version: number; loadError: string | null }) {
+  return (
+    <header className="flex shrink-0 items-center gap-3">
+      <span className="text-[13px] font-semibold tracking-tight">SlyxUp Motion</span>
+      <span className="eyebrow">studio</span>
+      <div className="ml-auto flex items-center gap-2 text-[10px] text-dim">
+        {loadError ? (
+          <span className="text-bad">offline — {loadError}</span>
         ) : (
-          <button type="submit" disabled={!draft.trim()}>
-            Send
-          </button>
+          <span className="font-mono">{version > 0 ? `cut v${version}` : "no cut"}</span>
         )}
-      </form>
-    </main>
+      </div>
+    </header>
   )
 }
 

@@ -66,31 +66,80 @@ account is on Free, which rejects it, and it is not needed.
 
 ## Tools
 
-Two, both in `backend/src/tools.ts`:
+Eleven, all scoped to a single composition — none of them take a project or
+file id, because there is exactly one cut per conversation and an id the model
+could get wrong was a reliable source of mistakes.
 
-- `get_current_time(timezone)` — IANA zone, used for anything about the present
-- `calculate(expression)` — arithmetic, parsed by a small recursive-descent
-  evaluator rather than `eval`, because the expression is untrusted model output
+| Tool | Purpose |
+|---|---|
+| `get_canvas` | Dimensions, fps, frame budget, current version |
+| `load_skill` | One of 31 vendored Remotion docs, on demand |
+| `plan_motion` | Records the beat sheet; the player draws it as a timeline |
+| `read_file` | Current source, verbatim |
+| `write_composition` | The whole file in one call; refuses to save invalid source |
+| `edit_file` | Exact-string ops for small changes |
+| `validate_composition` | Errors that stop a render, warnings that mean a blank frame |
+| `preview_comotion` | Publishes to the player; only when it validates |
+| `review_motion` | Motion critique — see below |
+| `list_versions` / `restore_version` | Roll back without losing history |
+
+`validate_composition` catches the failures that are expensive to discover late:
+`useState` in a composition, `Math.random()`, CSS transitions, an
+`interpolate()` with no frame, a transition with no timing config, a bare `all`
+transition without `springTimingConfig`, and imports from packages the browser
+scope does not provide.
+
+`review_motion` is not a linter. It looks for the things that make motion read
+as cheap — all-linear timing, opacity as the only change, nothing that settles,
+no stagger on a mapped list, a single-beat plan stretched to fill the clip — and
+returns two or three specific findings rather than a generic list.
+
+### Skills
+
+31 Remotion documents in `skills/remotion-markup/`, inlined into the Worker by
+`pnpm run skills:build`. The model sees only the ids (~60 tokens) and pulls the
+one it needs, so a `load_skill` costs 1-3k tokens of context regardless of how
+many exist.
 
 `calculate` deliberately does not use `eval`/`new Function`: the input comes
 from a model, so that would turn a bad generation into remote code execution.
 
 ## Model
 
-`AI_MODEL` is a comma-separated chain, tried in order:
+One model: `alibaba/qwen3.7-flash` on the Vercel AI Gateway.
+
+It is a vision model with a 991k context window, and advertises `reasoning`,
+`tool-use`, `vision` and `file-input`. That is why the provider is
+`@ai-sdk/openai-compatible` rather than `@ai-sdk/openai`: the gateway speaks the
+OpenAI wire format but returns reasoning in a `delta.reasoning` field, and only
+the compatible provider maps it. With `@ai-sdk/openai` the chain of thought was
+silently dropped and the UI showed no thinking at all.
+
+Reference images and PDFs attach as real file parts, not as descriptions.
+
+### Rate limiting — this key is capped, and it is not a code problem
 
 ```
-alibaba/qwen3.7-flash,google/gemini-2.0-flash
+x-ratelimit-limit-requests: 5      per minute
+x-ratelimit-limit-tokens: 1000000  (tokens are never the constraint)
+retry-after: 40                    on a 429
 ```
 
-A model that returns a provider error is put in a 90s cooldown stored in the
-agent's state, so the **next** turn starts on a healthy one. This matters
-because the gateway's per-model quota is per team and shared across regions —
-a 429 from one model says nothing about the next. The cooldown is per
-conversation, not global.
+Five requests a minute, per region, team-wide. A turn that runs the workflow is
+~10 model calls, so **one user's turn can spend the whole minute**.
 
-`maxRetries` is 1 on purpose. The quota answers "Retry after 60s", so the SDK's
-default three attempts turned a rate limit into a turn that hung for minutes.
+That is an account limit, not a bug, and no amount of code removes it — it has
+to be raised on the gateway key. What the code does is stop making it worse:
+
+- `rate-limit.ts` spaces calls to one per 12s via `createOpenAI({ fetch })`, a
+  documented interception point, so the first call and every tool-loop step pass
+  through it. Sleeping costs no CPU: Durable Object wall time is unlimited.
+- A 429 is retried only after the window the gateway itself named, instead of on
+  the SDK's own backoff curve.
+- `maxRetries` is 0 on the model, because that retry would compound the wait.
+- The UI shows a real stall watchdog at 150s, long enough for a paced turn.
+
+A user still watching the clock is the residual cost of a 5 rpm key.
 
 ## Setup
 
@@ -140,11 +189,13 @@ because this login can see six accounts and wrangler will not guess.
 
 ## Known limits
 
-- The team's gateway quota is **5 requests/minute** for `alibaba/qwen3.7-flash`,
-  shared across all regions. A burst of parallel users can exhaust it. Those
-  turns end with a visible, retryable error rather than a hang.
-- The frontend chat bundle is ~508 kB (148 kB gzipped), mostly Remotion-free but
-  AI SDK + React + the client transport. Worth code-splitting later.
+- **The 5 requests/minute cap is the product constraint right now.** It belongs
+  on the gateway key, not in the code — see above.
+- A full workflow turn takes ~2 minutes because of that pacing. The UI says
+  "working" and shows the tool log, so it reads as progress rather than a hang.
+- `MAX_STEPS` is 12. Enough for skills, plan, write, validate, review and one
+  preview plus the closing sentence; a rejected write that needs re-issuing is
+  what pushes a turn near it.
 
 ## Recovery from the pre-rewrite state
 

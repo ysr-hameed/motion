@@ -1,7 +1,10 @@
 import { routeAgentRequest } from "agents"
-import { Chat, modelChain } from "./chat"
+import { Chat } from "./chat"
 
 export { Chat }
+
+/** The single model this agent uses. */
+const MODEL = "alibaba/qwen3.7-flash"
 
 /**
  * The frontend is served from Cloudflare Pages at motion.slyxup.com and the
@@ -29,7 +32,7 @@ export default {
       return Response.json(
         {
           ok: true,
-          model: modelChain(env)[0],
+          model: MODEL,
           provider: "vercel-ai-gateway",
           corsOrigin: CORS["Access-Control-Allow-Origin"],
         },
