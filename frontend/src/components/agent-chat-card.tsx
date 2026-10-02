@@ -465,8 +465,22 @@ function friendlyError(raw: string): string {
   }
   // AI SDK's generic tool error when the stream dies mid-turn (e.g. the
   // Worker was killed): never show the raw sentence, it says nothing.
-  if (/^an error occurred\.?$/i.test(s)) return "Interrupted mid-step — retry and I'll continue."
-  if (/aborted|abort/i.test(s)) return "Stopped — nothing from this run was saved."
+  // Says what survived and what to do, so the user is not left guessing
+  // whether their work is gone.
+  if (/^an error occurred\.?$/i.test(s))
+    return "The connection dropped part-way through that step. Anything already saved is still on stage — press Retry and I'll pick it up from there."
+  if (/aborted|abort/i.test(s)) return "Stopped — anything already saved stays saved. Press Retry to continue."
+  // The model never came back (queued/overloaded across the whole chain).
+  if (/stumbled starting up/i.test(s))
+    return "The AI didn't respond on any model just now. Wait a few seconds and press Retry — nothing was lost."
+  // A continuation with no brief behind it. Means the turn's history rolled
+  // past its own brief, so say what to do rather than echoing the refusal.
+  if (/nothing to continue/i.test(s))
+    return "I lost the thread of that request. Describe the clip again in one message and I'll start fresh."
+  if (/hit my step limit/i.test(s))
+    return "I used up this turn's steps. Press Retry and I'll continue from the latest saved version."
+  if (/fetches failed to respond|backend didn't respond|service didn't respond/i.test(s))
+    return backendDownCopy()
   // Truncated tool arguments. The SDK reports this as an invalid tool call
   // carrying a JSON/parse reason, which is long, so without this branch it
   // fell through to the generic "Something went wrong" and the user had no
@@ -772,8 +786,9 @@ function AssistantBubble({
       )}
       {settledSilent && published == null && (
         <div className="break-words text-sm leading-relaxed text-muted-foreground">
-          That step finished but produced no preview — press Retry or describe what to do
-          next and I&apos;ll pick it up.
+          That step ran some tools but didn&apos;t publish anything new. Press Retry to
+          run it again, or tell me what to change and I&apos;ll pick it up from your last
+          saved version.
         </div>
       )}
       {reasoning && <ReasoningBlock text={reasoning} streaming={streaming} />}
@@ -1023,10 +1038,48 @@ function AgentThread({
   }, [stopRef, stop, conversationId])
 
   // Visible transcript: continuation tokens are transport, never rendered.
-  const visibleMessages = useMemo(
-    () => chat.messages.filter((m) => !isContinueMessage(m)),
-    [chat.messages]
-  )
+  /**
+   * Visible transcript: continuation tokens are transport, never rendered.
+   *
+   * Plus one more rule that matters a lot in practice. One turn chains one
+   * request per model step, and the agent opens EVERY step with an
+   * acknowledgement ("On it — ..."). Rendered naively that stacks up as
+   * "On it — …" / "On it — …" / "On it — …", which reads as a stuck loop
+   * even while real work is happening behind it. A real transcript showed
+   * four near-identical openers before a single tool ran.
+   *
+   * So consecutive assistant messages within the SAME turn are merged into
+   * one bubble that shows the most recent words plus every tool call from
+   * the whole turn. Nothing is lost — the tool activity is additive — and
+   * the user sees one honest progress bubble per turn instead of a stutter.
+   * A later real user message always ends the group.
+   */
+  const renderedMessages = useMemo(() => chat.messages.filter((m) => !isContinueMessage(m)), [chat.messages])
+
+  const visibleMessages = useMemo(() => {
+    const shown = renderedMessages
+    const out: UIMessage[] = []
+    for (const m of shown) {
+      const prev = out[out.length - 1]
+      if (m.role === "assistant" && prev && prev.role === "assistant") {
+        // Merge into the previous bubble: keep the newer text (it is the
+        // current state of the turn) and union the tool parts.
+        const seen = new Set(
+          prev.parts
+            .filter((p) => typeof (p as { type?: string }).type === "string")
+            .map((p) => JSON.stringify(p).slice(0, 120))
+        )
+        const extra = m.parts.filter((p) => !seen.has(JSON.stringify(p).slice(0, 120)))
+        out[out.length - 1] = {
+          ...prev,
+          parts: [...prev.parts, ...extra],
+        }
+        continue
+      }
+      out.push(m)
+    }
+    return out
+  }, [renderedMessages])
 
   /** This turn still has an open loop (set on every user send, cleared on settle). */
   const turnActiveRef = useRef(false)
@@ -1104,14 +1157,17 @@ function AgentThread({
       }, 1500)
       return () => clearTimeout(t)
     }
-    const visible = chat.messages.filter((m) => !isContinueMessage(m))
+    // UNMERGED: turn logic needs per-step granularity. `visibleMessages`
+    // collapses a turn's steps into one bubble for display, which would
+    // make every step look like the first.
+    const visible = renderedMessages
     const last = visible.length > 0 ? visible[visible.length - 1]! : null
     const lastTools = last && last.role === "assistant" ? toolPartsOf(last) : []
     const asked = lastTools.some((p) => {
       const n = toolNameOf(p)
       return n === "ask_user" || n === "request_approval"
     })
-    const steps = stepsUsedIn(visible)
+    const steps = stepsUsedIn(renderedMessages)
     const zeroTrace =
       !last ||
       (last.role === "user" &&

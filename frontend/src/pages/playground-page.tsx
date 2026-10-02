@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useScrollLock } from "@/lib/scroll-lock"
 import {
   ArrowLeft,
   Check,
@@ -220,17 +221,15 @@ export function PlaygroundPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useScrollLock(navOpen)
+
   useEffect(() => {
-    document.body.style.overflow = navOpen ? "hidden" : ""
     if (!navOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setNavOpen(false)
     }
     window.addEventListener("keydown", onKey)
-    return () => {
-      document.body.style.overflow = ""
-      window.removeEventListener("keydown", onKey)
-    }
+    return () => window.removeEventListener("keydown", onKey)
   }, [navOpen])
 
   const active = t.active

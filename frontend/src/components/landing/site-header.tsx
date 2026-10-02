@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useScrollLock } from "@/lib/scroll-lock"
 import { ArrowRight, PanelLeft, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Logo } from "@/components/logo"
@@ -24,12 +25,7 @@ export function SiteHeader() {
     return () => window.removeEventListener("scroll", onScroll)
   }, [])
 
-  useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : ""
-    return () => {
-      document.body.style.overflow = ""
-    }
-  }, [open])
+  useScrollLock(open)
 
   useEffect(() => {
     if (!open) return

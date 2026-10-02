@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { useScrollLock } from "@/lib/scroll-lock"
 import {
   ArrowLeft,
   Bell,
@@ -912,17 +913,15 @@ export function SettingsPage({ studio }: { studio: MotionStudio }) {
     }
   }
 
+  useScrollLock(navOpen)
+
   useEffect(() => {
-    document.body.style.overflow = navOpen ? "hidden" : ""
     if (!navOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setNavOpen(false)
     }
     window.addEventListener("keydown", onKey)
-    return () => {
-      document.body.style.overflow = ""
-      window.removeEventListener("keydown", onKey)
-    }
+    return () => window.removeEventListener("keydown", onKey)
   }, [navOpen])
 
   return (

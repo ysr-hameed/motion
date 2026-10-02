@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { resetScrollLock } from "./scroll-lock"
 
 /** Clean path routing (no hash): / → landing, /studio, /playground. */
 export function navigate(path: string, opts?: { replace?: boolean }) {
@@ -9,6 +10,10 @@ export function navigate(path: string, opts?: { replace?: boolean }) {
     window.history.pushState({}, "", path)
     window.dispatchEvent(new PopStateEvent("popstate"))
   }
+  // A drawer that unmounted mid-animation can leave `overflow: hidden` on the
+  // body. The `scrollTo` below would then silently do nothing and the new page
+  // would look frozen, so any lock is released before navigating.
+  resetScrollLock()
   window.scrollTo(0, 0)
 }
 
@@ -28,6 +33,9 @@ export function usePathRoute(): string {
   useEffect(() => {
     const onChange = () => {
       setPath(currentPath())
+      // Covers back/forward and legacy hash navigation, which do not go
+      // through navigate(). Same reason as above.
+      resetScrollLock()
       window.scrollTo(0, 0)
     }
     window.addEventListener("popstate", onChange)
