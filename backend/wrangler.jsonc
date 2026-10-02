@@ -1,14 +1,26 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "slyxup-motion",
+  // Same name as the previous backend, so deploying REPLACES it instead of
+  // creating a second Worker. Do not rename casually.
+  "name": "slyxup-motion-api",
   "main": "src/server.ts",
   "compatibility_date": "2026-10-02",
   "compatibility_flags": ["nodejs_compat"],
 
+  // This login can see six accounts (motion, auth, billing, prompt, soffice and
+  // the main Slyxup account) and wrangler refuses to guess which one to deploy
+  // to in non-interactive mode. Pinned explicitly for that reason.
+  "account_id": "ff5e7d6dcf3eb86cd796263fbb3f0872",
+
   // The chat loop, its transcript and stream state all live inside this
-  // Durable Object. That is the whole point of the rewrite: a request no
-  // longer carries the conversation, so Worker CPU per request stays flat
-  // however long the thread gets.
+  // Durable Object. A request now carries one new message instead of the whole
+  // conversation, so CPU per request stays flat however long the thread gets.
+  //
+  // No "limits" block on purpose: this account is on Workers Free, which
+  // rejects it. It is not needed either — a SQLite-backed DO gets 30s of CPU
+  // per invocation by default, and waiting on the model gateway is I/O that
+  // does not count against CPU. The Free plan's ~10ms cap applies to the outer
+  // Worker request, which is only a WebSocket relay.
   "durable_objects": {
     "bindings": [{ "name": "Chat", "class_name": "Chat" }]
   },
@@ -16,9 +28,9 @@
 
   "observability": { "enabled": true },
 
-  // The Worker serves the built frontend, so the browser sees ONE origin in
-  // production — no CORS anywhere. Build the frontend before deploying the
-  // Worker. run_worker_first keeps /agents/* on the Worker.
+  // The Worker serves the built frontend, so the browser sees ONE origin — no
+  // CORS anywhere. Build the frontend before deploying (`pnpm run deploy`
+  // does both). run_worker_first keeps /agents/* on the Worker.
   "assets": {
     "directory": "../frontend/dist",
     "binding": "ASSETS",
@@ -27,7 +39,7 @@
   },
 
   "vars": {
-    // Comma-separated fallback chain, tried in order. Vercel AI Gateway ids.
-    "AI_MODEL": "alibaba/qwen3.7-flash"
+    // Comma-separated chain, tried in order. Vercel AI Gateway model ids.
+    "AI_MODEL": "alibaba/qwen3.7-flash,google/gemini-2.0-flash"
   }
 }
