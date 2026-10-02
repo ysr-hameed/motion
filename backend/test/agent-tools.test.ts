@@ -43,6 +43,7 @@ describe("agent tool system", () => {
       "inspect_composition",
       "inspect_render_error",
       "inspect_timeline",
+      "load_skill",
       "preview_composition",
       "read_file",
       "remove_asset",
@@ -54,5 +55,31 @@ describe("agent tool system", () => {
       "validate_composition",
       "write_composition",
     ])
+  })
+})
+
+describe("load_skill", () => {
+  it("returns the real doc for a known skill", async () => {
+    const tools = buildTools({} as never)
+    const out = await tools.load_skill.execute!({ name: "timing" }, {} as never)
+    assert.equal(out.ok, true)
+    assert.equal(out.name, "timing")
+    assert.ok(out.content.length > 200, "doc should be substantial")
+    assert.match(out.content, /useCurrentFrame|interpolate|spring/)
+  })
+
+  it("is case and whitespace insensitive", async () => {
+    const tools = buildTools({} as never)
+    const out = await tools.load_skill.execute!({ name: "  Transitions " }, {} as never)
+    assert.equal(out.ok, true)
+    assert.equal(out.name, "transitions")
+  })
+
+  it("returns the catalogue on a miss so the model can retry, not guess", async () => {
+    const tools = buildTools({} as never)
+    const out = await tools.load_skill.execute!({ name: "transiton" }, {} as never)
+    assert.equal(out.ok, false)
+    assert.ok(out.available.includes("transitions"))
+    assert.ok(out.didYouMean?.includes("transitions"))
   })
 })

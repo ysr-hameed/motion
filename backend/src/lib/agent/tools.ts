@@ -21,6 +21,7 @@ import {
   writeFileContent,
 } from "./store"
 import { COMPOSITION_LINE_BUDGET } from "./turns"
+import { loadSkill, skillIds } from "../remotion-skills"
 
 /**
  * Splice point for incremental composition building.
@@ -169,6 +170,36 @@ async function rejectUnrequestedRewrite(ctx: AgentContext, userNote: string): Pr
 
 export function buildTools(ctx: AgentContext) {
   const tools = {
+
+    load_skill: tool({
+      description:
+        "Load Remotion's own documentation for ONE topic — returns the exact patterns and API for it. " +
+        "Call this BEFORE writing code whenever the brief touches that topic. " +
+        "Cheap and authoritative: it is the docs for the version actually installed, not memory. " +
+        "Never guess an API — if you are unsure whether a hook or prop exists, load the skill and check.",
+      inputSchema: z.object({
+        name: z
+          .string()
+          .min(1)
+          .max(60)
+          .describe("Skill id from the catalogue, e.g. animations, transitions, audio"),
+      }),
+      execute: async ({ name }) => {
+        const content = loadSkill(name)
+        if (!content) {
+          const near = skillIds()
+            .filter((id) => id.includes(name.toLowerCase().slice(0, 4)))
+            .slice(0, 5)
+          return {
+            ok: false as const,
+            error: `No skill named "${name}".`,
+            available: skillIds(),
+            didYouMean: near.length ? near : undefined,
+          }
+        }
+        return { ok: true as const, name: name.trim().toLowerCase(), content }
+      },
+    }),
 
 
 

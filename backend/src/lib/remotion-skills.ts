@@ -114,4 +114,12 @@ export function skillIds(): string[] {
   return Object.keys(SKILLS).sort()
 }
 
+/** One skill's docs, or null if the id is unknown/empty. */
+export function loadSkill(id: string): string | null {
+  const key = id.trim().toLowerCase()
+  const content = SKILLS[key]
+  return content && content.trim() ? content.trim() : null
+}
+
+
 export { SKILLS_REMOTION_VERSION }

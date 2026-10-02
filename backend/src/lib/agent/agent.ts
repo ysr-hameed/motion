@@ -6,6 +6,44 @@ import { MOTION_CRAFT } from "./craft"
 import { TURN_LIMITS, resolveMode, type TurnMode } from "./turns"
 import type { AgentContext } from "./context"
 import { buildTools, type AgentTools } from "./tools"
+import { skillIds } from "../remotion-skills"
+
+/**
+ * The pattern book, as a menu instead of a wall.
+ *
+ * This used to be the vendored Remotion reference pasted into the prompt.
+ * Its always-on subset alone is ~7,200 tokens, which buried the manual —
+ * and the model, deep in a wall of docs, wrote worse code than when it had
+ * only the craft block. So the docs moved out and became a TOOL.
+ *
+ * The model now sees only the catalogue (~60 tokens) and pulls the exact
+ * doc for the topic at hand. Cheaper per request, and — the point — the
+ * doc arrives when the model is about to write that specific code, so it is
+ * read as an instruction rather than as background.
+ */
+const SKILL_CATALOGUE = `# REMOTION REFERENCE (on demand)
+
+The full Remotion documentation for the exact version installed here is
+available through the load_skill tool. Do NOT paste it into memory and do
+NOT work from memory — the API has moved and older training data
+contradicts it in places.
+
+BEFORE writing code, load the skills the brief touches. This is the
+expected workflow, not an optional extra:
+
+1. get_project — orient (versions decide create vs edit)
+2. load_skill — for each topic the brief names, before you write anything
+3. read_file — the file you are about to change
+4. write it, validate, preview, get_errors
+
+Always worth loading: timing, sequencing, compositions (they carry the
+frame maths and the shape of a valid composition). Load on top of those
+when the brief needs them — audio, images, videos, transitions, effects,
+parameters, fonts, scenes.
+
+Every id you can load with load_skill (call it with one of these, exactly):
+
+${skillIds().join(", ")}`
 
 /**
  * Production Remotion coding agent, built on the Vercel AI SDK's
@@ -81,6 +119,17 @@ named, and call it once more.
 
 2. READ BEFORE YOU WRITE. Any edit needs \`read_file\` first. Base every find
    string on what you actually read, copied verbatim including indentation.
+
+2a. LOAD THE PATTERN BEFORE YOU WRITE THE CODE. \`load_skill\` is not a
+   fallback for when you are stuck — it is part of the normal path. Before
+   composing any code, load the skills the brief actually touches
+   (\`timing\`, \`sequencing\`, \`compositions\` always; plus \`audio\`,
+   \`images\`, \`videos\`, \`transitions\`, \`effects\`, \`parameters\`,
+   \`google-fonts\`, \`multi-scene-video\`… as the brief requires). One call
+   per topic, in the same step where you plan the change. Docs arrive
+   before the code that depends on them, which is the entire point: the API
+   moves, memory does not, and a plausible-looking wrong prop is the most
+   expensive mistake here because it renders as a blank frame.
 
 2b. CHECK THE STAGE BEFORE CHOOSING THE TOOL. Call \`get_project\` first and look at
    its version count. Files in the workspace are NOT evidence of a live cut — the
@@ -255,7 +304,8 @@ export function buildAgent(
   // The vendored Remotion reference is deliberately NOT here. Its always-on
   // subset alone is ~7,200 tokens, which buried the manual; the composer
   // needs a pattern book, and the repairer (which does need the manual)
-  // already gets it via buildKnowledge().
+  // already gets it via buildKnowledge(). For the composer that book is
+  // SKILL_CATALOGUE + load_skill, not a paste.
   const craft = `${MOTION_CRAFT}\n\n${DIRECTION_RULES}`
   // ONE prompt, assembled once, in one place. Manual → craft → mode → the
   // renderer contract for this canvas. Nothing downstream may pass `system`
@@ -263,6 +313,7 @@ export function buildAgent(
   const system = [
     SYSTEM,
     craft,
+    SKILL_CATALOGUE,
     opts?.freshProject ? creation.trim() : "",
     mode === "advanced" ? ADVANCED_MODE : "",
     opts?.canvasPreamble ?? "",
