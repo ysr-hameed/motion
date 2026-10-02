@@ -1,7 +1,7 @@
 import { tool } from "ai"
 import { z } from "zod"
-import { desc, eq } from "drizzle-orm"
-import { versions } from "../../db/schema"
+import { and, desc, eq } from "drizzle-orm"
+import { messages, versions } from "../../db/schema"
 import { applyEdits, coerceOps } from "../agents/edit-ops"
 import { blockingIssues, describeIssues, lintCompositionCached as lintComposition } from "../code-lint"
 import { hasDefaultExport } from "../code-block"
@@ -94,6 +94,78 @@ function writeRejectionHint(blocking: Array<{ code: string; message: string }>):
  * Tool outputs are bounded so a large file can never flood the context.
  */
 
+
+
+/**
+ * Words that mean the user actually asked for the whole thing to change.
+ *
+ * Used to decide whether a full-file write is legitimate on a project that
+ * already has a working cut.
+ */
+/**
+ * The most recent REAL user brief for this conversation.
+ *
+ * Continuation tokens are transport and are never persisted, so every stored
+ * `user` row is a genuine request. Read from storage rather than from
+ * arguments: the tool must judge what the USER asked for, and the model does
+ * not get a vote — it is the one whose over-reach this guards against.
+ */
+async function lastRealUserNote(ctx: AgentContext): Promise<string> {
+  try {
+    const rows = await ctx.db
+      .select({ parts: messages.parts })
+      .from(messages)
+      .where(and(eq(messages.conversationId, ctx.conversationId), eq(messages.role, "user")))
+      .orderBy(desc(messages.createdAt))
+      .limit(1)
+      .all()
+    const parts = rows[0]?.parts as Array<{ type?: string; text?: string }> | undefined
+    if (!Array.isArray(parts)) return ""
+    return parts
+      .filter((p) => p?.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string)
+      .join(" ")
+  } catch {
+    // Never block a write on this: if the note cannot be read, allow it.
+    return "rewrite from scratch"
+  }
+}
+
+const REWRITE_SIGNALS =
+  /\b(rewrite|redo|start over|startover|from scratch|remake|rebuild|completely different|different concept|new concept|scrap|throw away)\b/i
+
+/**
+ * A full-file write on a project that already has a cut.
+ *
+ * The prose rule ("a small note is a small edit") was being ignored: a real
+ * session produced five versions from one small change because the agent
+ * "restructured the whole composition" each time it touched anything, and
+ * each restructure broke something the user had already approved. The user
+ * asked for a font change and got a rewrite that lost the cursor timing.
+ *
+ * So it is enforced rather than requested. If a cut already exists and the
+ * request contains no rewrite signal, a whole-file write is refused with the
+ * one instruction that actually works: read the file, then change the lines
+ * the note is about. `edit_file` is the tool for that, and it exists.
+ */
+async function rejectUnrequestedRewrite(ctx: AgentContext, userNote: string): Promise<
+  { ok: false; misses: string[]; hint: string } | null
+> {
+  const existing = await latestArtifact(ctx)
+  if (!existing || typeof existing.code !== "string" || !existing.code.trim()) return null
+  if (REWRITE_SIGNALS.test(userNote)) return null
+  return {
+    ok: false as const,
+    misses: [
+      "this project already has a working cut, and your request did not ask to rebuild it",
+    ],
+    hint:
+      "Your content was NOT the problem — you used the wrong tool. This cut already works. " +
+      "Call read_file, then edit_file with the SMALLEST ops that change exactly what the user " +
+      "named (one value, one prop, one timing range). Leave every other line byte-identical. " +
+      "Only call write_composition here if the user explicitly asked to rewrite, redo or start over.",
+  }
+}
 
 export function buildTools(ctx: AgentContext) {
   const tools = {
@@ -354,6 +426,11 @@ export function buildTools(ctx: AgentContext) {
           ),
       }),
       execute: async ({ content }) => {
+        // The user's actual request decides whether a whole-file write is
+        // legitimate on a project that already has a cut.
+        const note = await lastRealUserNote(ctx)
+        const refused = await rejectUnrequestedRewrite(ctx, note)
+        if (refused) return { path: COMPOSITION_PATH, applied: 0, ...refused }
         if (!hasDefaultExport(content)) {
           return {
             ok: false as const,

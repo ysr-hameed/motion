@@ -31,6 +31,34 @@ Copy these shapes. Do not invent your own easing numbers when a shape below
 fits. Almost all of the gap between a generated cut and an expensive one is
 here, not in the layout.
 
+
+## 0. Position relative to ELEMENTS, never by guessed pixel math
+
+Text width is not knowable in advance and must never be estimated. A real
+session guessed "roughly 70-80px per character", moved the cursor to
+\`width * 0.55\`, was wrong, and burned five versions re-guessing. Font,
+weight, tracking and viewport all move that number.
+
+Position the thing that MOVES inside the thing it relates to, and let layout
+do the arithmetic:
+
+\`\`\`tsx
+// WRONG - magic numbers that are wrong on any other string/font/size
+<div style={{ left: width * 0.55 }}>cursor</div>
+
+// RIGHT - the cursor is a flex child of the same box as the text, so it
+// lands at the end of whatever is actually rendered, at any width.
+<div style={{ display: "flex", alignItems: "center" }}>
+  <span style={{ opacity: revealed }}>Hi Welcome</span>
+  <span style={{ opacity: cursorOpacity, marginLeft: 4 }}>|</span>
+</div>
+\`\`\`
+
+If the element must sit at an absolute position, drive it from the SAME
+interpolated progress value as the thing it tracks, not from a second
+hand-tuned constant. One source of truth per animation; two constants drift
+and then the two disagree — which is exactly what the version churn was.
+
 ## 1. Every animated value: one inline interpolate, both clamps
 Never a CSS \`transition\` or \`animation\` — neither renders frame-accurately.
 Animate \`scale\` / \`translate\` / \`rotate\`, never \`left\`/\`top\` (those reflow the

@@ -1218,20 +1218,15 @@ function AgentThread({
             )
         ))
     const stepCap = advanced ? STEP_LIMITS.advanced : STEP_LIMITS.standard
-    // Don't auto-chain past a tool that just failed. The server already
-    // pushes an assistant correction for a cut-off write, so the next step
-    // has something new to act on; chaining blindly is what produced six
-    // identical plans against an identical failure.
-    const lastFailed = lastTools.some((p) => (p.state ?? "") === "output-error")
-    const sawCorrection = last?.parts.some(
-      (p) => p.type === "text" && /didn't complete|ran out of room/i.test((p as { text?: string }).text ?? "")
-    )
-    if (lastFailed && !sawCorrection) {
-      // No correction to act on: stop and let the user read the failure
-      // rather than spending another 16K tokens on the same call.
-      turnActiveRef.current = false
-      return
-    }
+    // NOTE: this used to end the turn outright whenever a tool came back in
+    // `output-error`. That is wrong now. The server's rejection `hint` names
+    // the real blocker and its exact remedy (see writeRejectionHint), so the
+    // next step has something specific to act on. Ending here is what left a
+    // browser session dead mid-way — the model would say "now let me validate
+    // and preview it" and the turn simply stopped, with the remaining work
+    // never attempted. The step cap below still bounds the chain, so
+    // continuing cannot run away, and a model that genuinely cannot recover
+    // closes with words, which ends the turn normally.
     if ((lastTools.length > 0 && !asked && steps < stepCap) || zeroTrace) {
       // Turn stays open; the chained step releases inFlight on settle.
       void sendContinue().then((ok) => {
