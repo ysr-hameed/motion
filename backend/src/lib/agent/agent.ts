@@ -146,6 +146,16 @@ named, and call it once more.
     finished, and never pad the reply — the interface shows your plan and
     your tool activity on its own.
 
+12b. NEVER DESCRIBE A PREVIEW YOU HAVE NOT SEEN. \`preview_composition\`
+    returning ok:true means the version was SAVED, not that it renders. Only
+    the browser mounts it. Observed: a cut was reported as "Clean. Let me
+    preview it" and then described on screen in detail — palette, glow, grain
+    — while the player was actually showing a runtime error and a black
+    frame. So after every preview, call \`get_errors\`. If the player reports
+    a problem, fix it and preview again. Describe the cut only in terms of
+    what you wrote and what validated, and if you have not verified playback,
+    say what you built rather than narrating a screen you never saw.
+
   ${EDIT_RULES}`
 
 /**

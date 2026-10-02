@@ -700,7 +700,13 @@ export function buildTools(ctx: AgentContext) {
         "Commit the current composition as a new previewable version. Call ONLY after validate_composition is clean. " +
         "The user sees the new cut on stage immediately. Returns the version number and canvas. " +
         "Do NOT call it when validation has blocking errors — fix them first. " +
-        "Do NOT claim an edit succeeded until this tool confirms the version.",
+        "Do NOT claim an edit succeeded until this tool confirms the version. " +
+        "\n\nIMPORTANT — what ok:true means and does not mean: it means the version was SAVED. " +
+        "It does NOT mean it renders. Only the browser actually mounts the code, and it can still " +
+        "fail there on things static validation cannot see (a bad runtime import, a value that only " +
+        "resolves at render time). So after previewing, call get_errors: if the player reports one, " +
+        "fix it and re-preview. Never describe what is on screen unless you have checked, and never " +
+        "invent a description of a preview you have not seen.",
       inputSchema: z.object({
         note: z.string().max(500).optional().describe("Short note describing this version"),
       }),

@@ -83,6 +83,28 @@ const scale = interpolate(t, [0, 20], [0.94, 1], {
 return <AbsoluteFill style={{ scale }}>…</AbsoluteFill>;
 \`\`\`
 
+**The output range is NUMBERS only.** Passing strings throws at playback —
+the renderer says "Non-numeric strings can only be interpolated using
+Easing.step1" and the video goes black, even though the file linted clean
+and the write was accepted. This bit a real session: \`["0%", "100%"]\` in the
+output range, a black preview, and an agent that reported success anyway.
+
+\`\`\`tsx
+// WRONG - throws at playback, black frame
+width: interpolate(f, [0, 30], ["0%", "100%"])
+color: interpolate(f, [0, 30], ["#000", "#fff"])
+
+// RIGHT - interpolate the number, then apply it yourself
+const reveal = interpolate(f, [0, 30], [0, 1], {
+  extrapolateLeft: "clamp", extrapolateRight: "clamp",
+});
+<div style={{ clipPath: \`inset(0 \${(1 - reveal) * 100}% 0 0)\` }}>…</div>
+<div style={{ opacity: reveal }}>…</div>
+
+// ONLY when you truly want discrete steps:
+interpolate(f, [0, 30], ["a", "b"], { easing: Easing.step1 })
+\`\`\`
+
 ## 2. Springs — damping IS the personality
 \`spring({frame, fps, config:{damping, mass, stiffness}})\` is the default
 sampler for anything that ARRIVES.

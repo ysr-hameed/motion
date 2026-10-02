@@ -448,6 +448,109 @@ const hasDefaultExportRe = /^\s*export\s+default\b/m
 const asDefaultRe = /^\s*export\s*\{[^}]*\bas\s+default\b/m
 
 /**
+ * `interpolate()` called with a NON-NUMERIC output range.
+ *
+ * Why this rule exists: the renderer threw
+ * "Non-numeric strings can only be interpolated using Easing.step1" at
+ * playback, the preview showed nothing, and the agent reported the cut as
+ * finished and working. A static check prevents the whole class of failure,
+ * because this is decidable from the source — `interpolate()` accepts only
+ * numbers (or `Easing.step1` for discrete values), so a string in the
+ * output range is always wrong.
+ *
+ * Catches the shapes that actually appear: percentage strings, colour
+ * strings, and any mixed array. Numeric arrays, single values, and variables
+ * are left alone — a variable could hold a number at runtime and guessing
+ * would produce false errors on correct code.
+ */
+function nonNumericInterpolations(code: string): LintIssue[] {
+  const out: LintIssue[] = []
+  // `interpolate(<input>, <range>, <output>[, options])` — the output range is
+  // the 3rd argument. Match balanced-ish up to the closing paren.
+  for (const m of code.matchAll(/\binterpolate\s*\(/g)) {
+    const open = m.index + m[0].length - 1
+    let depth = 0
+    let i = open
+    for (; i < code.length; i++) {
+      const c = code[i]
+      if (c === "(") depth++
+      else if (c === ")") {
+        depth--
+        if (depth === 0) break
+      }
+    }
+    const args = splitTopLevelArgs(code.slice(open + 1, i))
+    if (args.length < 3) continue
+    const outputRange = args[2]!.trim()
+    if (!outputRange.startsWith("[")) continue
+    const entries = splitTopLevelArgs(outputRange.slice(1, -1))
+    const bad = entries.filter((e) => e.trim().length > 0 && !isNumericLiteral(e.trim()))
+    if (bad.length === 0) continue
+    // Easing.step1 is the one legitimate way to interpolate discrete values,
+    // so only report when the call does NOT ask for it.
+    const options = args.slice(3).join(",")
+    if (/Easing\s*\.\s*step1/.test(options)) continue
+    out.push({
+      severity: "error",
+      code: "interpolate-non-numeric",
+      message:
+        `FIX: interpolate() received a non-numeric output value (${bad.map((b) => b.trim()).join(", ").slice(0, 60)}). ` +
+        "The renderer throws \"Non-numeric strings can only be interpolated using Easing.step1\" " +
+        "and the video shows nothing. Interpolate a NUMBER and put it into the style instead — " +
+        'e.g. interpolate(f, [0, 30], [0, 1]) then use `scale: 0.94 + 0.06 * v`, or for a ' +
+        "percentage use a numeric 0-1 and multiply by 100 in the template. Only pass strings " +
+        "with { easing: Easing.step1 }.",
+    })
+  }
+  return out
+}
+
+/** Split `a, b, c` on top-level commas only (brackets/strings respected). */
+function splitTopLevelArgs(s: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let quote: string | null = null
+  let cur = ""
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!
+    if (quote) {
+      cur += c
+      if (c === "\\") {
+        cur += s[++i] ?? ""
+      } else if (c === quote) {
+        quote = null
+      }
+      continue
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c
+      cur += c
+      continue
+    }
+    if (c === "(" || c === "[" || c === "{") depth++
+    else if (c === ")" || c === "]" || c === "}") depth--
+    if (c === "," && depth === 0) {
+      out.push(cur)
+      cur = ""
+      continue
+    }
+    cur += c
+  }
+  if (cur.trim()) out.push(cur)
+  return out
+}
+
+/** True for numeric literals and simple numeric arithmetic. */
+function isNumericLiteral(s: string): boolean {
+  const t = s.replace(/\s+/g, "")
+  if (t === "") return false
+  if (/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(t)) return true
+  // `1 - 0.5`, `2 * v`, `Math.PI / 2` — arithmetic on numbers is still numeric.
+  if (/^[\d.eE+\-*/()\s]|Math\.[A-Za-z]+|Infinity|NaN/.test(t) && !/["'`]/.test(t)) return true
+  return false
+}
+
+/**
  * Inline binary payloads: `data:` URIs and `base64,` blobs.
  *
  * This is here because of how it actually failed. A brief asked for a
@@ -547,14 +650,16 @@ function lintOversized(code: string, meta?: { durationInFrames?: number }): Lint
     issues.push({ severity: "error", code: "balance", message: `Syntax: ${bal}.` })
     return issues
   }
-  // Cheap literal scans — one pass each, no identifier analysis.
+// Cheap literal scans — one pass each, no identifier analysis.
   if (/\bMath\.random\s*\(/.test(code)) {
     issues.push({
       severity: "error",
       code: "math-random",
-      message:
-        "Math.random() is not deterministic — the same frame renders differently every time. Use random(\"seed\") from remotion.",
+      message: "Math.random() is not deterministic — the same frame renders differently every time. Use random(\"seed\") from remotion.",
     })
+  }
+  for (const bad of nonNumericInterpolations(code)) {
+    issues.push(bad)
   }
   if (meta?.durationInFrames) {
     const end = meta.durationInFrames
@@ -621,6 +726,13 @@ export function lintComposition(
       message:
         "Math.random() is not deterministic — the same frame renders differently every time. Use random(\"seed\") from remotion.",
     })
+  }
+
+  // A non-numeric interpolate output range throws at playback, so the
+  // preview goes black while the write still lints clean. Decidable from
+  // source, so it is caught before the write is ever accepted.
+  for (const bad of nonNumericInterpolations(code)) {
+    issues.push(bad)
   }
 
   if (/\b(Date\.now|new\s+Date|performance\.now)\s*\(/.test(code)) {
