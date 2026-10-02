@@ -1,10 +1,16 @@
 import type { UIMessage } from "ai"
+import { CONTINUE_TOKEN } from "./turns"
 
 /**
  * Worker-budget history pruning. The #1 CPU killer was unbounded history:
  * every stored message — base64 reference images, full-composition tool
  * snapshots — was re-serialized on EVERY model step of a long tool loop.
  * The pruned copy is for the model only; storage keeps full fidelity.
+ */
+/**
+ * Upper bound on the model window. The window is not a plain tail — it pins
+ * recent real briefs and then adds the recent tail, so this is a ceiling on
+ * the merged result rather than the slice length itself.
  */
 export const MAX_MODEL_HISTORY = 12
 const MAX_TOOL_ARTIFACT_CHARS = 2000
@@ -13,10 +19,51 @@ const MAX_TOOL_INPUT_CHARS = 4000
  *  (10k+ chars, path dumps, threats) get cut before serialization. */
 const MAX_USER_TEXT_CHARS = 4000
 
+/**
+ * How much of the recent tail the window holds, and how many earlier REAL
+ * user turns it keeps alongside it.
+ *
+ * The original brief is non-negotiable. A plain `slice(-MAX_MODEL_HISTORY)`
+ * looks harmless, but ONE turn can produce a dozen assistant step-messages
+ * (the client chains a step per request), so on a long turn the window filled
+ * entirely with assistant steps and the user's original brief fell off the
+ * end. Observed in production: the model lost the brief, said so out loud,
+ * re-planned the identical cut four times, and the continuation request then
+ * failed outright because there was no user message left to continue.
+ *
+ * So the window always keeps the most recent REAL user turns — continuation
+ * tokens are transport, not content — pinned at the front, plus the recent
+ * tail for continuity.
+ */
+const RECENT_TAIL = 8
+const KEPT_USER_TURNS = 3
+
+function isRealUserTurn(m: UIMessage): boolean {
+  if (m.role !== "user") return false
+  const text = ((m.parts ?? []) as Array<{ type?: string; text?: unknown }>)
+    .filter((p) => p?.type === "text" && typeof p.text === "string")
+    .map((p) => p.text as string)
+    .join("")
+    .trim()
+  // `[continue-turn]` is the chaining token; it is not a brief.
+  return text.length > 0 && text !== CONTINUE_TOKEN
+}
+
 export function pruneForModel(history: UIMessage[]): UIMessage[] {
-  const tail = history.slice(-MAX_MODEL_HISTORY)
-  return tail.map((m, i) => {
-    const isLatest = i === tail.length - 1
+  const realUsers = history.filter(isRealUserTurn)
+  // Oldest first: if there are more real briefs than fit, keep the most
+  // recent ones — a 10-turn-old brief is less load-bearing than the one the
+  // current turn is answering.
+  const pinned = new Set(realUsers.slice(-KEPT_USER_TURNS))
+  const tail = new Set(history.slice(-RECENT_TAIL))
+  // Filter the ORIGINAL list so chronological order is preserved. Merging two
+  // separately-ordered lists (pinned first, then tail) would demote the
+  // newest message out of last position, which several behaviours depend on.
+  const window = history.filter((m) => pinned.has(m) || tail.has(m))
+
+  const latestId = history[history.length - 1]?.id
+  return window.map((m) => {
+    const isLatest = m.id === latestId
     const parts = ((m.parts ?? []) as unknown[]).map((p) => {
       if (typeof p !== "object" || p === null) return p
       const t = (p as { type?: unknown }).type

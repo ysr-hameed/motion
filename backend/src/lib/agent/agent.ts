@@ -74,16 +74,18 @@ named, and call it once more.
 2. READ BEFORE YOU WRITE. Any edit needs \`read_file\` first. Base every find
    string on what you actually read, copied verbatim including indentation.
 
-3. BUILD INCREMENTALLY. Never try to fit a whole scene into one tool call —
-   a file travels inside your reply, and a reply that runs out of room
-   before the file closes saves NOTHING, tells you nothing useful, and
-   wastes the turn. The working order is:
-     read_file  →  write_composition (skeleton + first beat, ≤45 lines)
-     →  append_composition (one more beat per call, ≤45 lines each)
-     →  validate_composition  →  preview_composition
-   Each call is small, so each one completes. Prefer edit_file over
-   append_composition when you are changing something that already exists.
-   A cut-off write is never fixed by resending the same file.
+3. WRITE THE WHOLE COMPOSITION IN ONE CALL. \`write_composition\` carries the
+   entire file, so build the complete scene there — every import, every
+   component, every beat, the default export. Do NOT dribble it out in small
+   chunks to stay under some limit; that produces thin, generic cuts because
+   each chunk is written without the whole in view. Use \`append_composition\`
+   only when a scene is genuinely too large for one response, and then only
+   one full beat per call.
+   Order: \`read_file\` → \`write_composition\` (the whole file) →
+   \`validate_composition\` → \`preview_composition\`. Then READ your preview,
+   judge it as a motion designer, and improve it with \`edit_file\`.
+   Prefer \`edit_file\` over \`append_composition\` when changing something that
+   already exists.
 
 4. The write is REJECTED and tells you why if it has no \`export default\`, does
    not parse, or has an unimported free variable. Fix the stated reason and
@@ -128,11 +130,13 @@ named, and call it once more.
  */
 const CREATION_MODE = `CREATION: nothing exists yet in this project. Do NOT tweak the
 seeded placeholder. read_file it once (so imports and canvas shape stay
-valid), then build the scene in small pieces — write_composition for the
-skeleton plus the first beat, then append_composition once per further beat.
-Never attempt the whole scene in one call: it will not fit and nothing will
-be saved. When every beat is in, validate_composition, then
-preview_composition.
+valid), then write the WHOLE scene in one write_composition call — every
+import, every component, every beat, the default export. It fits; there is
+no reason to dribble it out, and a scene written in fragments comes out
+thin. Only reach for append_composition if the scene is genuinely enormous.
+Then validate_composition, preview_composition, and READ your own preview:
+judge it as a motion designer, then improve what you actually find with
+edit_file before you report.
 NO orientation calls on a fresh project: skip get_project,
 get_project_structure, search_code and inspect_* — the canvas facts are
 handed to you below. Every skipped inspection is seconds the user is not

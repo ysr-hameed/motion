@@ -100,15 +100,50 @@ describe("smalltalk gate", () => {
 describe("history pruning", () => {
   const msg = (i: number, parts: unknown[]) => ({ id: `m${i}`, role: i % 2 ? "user" : "assistant", parts })
 
-  it("caps history length for the model", () => {
+  it("bounds history length for the model", () => {
     const history = Array.from({ length: 30 }, (_, i) =>
       msg(i, [{ type: "text", text: `message ${i}` }])
     )
     const pruned = pruneForModel(history as never)
-    assert.equal(pruned.length, MAX_MODEL_HISTORY)
+    assert.ok(pruned.length <= MAX_MODEL_HISTORY, `window grew to ${pruned.length}`)
     // Most recent turn survives.
     const last = pruned[pruned.length - 1] as { parts: Array<{ text?: string }> }
     assert.match(last.parts[0]?.text ?? "", /message 29/)
+  })
+
+  it("NEVER drops the user's brief, however many steps a turn takes", () => {
+    // The regression this pins: one turn chains a request per model step, so
+    // a long turn produced a dozen assistant step-messages. A plain
+    // `slice(-12)` window filled with those and pushed the original brief
+    // off the end — the model then said out loud that it had lost the brief,
+    // re-planned the identical cut four times, and the next continuation
+    // failed outright because no user message remained.
+    const brief = { id: "brief", role: "user", parts: [{ type: "text", text: "make me a 5s welcome hook" }] }
+    const steps = Array.from({ length: 24 }, (_, i) => ({
+      id: `step${i}`,
+      role: "assistant",
+      parts: [
+        { type: "text", text: `step ${i}` },
+        { type: "tool-write_composition", toolCallId: `c${i}`, state: "output-available", output: { ok: true } },
+      ],
+    }))
+    const pruned = pruneForModel([brief, ...steps] as never) as Array<{ role: string; parts: Array<{ text?: string }> }>
+    assert.ok(
+      pruned.some((m) => m.role === "user" && /welcome hook/.test(m.parts[0]?.text ?? "")),
+      "the user's brief must always be in the window"
+    )
+  })
+
+  it("does not mistake the continuation token for a brief", () => {
+    const brief = { id: "brief", role: "user", parts: [{ type: "text", text: "make me a hook" }] }
+    const steps = Array.from({ length: 20 }, (_, i) => ({
+      id: `s${i}`,
+      role: i % 2 ? "user" : "assistant",
+      parts: [{ type: "text", text: i % 2 ? "[continue-turn]" : `working ${i}` }],
+    }))
+    const pruned = pruneForModel([brief, ...steps] as never) as Array<{ parts: Array<{ text?: string }> }>
+    const pinned = pruned.filter((m) => /make me a hook/.test(m.parts[0]?.text ?? ""))
+    assert.equal(pinned.length, 1, "the real brief is pinned; tokens are not briefs")
   })
 
   it("keeps images only on the newest user turn", () => {

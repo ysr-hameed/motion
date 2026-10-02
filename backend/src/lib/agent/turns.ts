@@ -15,101 +15,65 @@ export const CONTINUE_TOKEN = "[continue-turn]"
 /**
  * Turn depth.
  *
- * `standard` is the default and stays small: most briefs resolve in a
- * handful of steps, and every extra step is another round-trip the user
- * waits through.
- *
- * `advanced` is for briefs that genuinely need more — a full piece rather
- * than a tweak. It raises the step cap and the output budget so the agent
- * can compose, preview, critique and revise in one turn instead of being
- * cut off mid-scene.
- *
- * CPU note, because this is the whole constraint this codebase lives under:
- * the limit is per REQUEST, not per turn. Advanced mode issues MORE
- * requests, each of which is individually sized and individually capped —
- * it does not make any single request more expensive. The one thing that
- * does raise per-request cost is `maxOutputTokens`, since a longer answer
- * is a bigger JSON body to parse, so it stays modest and bounded.
- *
- * `maxOutputTokens` IS the ceiling on a whole-file write, though, and that
- * is not a soft number. `write_composition` carries an entire
- * Composition.tsx as TOOL-CALL ARGUMENTS, so the scene has to be emitted
- * inside one response. At 8000 tokens a dense 5s scene (~900 lines of TSX)
- * ran past the cap, the response stopped mid-JSON, and the tool call was
- * never executed — while the gateway logged a clean HTTP 200 and the
- * Worker logged nothing at all, because no exception is ever raised. The
- * user just saw "The tool failed."
- *
- * So the budget is sized to hold a real composition, and the
- * COMPOSITION_LINE_BUDGET figure is stated in the write_composition tool
- * description so the model sizes its own output far more reliably than a
- * token ceiling it cannot see.
- */
-/**
- * Turn depth.
- *
- * `standard` is the default and stays small: most briefs resolve in a
- * handful of steps, and every extra step is another round-trip the user
- * waits through.
- *
- * `advanced` is for briefs that genuinely need more — a full piece rather
- * than a tweak. It raises the step cap and the output budget so the agent
- * can compose, preview, critique and revise in one turn instead of being
- * cut off mid-scene.
+ * `standard` is the default. `advanced` is for briefs that need a real piece
+ * rather than a tweak, and buys MORE STEPS — more passes of read, compose,
+ * preview and refine — rather than a longer single response. More steps is
+ * what actually improves a cut; a longer single response does not.
  *
  * ---------------------------------------------------------------------------
- * WHY maxOutputTokens IS SMALL — read this before "just raise it"
+ * NO TOKEN CEILING, ON PURPOSE — read before adding one back
  * ---------------------------------------------------------------------------
- * A streamed response costs roughly 3.9µs of CPU PER OUTPUT TOKEN, because
- * every SSE frame is parsed and re-serialized in the Worker. Measured on
- * this account:
+ * There was a 16K/24K ceiling here, then a 1,200 one. Both were wrong, for
+ * opposite reasons:
  *
- *     500 tokens ->  5.3ms      8,000 ->  37ms
- *   2,000 tokens -> 13.1ms     16,000 ->  62ms
+ * - At 16K with STREAMING, the Worker parsed ~3.9us of CPU per output token.
+ *   A 16K response is ~62ms against a ~10ms Free-plan budget, so the request
+ *   was killed mid-write. Users saw it as "Interrupted mid-step".
+ * - At 1,200 the request survived, but the model spent its entire budget
+ *   narrating its PLAN and the tool arguments arrived EMPTY. The model
+ *   reported its own writes as "a placeholder" and retried the identical
+ *   plan indefinitely. A smaller cap did not make it safer; it made it
+ *   unable to write code at all.
  *
- * The Workers Free plan allows ~10ms CPU per request. So a 16K budget was
- * guaranteed to be killed mid-write every single time — which is exactly
- * what users saw as "Interrupted mid-step". Raising this number cannot be
- * fixed by prompt engineering; it is arithmetic.
+ * The fix was neither number but the call itself: the route runs the model
+ * NON-STREAMING, where one `res.json()` on the finished body costs ~0.27ms of
+ * CPU regardless of length. With the per-token cost gone, the ceiling stopped
+ * being a CPU question and became only a self-imposed limit on quality — so
+ * it is removed. The model writes the scene it needs to write.
  *
- * The composition is therefore built INCREMENTALLY across several steps via
- * `append_composition`, not in one enormous response. That is both cheaper
- * AND more robust: a step that dies costs one chunk, not the whole cut, and
- * each chunk is small enough to be inspected and validated as it lands.
+ * Progress stays live in the UI via a real event per executed tool
+ * (`data-toolstart`), so a long generation is reported rather than a spinner.
  */
 export type TurnMode = "standard" | "advanced"
 
 export interface TurnLimits {
   maxSteps: number
+  /**
+   * Output ceiling. Kept as a field so the wiring is explicit, but set far
+   * above any real scene: a 5s composition is roughly 1-3K tokens, so this is
+   * a runaway backstop, not a design constraint. If a turn ever genuinely
+   * needs more, raise this rather than capping it near real output size.
+   */
   maxOutputTokens: number
 }
 
 export const TURN_LIMITS: Record<TurnMode, TurnLimits> = {
-  // ~1200 tokens ≈ 4.7ms of streaming CPU — inside the per-request budget
-  // with room for the tools and D1 writes in the same request. Roughly
-  // 40-60 lines of composition per step, so a full cut takes 4-8 appends.
-  standard: { maxSteps: 12, maxOutputTokens: 1200 },
-  // Same ceiling: a bigger number does not buy a bigger cut, it just kills
-  // the request. Advanced buys MORE STEPS (more passes of refine), not a
-  // longer single response — which is what actually improves the output.
-  advanced: { maxSteps: 24, maxOutputTokens: 1200 },
+  // 12 steps ≈ read → write → validate → preview → critique → revise, twice.
+  standard: { maxSteps: 12, maxOutputTokens: 128000 },
+  // Advanced keeps refining: more passes over the same cut, which is what
+  // separates a good cut from a great one.
+  advanced: { maxSteps: 28, maxOutputTokens: 128000 },
 }
 
 /**
- * Lines a written composition chunk should stay under.
+ * Lines a written composition should stay under.
  *
- * This is PER WRITE, not per composition — the whole file is assembled from
- * several of these.
- *
- * Sized to the real response ceiling rather than guessed: at ~30 tokens per
- * line of TSX, the 1,200-token budget is ~40 lines. 30 leaves headroom for
- * the surrounding prose and the tool wrapper, so a chunk that "looks like"
- * 30 lines reliably fits instead of landing on the cap and being cut off
- * mid-file — which is the failure this whole ceiling was introduced to
- * stop. Under-estimating here is what produced 22-line chunks the model
- * ignored, then tried to write the whole file anyway.
+ * This is a GUIDANCE figure for the model, not an enforced cap — it is stated
+ * in the tool description because a number the model can reason about works
+ * far better than a token ceiling it cannot see. Nothing rejects a write for
+ * exceeding it; `write_composition` holds a whole file, which is the point.
  */
-export const COMPOSITION_LINE_BUDGET = 30
+export const COMPOSITION_LINE_BUDGET = 900
 
 export const DEFAULT_MODE: TurnMode = "standard"
 

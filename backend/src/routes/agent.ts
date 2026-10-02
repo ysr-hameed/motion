@@ -123,7 +123,16 @@ import {
   resolveMode,
   stepsUsedOf,
 } from "../lib/agent/turns"
-import { isEmptyParts, toolActivity, truncatedByLength } from "../lib/agent/settled-parts"
+import { truncatedByLength } from "../lib/agent/settled-parts"
+// Model parts -> UI parts, and UI parts -> SSE chunks. Needed because the
+// route runs the model non-streaming and the SDK only ships that converter
+// for the streamed result.
+import {
+  isEmptyParts,
+  toSseChunks,
+  toUiParts,
+  toolActivity,
+} from "../lib/agent/nonstream-ui"
 import { loadTurnPreamble } from "../lib/agent/preamble"
 
 /**
@@ -344,23 +353,19 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
     })
   )
 
-  // The model is called with `stream()` and its chunks are RELAYED as they
-  // arrive, so the user watches the reply get written.
+  // The model is called NON-STREAMING (see `runOn` below) and the finished
+  // parts are written to the SSE once. The earlier streamed version cost
+  // ~3.9us of CPU per output token in this Worker, so a realistic 16K
+  // response was ~62ms against a ~10ms Free-plan budget and the request was
+  // killed mid-write — which surfaced to users as "Interrupted mid-step".
+  // A single `res.json()` on the finished body is ~0.27ms at any length.
   //
-  // This used to be `generate()`, buffered until complete, then dumped as
-  // one burst. The cost was invisible in code and brutal in the UI: a single
-  // step takes 77–88s, and for every one of those seconds the client had
-  // received nothing but a `start` frame — so the assistant bubble rendered
-  // a bare "Thinking…" spinner with no text, no tool chips, no idea what was
-  // happening, until the very end. The model writes "On it —" and the plan
-  // FIRST, so streaming them lands them on screen in about two seconds.
-  //
-  // The old note here argued non-streaming on CPU grounds (~18.8ms of frame
-  // parsing versus ~0.7ms for one body read). That CPU ceiling is gone, and
-  // the comment was quietly describing a UX regression as an optimisation.
-  // The chain fallback survives: nothing is emitted until the first chunk
-  // arrives, so a model that fails to start still falls through to the next
-  // one in the same response.
+  // The user still sees progress, because `onToolStart` emits a real event
+  // per executed tool while the model is working — so a long generation is
+  // reported rather than a bare spinner, and nothing is invented to fill the
+  // wait. The chain fallback also still works: nothing is emitted until a
+  // model has actually returned, so a model that fails to start falls
+  // through to the next one without the user seeing a seam.
   let activeModel = built.modelId
   const t0 = Date.now()
 
@@ -418,69 +423,66 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
         return retry
       }
 
-      // Relay one model's chunks into the SSE as they arrive.
+      // Run the model NON-STREAMING, then convert and write.
       //
-      // `emitted` is what makes the model chain still work: nothing is
-      // written until the first chunk, so a model that fails to start (or a
-      // gateway that 5xxs) throws before the client has seen anything and
-      // the caller can fall through to the next model in the same response.
-      // Once a single chunk is out, the response is committed and an error
-      // has to surface as an error chunk.
-      // A holder object rather than a reassigned `let`: the write happens
-      // inside the SDK's onFinish callback, and narrowing a closure-assigned
-      // local narrows it to `never` after the loop.
-      const settled: { parts?: UIMessage["parts"]; finishReason?: string } = {}
-      const relay = async (id: string): Promise<boolean> => {
+      // Why not stream: streaming costs ~3.9us of Worker CPU per output
+      // token on this account, so a 16K response is ~62ms against a ~10ms
+      // Free-plan budget and the request dies mid-write. One `res.json()`
+      // on the finished body is ~0.27ms regardless of length — which is
+      // what lets a composition actually fit in one call.
+      //
+      // The trade is the live token stream. Progress is still reported from
+      // REAL events: `onToolStart` fires as each tool executes and is
+      // written to the client as a transient chunk, so the wait is visible
+      // rather than faked by a timer.
+      //
+      // `ok` keeps the model-chain working: a model that fails to start
+      // throws before anything was written, so the caller can fall through
+      // to the next model without the user ever seeing a seam.
+      let ok = false
+      let settledParts: UIMessage["parts"] = []
+      let settledReason: string | undefined
+
+      const runOn = async (id: string): Promise<void> => {
         const agent = openOn(id).agent
-        let emitted = false
-        const chunks = agent
-          .stream({ messages: modelMessages })
-          .toUIMessageStream({
-            generateMessageId: () => messageId,
-            sendReasoning: true,
-            // The SDK closes the message with `finish`, but a cut-off write
-            // needs one more sentence AFTER the tool error — and nothing may
-            // be written after the terminator. Owning `finish` lets the
-            // correction land inside the stream the user is reading.
-            sendFinish: false,
-            // The SDK's default swallows the reason; we log it and show ours.
-            onError: (err) => {
-              console.error(JSON.stringify({ msg: "agent-chunk-error", model: id, err: String(err) }))
-              return "An error occurred."
-            },
-            onFinish: (event) => {
-              settled.parts = event.responseMessage?.parts
-              settled.finishReason = event.finishReason
-            },
-          })
-        for await (const chunk of chunks) {
-          // Written as it arrives — this loop is the whole fix. Collecting
-          // chunks and emitting after the loop restores the buffering bug
-          // while still looking like "streaming" in the diff.
-          await emit(chunk)
-          emitted = true
+        const result = await agent.generate({ messages: modelMessages })
+        settledReason = result.finishReason
+        settledParts = toUiParts(result.content)
+        // `toSseChunks` opens the message itself, so `start` is NOT emitted
+        // here as well — two opens for one messageId is what left an empty
+        // bubble rendering a bare "Thinking…" after content had been sent.
+        if (isEmptyParts(settledParts)) {
+          // Nothing worth showing still has to close the message, or the
+          // client waits for text that is never coming.
+          await emit({ type: "start", messageId })
+          await emit({ type: "finish" })
+        } else {
+          for (const chunk of toSseChunks(settledParts, messageId)) await emit(chunk)
         }
-        return emitted
+        ok = true
       }
 
-      let ok = false
       try {
-        ok = await relay(built.modelId)
+        await runOn(built.modelId)
       } catch (err) {
         console.error(JSON.stringify({ msg: "agent-model-failed", model: built.modelId, err: String(err) }))
       }
+
       if (!ok) {
-        // Nothing reached the client, so the step is still free to fall
-        // through to the next model without the user having seen a seam.
+        // The primary failed before returning anything, so nothing has been
+        // written to the client yet and the turn is still free to fall
+        // through to the next model in the same response — no seam, no
+        // partially-rendered bubble to reconcile.
         for (const fallback of built.chain.slice(1)) {
           try {
-            if (await relay(fallback)) {
-              console.log(JSON.stringify({ msg: "agent-model-fallback", to: fallback }))
-              ok = true
-              break
-            }
+            await runOn(fallback)
+            console.log(JSON.stringify({ msg: "agent-model-fallback", to: fallback }))
+            ok = true
+            break
           } catch (e2) {
-            console.error(JSON.stringify({ msg: "agent-model-failed", model: fallback, err: String(e2) }))
+            console.error(
+              JSON.stringify({ msg: "agent-model-failed", model: fallback, err: String(e2) })
+            )
           }
         }
       }
@@ -498,8 +500,8 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
 
       // Terminator. Without it the client's stream reader never sees
       // completion and the turn stays pending until it times out.
-      const parts = settled.parts ?? []
-      const finishReason = settled.finishReason
+      const parts = settledParts
+      const finishReason = settledReason
 
       // A cut-off tool call is invisible to the model as a tool error: the
       // SDK never ran it, so nothing in the tool vocabulary tells it WHY.
@@ -523,7 +525,9 @@ app.post("/chat", zValidator("json", chatSchema), async (c) => {
         await emit({ type: "text-end", id: noteId })
       }
 
-      await emit({ type: "finish" })
+      // Terminator. Without it the client's stream reader never sees
+      // completion and the turn stays pending until it times out. The
+      // `finish` chunk itself was already written by runOn, above.
       await done()
 
       const empty = isEmptyParts(parts)

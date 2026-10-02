@@ -5,6 +5,7 @@
  * for CPU-capped plans — no model involved.
  */
 import { describe, it } from "node:test"
+import { readFileSync } from "node:fs"
 import assert from "node:assert/strict"
 import type { UIMessage } from "ai"
 import {
@@ -67,26 +68,42 @@ describe("continuation token", () => {
     assert.equal(MAX_STEPS_PER_TURN, TURN_LIMITS.advanced.maxSteps)
   })
 
-  it("the output budget stays inside the CPU ceiling in BOTH modes", () => {
-    // Streaming costs ~3.9us of CPU per output token (measured on this
-    // account), and Workers Free allows ~10ms per request. 16K tokens was
-    // 62ms — a guaranteed kill mid-write, which users saw as
-    // "Interrupted mid-step". Advanced buys MORE STEPS, never a longer
-    // single response, so the two modes must share this ceiling.
-    const BUDGET_MS = 10
-    const US_PER_TOKEN = 0.0039
-    for (const mode of ["standard", "advanced"] as const) {
-      const est = TURN_LIMITS[mode].maxOutputTokens * US_PER_TOKEN
-      assert.ok(
-        est < BUDGET_MS,
-        `${mode}: ${TURN_LIMITS[mode].maxOutputTokens} tokens ≈ ${est.toFixed(1)}ms of streaming CPU, over the ${BUDGET_MS}ms budget`
-      )
-    }
-    assert.equal(
-      TURN_LIMITS.advanced.maxOutputTokens,
-      TURN_LIMITS.standard.maxOutputTokens,
-      "advanced must not raise the per-response ceiling"
+  it("the output budget is safe BECAUSE the route no longer streams", () => {
+    // Streaming cost ~3.9us of CPU per output token: 16K tokens is ~62ms
+    // against a ~10ms Free-plan budget, so streaming once forced a
+    // 1,200-token ceiling — small enough that the model spent the whole
+    // budget on its PLAN narration and the tool arguments arrived empty.
+    // The model reported its own writes as "a placeholder" and retried the
+    // identical plan indefinitely. Shrinking the cap did not make it safer;
+    // it made it unable to write code at all.
+    //
+    // The route now calls generate() (non-streaming): one res.json() on the
+    // finished body costs ~0.27ms at any length, so there is no reason to
+    // cap output near real scene size. This is the tripwire — if anyone
+    // re-enables streaming, the per-token cost returns and this is the
+    // assertion that has to be revisited first.
+    const routeSrc = readFileSync(
+      new URL("../src/routes/agent.ts", import.meta.url),
+      "utf8"
     )
+    const isStreaming = /\.stream\(\{/.test(routeSrc)
+
+    for (const mode of ["standard", "advanced"] as const) {
+      const tokens = TURN_LIMITS[mode].maxOutputTokens
+      if (isStreaming) {
+        assert.ok(
+          tokens * 0.0039 < 10,
+          `${mode}: ${tokens} streamed tokens ≈ ${(tokens * 0.0039).toFixed(1)}ms, over the ~10ms budget`
+        )
+      } else {
+        // Non-streaming: one parse of the finished body regardless of
+        // length, so the ceiling is only a runaway backstop.
+        assert.ok(
+          tokens > 64000,
+          `${mode}: ${tokens} tokens leaves no room for a real composition`
+        )
+      }
+    }
   })
 
   it("resolveMode only accepts known modes", () => {

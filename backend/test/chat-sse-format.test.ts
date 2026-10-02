@@ -5,25 +5,31 @@ import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 
 /**
- * The chat SSE wire format.
+ * The chat SSE wire format, and why the model is called non-streaming.
  *
- * The AI SDK's UI message stream has a precise format: bare `data: {json}`
- * frames terminated by `data: [DONE]`, with NO `event:` line. The client's
- * parser ignores named events, so writing them produces a stream the browser
- * cannot read at all — an empty chat with no error anywhere. That regression
- * happened once and is why these assertions exist.
+ * FORMAT. The AI SDK's UI message stream has a precise shape: bare
+ * `data: {json}` frames terminated by `data: [DONE]`, with NO `event:` line.
+ * The client's parser ignores named events, so writing them produces a stream
+ * the browser cannot read at all — an empty chat with no error anywhere. That
+ * regression happened once and is why these assertions exist.
  *
- * The route no longer BUILDS the message stream by hand. It relays the SDK's
- * own `toUIMessageStream()` chunks, which is why there is no vocabulary to
- * get wrong: the SDK owns it. What is still ours, and still worth pinning,
- * is the frame format, the terminator, and the ordering.
+ * NON-STREAMING. The route calls `agent.generate()` and converts the finished
+ * parts. Streaming was reverted once already and the reason is worth keeping
+ * in a test rather than a comment: the Worker parses ~3.9us of CPU per output
+ * token, so a realistic 16K response is ~62ms against a ~10ms Workers Free
+ * budget and the request is killed mid-write. Users saw that as
+ * "Interrupted mid-step". One `res.json()` on the finished body is ~0.27ms at
+ * any length, which is what finally let the model write a whole composition.
+ *
+ * The cost of that choice is no token-level stream. The UI is not left blank:
+ * `onToolStart` emits a real event per executed tool, so progress is reported
+ * from work that actually happened rather than a timer.
  */
 
 const here = dirname(fileURLToPath(import.meta.url))
 const routeSrc = readFileSync(join(here, "..", "src", "routes", "agent.ts"), "utf8")
 
 test("SSE frames use bare `data:` (no `event:` line)", () => {
-  // The client parser only reads `data:` frames. A named event is dropped.
   assert.ok(
     !/writeSSE\(\{\s*event:/.test(routeSrc),
     "route writes a named SSE event; the AI SDK client ignores those"
@@ -61,67 +67,47 @@ test("the error path also terminates the stream", () => {
   assert.match(failBody, /await done\(\)/, "fail() must terminate the stream")
 })
 
-/**
- * The regression that motivated streaming.
- *
- * The route used to call `agent.generate()` and dump the finished turn in one
- * burst. A step takes 77-88s, so for every one of those seconds the client
- * had nothing but a `start` frame: the bubble rendered a bare "Thinking…"
- * with no text, no tool chips, no sign of work. The model writes its
- * acknowledgement and plan FIRST, so streaming lands them in ~2s.
- */
-test("the route streams the model so the UI is never a blank spinner", () => {
-  assert.match(routeSrc, /\.stream\(\{/, "route must stream the model, not buffer it")
+test("the model is called non-streaming, so a long write can survive", () => {
+  // Streaming costs ~3.9us of CPU per output token in this Worker; a 16K
+  // response is ~62ms against a ~10ms Free-plan budget and gets the request
+  // killed mid-write. This is the assertion that has to fail first if anyone
+  // tries to "improve the UX by streaming again".
+  assert.match(routeSrc, /\.generate\(\{\s*messages:/, "route must call generate()")
+  assert.doesNotMatch(routeSrc, /\.stream\(\{/, "streaming is what killed the long writes")
+  assert.doesNotMatch(routeSrc, /toUIMessageStream\(/, "no SDK stream to relay")
+})
+
+test("the message is opened exactly once", () => {
+  // `toSseChunks` emits `start` itself. A second one in the route opened the
+  // same messageId twice, which is what left a bubble empty and rendering a
+  // bare "Thinking…" after its content had already been sent.
+  const runOn = routeSrc.slice(routeSrc.indexOf("const runOn = async"), routeSrc.indexOf("const runOn = async") + 900)
+  const starts = [...runOn.matchAll(/type:\s*"start"/g)]
+  assert.equal(
+    starts.length,
+    1,
+    "runOn must only emit `start` on the empty-result path, never alongside toSseChunks"
+  )
   assert.match(
-    routeSrc,
-    /toUIMessageStream\(/,
-    "relay the SDK's own UI message stream rather than rebuilding the vocabulary"
+    runOn,
+    /if \(isEmptyParts\(settledParts\)\)[\s\S]{0,200}type:\s*"start"/,
+    "the lone `start` belongs to the empty-result branch"
   )
-  assert.doesNotMatch(
-    routeSrc,
-    /\.agent\.generate\(/,
-    "generate() buffers the whole turn, which is what produced the 77s blank spinner"
-  )
-})
-
-test("chunks are relayed one at a time, not collected then emitted", () => {
-  // The shape that matters: emit inside the loop. Collecting first and
-  // emitting after would restore the buffering bug while still "streaming".
-  assert.match(
-    routeSrc,
-    /for await \(const chunk of chunks\)[\s\S]{0,400}await emit\(chunk\)/,
-    "each chunk must be written as it arrives"
-  )
-})
-
-test("the route emits exactly one `start`, and the SDK owns it", () => {
-  // The route used to emit its own `start` and then relay the SDK's, which
-  // opened the message twice and could leave a bubble empty.
-  assert.doesNotMatch(
-    routeSrc,
-    /emit\(\{\s*type:\s*"start"/,
-    "the route must not emit its own start; toUIMessageStream already does"
-  )
-  assert.match(routeSrc, /generateMessageId:\s*\(\)\s*=>\s*messageId/, "pass the message id to the SDK")
-})
-
-test("the route owns `finish` so a truncation correction can precede it", () => {
-  // Nothing may be written after the terminator, and the correction has to
-  // reach the model on the next step, so the SDK must not close the message.
-  assert.match(routeSrc, /sendFinish:\s*false/, "the SDK must not emit finish; the route owns it")
-  const correction = routeSrc.indexOf("truncatedByLength(")
-  const finish = routeSrc.indexOf('await emit({ type: "finish" })')
-  assert.ok(correction > 0 && correction < finish, "the correction must precede finish")
 })
 
 test("tool progress is reported as a transient data chunk", () => {
+  // With no token stream, this is the only thing telling the user work is
+  // happening — so it has to be a real per-tool event, and transient so it
+  // never lands in the persisted conversation.
   assert.match(routeSrc, /data-toolstart/, "no tool-start progress event")
   assert.match(routeSrc, /transient:\s*true/, "progress chunks must be transient so they aren't persisted")
+  assert.match(routeSrc, /onToolStart/, "progress must be wired from a real tool event")
 })
 
-test("model-chain fallback still works while streaming", () => {
-  // Nothing reaches the client until the first chunk, so a model that fails
-  // to start can still fall through to the next one in the same response.
+test("model-chain fallback still works", () => {
+  // Nothing reaches the client until a model has actually returned, so a model
+  // that fails to start can still fall through to the next one in the same
+  // response — without the user seeing a seam.
   assert.match(routeSrc, /built\.chain\.slice\(1\)/, "the fallback chain must still be walked")
-  assert.match(routeSrc, /await relay\(fallback\)/, "fallbacks must go through the same relay")
+  assert.match(routeSrc, /await runOn\(fallback\)/, "fallbacks must go through the same path")
 })

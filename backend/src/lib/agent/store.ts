@@ -497,15 +497,48 @@ export async function loadMessages(
   // model or the UI window, so loading them only burns CPU + D1 bytes.
   // (Stored parts are additionally sanitized on write — see
   // sanitizePartsForStorage — so rows stay small forever.)
-  const rows = await ctx.db
+  //
+  // The tail is fetched, then RECENT USER TURNS are added back on top.
+  // One turn chains one request per model step, so a long turn leaves a dozen
+  // assistant step-messages in a row; a bare tail then contains nothing but
+  // assistant steps and the user's original brief is gone. That produced two
+  // separate production failures: the model stated out loud that it had lost
+  // the brief and re-planned the identical cut repeatedly, and the next
+  // continuation was rejected with "Nothing to continue — describe the clip
+  // first" because no user message remained to continue.
+  //
+  // So the brief is fetched explicitly rather than assumed to be inside the
+  // tail. `pruneForModel` then narrows this back down for the model.
+  const tail = await ctx.db
     .select()
     .from(messages)
     .where(eq(messages.conversationId, ctx.conversationId))
     .orderBy(desc(messages.createdAt))
     .limit(limit)
     .all()
-  return rows
-    .reverse()
+
+  const tailIds = new Set(tail.map((r) => r.id))
+  const hasUserInTail = tail.some((r) => r.role === "user")
+  const pinned: typeof tail = []
+  if (!hasUserInTail) {
+    // Walk back for the most recent real user turns. Continuation tokens are
+    // never persisted, so every stored `user` row is a genuine brief.
+    const earlier = await ctx.db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, ctx.conversationId))
+      .orderBy(desc(messages.createdAt))
+      .limit(limit * 3)
+      .all()
+    for (const r of earlier) {
+      if (r.role !== "user" || tailIds.has(r.id)) continue
+      pinned.push(r)
+      if (pinned.length >= 3) break
+    }
+  }
+
+  return [...tail, ...pinned]
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     .map((r) => ({ id: r.id, role: r.role, parts: r.parts }))
 }
 
