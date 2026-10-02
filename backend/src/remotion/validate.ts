@@ -158,6 +158,20 @@ export function checkComposition(code: string): Check[] {
   }
 
   // --- Remotion-specific correctness -------------------------------------
+
+  // <Composition> registers a composition with the Studio entry file. It is
+  // never rendered inside a component, and mounting one throws in the Player —
+  // which is exactly what a generated cut does, so this failure is guaranteed
+  // rather than likely.
+  if (/<Composition[\s/>]/.test(src)) {
+    out.push({
+      level: "error",
+      message:
+        "Do not render <Composition>. It registers a composition with Remotion's " +
+        "Studio entry file and throws when mounted inside a Player. Export the " +
+        "component itself as the default export instead.",
+    })
+  }
   if (/transition\s*:\s*["']all\s+["']/.test(src) && !/springs?\s*:\s*springTimingConfig/.test(src)) {
     out.push({
       level: "error",

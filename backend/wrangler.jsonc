@@ -39,9 +39,9 @@
 
   // The frontend is NOT served from here — it is deployed to Cloudflare Pages
   // and served from motion.slyxup.com, so this Worker serves API + agent only.
-
-  "vars": {
-    // Comma-separated chain, tried in order. Vercel AI Gateway model ids.
-    "AI_MODEL": "alibaba/qwen3.7-flash,google/gemini-2.0-flash"
-  }
+  //
+  // The model is a single constant in src/chat.ts, not a var: one gateway key
+  // with one 5-requests-per-minute quota means a fallback chain would just
+  // spend that quota twice as fast. An earlier AI_MODEL var listing
+  // "alibaba/qwen3.7-flash,google/gemini-2.0-flash" is gone for that reason.
 }
