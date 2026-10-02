@@ -286,7 +286,7 @@ export function PlaygroundPage({
   }
 
   return (
-    <div className="flex min-h-svh bg-background text-foreground">
+    <div className="flex h-[100dvh] overflow-hidden bg-background text-foreground lg:h-svh">
       <aside
         className={cn(
           "sticky top-0 hidden h-svh shrink-0 overflow-hidden border-r transition-all duration-300 lg:block",
@@ -414,7 +414,11 @@ export function PlaygroundPage({
           )}
         </header>
 
-        <main id="main-content" tabIndex={-1} className="flex min-h-0 flex-1 flex-col overflow-x-clip p-2 outline-none sm:p-3">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex min-h-0 flex-1 flex-col overflow-hidden p-2 outline-none sm:p-3 lg:overflow-x-clip lg:overflow-y-auto"
+        >
           {!active ? (
             <div className="flex flex-col items-center gap-1 rounded-2xl border border-dashed bg-card/40 px-6 py-12 text-center transition-colors hover:border-primary/30">
               <span className="flex size-10 items-center justify-center rounded-xl bg-linear-to-br from-primary/15 to-primary/5 ring-1 ring-inset ring-primary/15">
@@ -430,11 +434,11 @@ export function PlaygroundPage({
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row xl:items-start">
-              <div className="shrink-0 xl:hidden">
+              <div className="sticky top-0 z-20 shrink-0 bg-background/85 pb-1 backdrop-blur-md xl:hidden">
                 <div
                   role="tablist"
                   aria-label="Editor view"
-                  className="grid shrink-0 grid-cols-2 gap-1 rounded-xl border bg-card p-1"
+                  className="grid shrink-0 grid-cols-2 gap-1 rounded-2xl border bg-card/80 p-1 shadow-elev-1"
                   onKeyDown={(e) => {
                     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
                     e.preventDefault()
@@ -457,10 +461,12 @@ export function PlaygroundPage({
                     type="button"
                     onClick={() => setMobileTab(tab.id)}
                     className={cn(
-                      "flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg py-1.5 text-[13px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2",
+                      // Segmented control: the active pill lifts, so the
+                      // current view is obvious at a glance without hunting.
+                      "flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl py-1.5 text-[13px] font-medium outline-none transition-all duration-200 [transition-timing-function:var(--ease-out-soft)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
                       mobileTab === tab.id
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:text-foreground"
+                        ? "bg-primary text-primary-foreground shadow-elev-2"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
                     )}
                   >
                     <tab.icon className="size-4" />
@@ -489,8 +495,14 @@ export function PlaygroundPage({
                 aria-labelledby="editor-tab-chat"
                 className={cn(
                   "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card shadow-elev-2",
-                  "h-[calc(100dvh-11.5rem)] min-h-[320px]",
-                  mobileTab === "chat" ? "flex flex-1" : "hidden",
+                  // Fills whatever the editor column has left. The old
+                  // `h-[calc(100dvh-11.5rem)]` hard-coded a guess at the
+                  // header+tab height; on a small phone that guess was wrong
+                  // and the panel overflowed the viewport with no way to
+                  // reach the bottom — which is why mobile chat would not
+                  // scroll. One scroller (the chat) inside a sized box.
+                  "min-h-[320px] flex-1",
+                  mobileTab === "chat" ? "flex" : "hidden",
                   "xl:flex xl:h-[calc(100svh-5rem)] xl:min-h-[480px] xl:w-[400px] xl:max-w-[440px] xl:flex-none xl:sticky xl:top-16"
                 )}
               >
@@ -523,8 +535,8 @@ export function PlaygroundPage({
                 aria-labelledby="editor-tab-preview"
                 className={cn(
                   "min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-950",
-                  "h-[calc(100dvh-11.5rem)] min-h-[320px]",
-                  mobileTab === "preview" ? "flex flex-1" : "hidden",
+                  "min-h-[320px] flex-1",
+                  mobileTab === "preview" ? "flex" : "hidden",
                   "xl:flex xl:h-full xl:min-h-0 xl:flex-1"
                 )}
               >

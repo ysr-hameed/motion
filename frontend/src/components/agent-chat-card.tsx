@@ -1520,7 +1520,7 @@ function AgentThread({
         role="log"
         aria-label="Messages"
         aria-live="off"
-        className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto overscroll-contain scrollbar-chat px-3 py-2.5 text-left"
+        className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto overscroll-contain scrollbar-chat px-3 pb-3 pt-3 text-left"
       >
         {visibleMessages.length === 0 && !pending && !initialPrompt && !pendingInitial && (
           <div className="msg-in flex flex-col items-center gap-1 rounded-2xl border border-dashed px-5 py-6 text-center">
@@ -1553,7 +1553,7 @@ function AgentThread({
           return m.role === "user" ? (
             <div
               key={m.id}
-              className="msg-in max-w-[85%] self-end break-words rounded-2xl rounded-tr-md bg-linear-to-br from-primary to-primary/85 px-3.5 py-2 text-sm text-primary-foreground shadow-elev-2"
+              className="msg-in max-w-[85%] self-end break-words rounded-2xl rounded-tr-md bg-linear-to-br from-primary to-primary/85 px-3.5 py-2 text-sm leading-relaxed text-primary-foreground shadow-elev-2 ring-1 ring-inset ring-white/10"
             >
               {/* Only the newest turn carries its image bytes; older turns
                   were sent (and stored) without them to keep the request
@@ -1726,8 +1726,14 @@ function AgentThread({
         )}
       </div>
 
-      <div className="px-2.5 pb-2.5">
-        <div className="rounded-2xl border bg-card transition-colors focus-within:border-primary/50">
+      {/* Composer sits in its own sticky layer with a safe-area inset, so on
+          a phone it clears the home indicator and stays reachable while the
+          thread scrolls behind it. */}
+      {/* Composer gets its own layer with a blurred backdrop and a safe-area
+          inset, so on a phone it clears the home indicator, stays reachable,
+          and the thread scrolling behind it never shows through. */}
+      <div className="shrink-0 border-t border-border/60 bg-background/85 px-2.5 pb-2.5 pt-2 backdrop-blur-md [padding-bottom:max(0.625rem,env(safe-area-inset-bottom))]">
+        <div className="rounded-2xl border bg-card shadow-elev-2 transition-all duration-300 [transition-timing-function:var(--ease-out-soft)] focus-within:border-primary/50 focus-within:shadow-elev-4 focus-within:ring-2 focus-within:ring-primary/10">
           {attachments.length > 0 && (
             <div className="flex gap-1.5 overflow-x-auto px-3 pt-2.5">
               {attachments.map((a) => (
@@ -1796,8 +1802,11 @@ function AgentThread({
               disabled={pending ? false : !input.trim()}
               onClick={pending ? stop : () => send()}
               className={cn(
-                "size-10 min-h-[44px] min-w-[44px] shrink-0 cursor-pointer rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-default disabled:opacity-50",
-                pending && "bg-destructive hover:bg-destructive/90"
+                // Circular, always a 44px touch target on mobile. Gradient
+                // fill + glow so the primary action is unmistakable, and it
+                // turns destructive the moment a run is in flight.
+                "size-10 min-h-[44px] min-w-[44px] shrink-0 cursor-pointer rounded-full bg-linear-to-br from-primary to-primary/80 text-primary-foreground shadow-glow transition-all duration-200 [transition-timing-function:var(--ease-out-soft)] hover:from-primary hover:to-primary active:scale-95 disabled:cursor-default disabled:opacity-40 disabled:shadow-none",
+                pending && "bg-linear-to-br from-destructive to-destructive/85 shadow-none hover:from-destructive hover:to-destructive"
               )}
             >
               {pending ? <Square className="size-3.5" aria-hidden /> : <Send className="size-3.5" aria-hidden />}
