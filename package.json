@@ -8,10 +8,12 @@
     "dev:backend": "pnpm -C backend dev",
     "dev:frontend": "pnpm -C frontend dev",
     "build": "pnpm -C frontend build",
-    "deploy": "pnpm run build && pnpm -C backend deploy",
+    "deploy": "pnpm -C backend deploy && pnpm -C frontend deploy",
     "deploy:secret": "pnpm -C backend secret:put",
     "check": "pnpm -C backend check && pnpm -C frontend check",
-    "cf-typegen": "pnpm -C backend cf-typegen"
+    "cf-typegen": "pnpm -C backend cf-typegen",
+    "deploy:api": "pnpm -C backend deploy",
+    "deploy:web": "pnpm -C frontend deploy"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

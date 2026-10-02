@@ -17,10 +17,19 @@
   // conversation, so CPU per request stays flat however long the thread gets.
   //
   // No "limits" block on purpose: this account is on Workers Free, which
-  // rejects it. It is not needed either — a SQLite-backed DO gets 30s of CPU
-  // per invocation by default, and waiting on the model gateway is I/O that
-  // does not count against CPU. The Free plan's ~10ms cap applies to the outer
-  // Worker request, which is only a WebSocket relay.
+  // rejects it. It is not needed either. CPU accounting, per the Durable
+  // Objects limits page:
+  //
+  //   * A SQLite-backed DO gets 30s of CPU per invocation by default, and each
+  //     incoming WebSocket message resets that budget.
+  //   * CPU is ACTIVE time only. Every millisecond spent waiting on the model
+  //     gateway, D1 or R2 is I/O and counts for nothing.
+  //   * DOs are available on Workers Free.
+  //
+  // So the Free plan's ~10ms per-request cap applies only to this outer
+  // Worker, which does almost nothing: match the URL, forward to the DO,
+  // return the response. It never parses a transcript and never waits on the
+  // model. That is the whole reason the agent runs inside a DO.
   "durable_objects": {
     "bindings": [{ "name": "Chat", "class_name": "Chat" }]
   },
@@ -28,15 +37,8 @@
 
   "observability": { "enabled": true },
 
-  // The Worker serves the built frontend, so the browser sees ONE origin — no
-  // CORS anywhere. Build the frontend before deploying (`pnpm run deploy`
-  // does both). run_worker_first keeps /agents/* on the Worker.
-  "assets": {
-    "directory": "../frontend/dist",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": true
-  },
+  // The frontend is NOT served from here — it is deployed to Cloudflare Pages
+  // and served from motion.slyxup.com, so this Worker serves API + agent only.
 
   "vars": {
     // Comma-separated chain, tried in order. Vercel AI Gateway model ids.

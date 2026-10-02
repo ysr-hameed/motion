@@ -144,3 +144,50 @@ button.ghost {
   font-size: 0.85rem;
   padding: 0.35rem 0.7rem;
 }
+
+.tool {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+  padding: 0.3rem 0.45rem;
+  border-radius: 8px;
+  background: #1c1c21;
+  border: 1px solid var(--line);
+  font-size: 0.8rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.tool--error {
+  border-color: #7a2b2b;
+}
+
+.tool__name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tool__input {
+  color: var(--muted);
+}
+
+.tool__output {
+  color: #9ad18b;
+  overflow-wrap: anywhere;
+}
+
+.tool--error .tool__output {
+  color: #ff8f8f;
+}
+
+.tool__state {
+  color: var(--muted);
+  font-style: italic;
+}
+
+button.stop {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+}

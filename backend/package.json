@@ -9,7 +9,8 @@
     "build": "wrangler deploy --dry-run --outdir dist",
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",
-    "check": "pnpm run typecheck"
+    "check": "pnpm run typecheck",
+    "secret:put": "wrangler secret put AI_GATEWAY_API_KEY"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.83",
