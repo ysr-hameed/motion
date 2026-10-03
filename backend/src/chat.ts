@@ -16,8 +16,89 @@ import { DISPLAY_FACES, MAX_FONT, MIN_FONT, SAFE_MARGIN, TEXT_FACES, TYPE_SCALE 
 import { CompositionStore } from "./remotion/store"
 
 /** Vercel AI Gateway, OpenAI-compatible. */
-const MODEL = "inclusionai/ling-3.1-flash"
 const GATEWAY_BASE = "https://ai-gateway.vercel.sh/v1"
+
+export interface ModelOption {
+  id: string
+  label: string
+  blurb: string
+  /** True when the gateway serves this model text-only (image/file parts 400). */
+  textOnly: boolean
+  /** Only set for models known to accept a gateway reasoning-effort option. */
+  reasoningEffort?: "low"
+}
+
+/**
+ * The models the chat switcher may offer. IDs are Vercel AI Gateway model
+ * IDs — adding one here is all it takes for the UI to offer it.
+ * Free ones first, then the cheapest paid ones with tool-use.
+ */
+export const MODELS: ModelOption[] = [
+  {
+    id: "inclusionai/ling-3.1-flash",
+    label: "Ling 3.1 Flash",
+    blurb: "Default · free · text only",
+    textOnly: true,
+  },
+  {
+    id: "inclusionai/ling-3.1-flash-free",
+    label: "Ling 3.1 Flash (free tier)",
+    blurb: "Free routing · text only",
+    textOnly: true,
+  },
+  {
+    id: "inclusionai/ling-3.0-flash-sante",
+    label: "Ling 3.0 Sante",
+    blurb: "Free · text only",
+    textOnly: true,
+  },
+  {
+    id: "poolside/laguna-s-2.1-free",
+    label: "Laguna S 2.1",
+    blurb: "Free · text only",
+    textOnly: true,
+  },
+  {
+    id: "alibaba/qwen3.7-flash",
+    label: "Qwen 3.7 Flash",
+    blurb: "$0.03/1M · vision · 991K ctx",
+    textOnly: false,
+    reasoningEffort: "low",
+  },
+  {
+    id: "alibaba/qwen3.8-27b",
+    label: "Qwen 3.8 27B",
+    blurb: "$0.02/1M · vision · 1M ctx",
+    textOnly: false,
+  },
+  {
+    id: "inclusionai/ling-3.0-flash",
+    label: "Ling 3.0 Flash",
+    blurb: "$0.02/1M · text only",
+    textOnly: true,
+  },
+  {
+    id: "deepseek/deepseek-v4-flash-0731",
+    label: "DeepSeek V4 Flash",
+    blurb: "$0.01/1M · text only · 1M ctx",
+    textOnly: true,
+  },
+  {
+    id: "zai/glm-5.3-flash",
+    label: "GLM 5.3 Flash",
+    blurb: "$0.04/1M · vision · 1M ctx",
+    textOnly: false,
+  },
+  {
+    id: "mistral/mistral-nemo",
+    label: "Mistral Nemo",
+    blurb: "$0.02/1M · ultra-cheap · simple chats",
+    textOnly: true,
+  },
+]
+
+/** The model a new chat session starts on. */
+export const DEFAULT_MODEL = MODELS[0].id
 
 /**
  * Ceiling on model round trips per turn.
@@ -212,6 +293,8 @@ ${SKILL_IDS.join(", ")}`
 export interface ChatState {
   /** modelId -> epoch ms before which the model is skipped. */
   cooldown?: Record<string, number>
+  /** The model this session generates with (one of MODELS). */
+  model?: string
   /** The latest render report posted by the browser for a published version. */
   audit?: RenderReport
 }
@@ -342,8 +425,28 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       return new Response(null, { status: 204 })
     }
 
-    if (path.endsWith("/versions")) {
-      const { version } = store.current()
+    // Per-session model selection for the chat switcher. POST {model} with
+    // one of the allowlisted IDs; GET returns the current model plus the
+    // list. The session id in the URL is an unguessable capability URL, the
+    // same trust level as /audit and /rating — no user session needed.
+    if (path.endsWith("/model")) {
+      if (request.method === "POST") {
+        let id = ""
+        try {
+          id = String(((await request.json()) as { model?: unknown }).model ?? "")
+        } catch {
+          return Response.json({ ok: false, error: "bad json" }, { status: 400 })
+        }
+        if (!MODELS.some((m) => m.id === id)) {
+          return Response.json({ ok: false, error: "unknown model", available: MODELS }, { status: 400 })
+        }
+        this.setState({ ...(this.state ?? {}), model: id })
+        return Response.json({ ok: true, model: id })
+      }
+      return Response.json({ model: this.state?.model ?? DEFAULT_MODEL, available: MODELS })
+    }
+
+    if (path.endsWith("/versions")) {      const { version } = store.current()
       return Response.json({
         current: version,
         versions: store.versions().map((v) => ({
@@ -443,36 +546,45 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       fetch: createPacedFetch() as typeof fetch,
     })
 
+    // The switcher stores the session's pick in DO state; a session that
+    // never picked gets the default. Model quirks below are keyed off the
+    // spec, not the id, so adding a MODELS entry is enough to support it.
+    const activeModel = this.state?.model ?? DEFAULT_MODEL
+    const spec = MODELS.find((m) => m.id === activeModel) ?? MODELS[0]
+    const modelMessages = (await convertToModelMessages(this.messages)) as Array<any>
+
     const result = streamText({
-      model: openai(MODEL),
+      model: openai(activeModel),
       system: SYSTEM,
       tools,
       messages: pruneMessages({
-        // Ling 3.1 Flash is text-only on the gateway: image/PDF file parts
-        // 400 the request, while a manual text-only curl succeeds. The
-        // frontend still attaches references as file parts, so downgrade
-        // them to a text note instead of failing the whole turn.
-        messages: ((await convertToModelMessages(this.messages)) as Array<any>).map((m) => {
-          const content = (m as { content?: unknown }).content
-          if (!Array.isArray(content)) return m
-          let stripped = false
-          const kept: Array<any> = []
-          for (const part of content as Array<{ type?: string }>) {
-            if (part?.type === "image" || part?.type === "file") {
-              stripped = true
-              continue
-            }
-            kept.push(part)
-          }
-          if (!stripped) return m
-          return {
-            ...m,
-            content: [
-              ...kept,
-              { type: "text", text: "[Reference image/PDF omitted: this model accepts text only. Describe the reference in words.]" },
-            ],
-          }
-        }) as never,
+        // Text-only models (Ling on this gateway) 400 image/PDF file parts,
+        // while a manual text-only curl succeeds. The frontend still attaches
+        // references as file parts, so downgrade them to a text note instead
+        // of failing the whole turn. Vision models keep the parts as-is.
+        messages: (spec.textOnly
+          ? modelMessages.map((m) => {
+              const content = (m as { content?: unknown }).content
+              if (!Array.isArray(content)) return m
+              let stripped = false
+              const kept: Array<any> = []
+              for (const part of content as Array<{ type?: string }>) {
+                if (part?.type === "image" || part?.type === "file") {
+                  stripped = true
+                  continue
+                }
+                kept.push(part)
+              }
+              if (!stripped) return m
+              return {
+                ...m,
+                content: [
+                  ...kept,
+                  { type: "text", text: "[Reference image/PDF omitted: this model accepts text only. Describe the reference in words.]" },
+                ],
+              }
+            })
+          : modelMessages) as never,
         // Ling has a 262k context window (not 991k like Qwen), so pruning is
         // only here to keep each request cheap — not a hard constraint.
         // Reasoning and old tool output are dead weight once a newer turn exists.
@@ -481,16 +593,18 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       }),
       stopWhen: stepCountIs(MAX_STEPS),
       /**
-       * Reasoning effort is intentionally NOT set.
+       * Reasoning effort is set only for models that accept it.
        *
        * Ling 3.1 Flash reasons by default and only accepts
        * `reasoning_effort: "none"` — any other value ("low", "medium",
-       * "high") is refused with a 400. A manual curl without that field
-       * works, while the agent failed before the first token, which read
-       * in the UI as a stall with no output. Omitting the field keeps
-       * default reasoning, which arrives via `delta.reasoning` and is
-       * mapped by the openai-compatible provider.
+       * "high") is refused with a 400, and the agent failed before the first
+       * token, which read in the UI as a stall with no output. So the option
+       * is sent only for models flagged in MODELS (Qwen), and omitted for
+       * everything else.
        */
+      ...(spec.reasoningEffort
+        ? { providerOptions: { gateway: { reasoningEffort: spec.reasoningEffort } } }
+        : {}),
       /**
        * Guarantee the turn ends in verified words.
        *
@@ -551,6 +665,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
               msg: "turn-finished",
               ms,
               toolCalls,
+              model: activeModel,
               version: store.current().version,
             })
           )
@@ -585,7 +700,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         return onFinish(result)
       },
       onError: (error) => {
-        this.coolDown("inclusionai/ling-3.1-flash")
+        this.coolDown(activeModel)
         const err = error as unknown as Record<string, unknown>
         console.error(
           JSON.stringify({

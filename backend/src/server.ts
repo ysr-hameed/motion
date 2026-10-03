@@ -1,5 +1,5 @@
 import { routeAgentRequest } from "agents"
-import { Chat } from "./chat"
+import { Chat, DEFAULT_MODEL, MODELS } from "./chat"
 import { handleAccount } from "./api/account"
 import { handleAssets, handlePublicAsset, handleSharePage } from "./api/assets"
 import { handleContact } from "./api/contact"
@@ -14,8 +14,7 @@ import { requireAuth } from "./middleware/require-auth"
 
 export { Chat }
 
-/** The single model this agent uses. */
-const MODEL = "inclusionai/ling-3.1-flash"
+/** The default model; the switcher list lives in chat.ts (MODELS). */
 
 /**
  * The frontend is served from Cloudflare Pages at motion.slyxup.com and the
@@ -53,7 +52,8 @@ export default {
       const resp = withCors(
         Response.json({
           ok: true,
-          model: MODEL,
+          model: DEFAULT_MODEL,
+          models: MODELS,
           provider: "vercel-ai-gateway",
           auth: "slyxup-stack",
         }),

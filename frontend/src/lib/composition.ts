@@ -64,3 +64,32 @@ export async function fetchVersions(
   if (!res.ok) throw new Error(`versions ${res.status}`)
   return (await res.json()) as { current: number; versions: VersionSummary[] }
 }
+
+export interface ModelOption {
+  id: string
+  label: string
+  blurb: string
+  textOnly: boolean
+}
+
+export async function fetchChatModel(
+  instance: string,
+  signal?: AbortSignal
+): Promise<{ model: string; available: ModelOption[] }> {
+  const res = await fetch(agentUrl(instance, "model"), { signal })
+  if (!res.ok) throw new Error(`model ${res.status}`)
+  return (await res.json()) as { model: string; available: ModelOption[] }
+}
+
+export async function setChatModel(instance: string, model: string): Promise<{ model: string }> {
+  const res = await fetch(agentUrl(instance, "model"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null)
+    throw new Error((detail as { error?: string } | null)?.error ?? `model ${res.status}`)
+  }
+  return (await res.json()) as { model: string }
+}

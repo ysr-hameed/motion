@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { UIMessage } from "ai"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { TEMPLATES as TEMPLATE_CHIPS } from "~/lib/templates"
+import { fetchChatModel, setChatModel, type ModelOption } from "~/lib/composition"
 
 const TOOL_LABEL: Record<string, string> = {
   load_skill: "load skill",
@@ -381,10 +382,11 @@ const STALL_MS = 150_000
 
 interface Props {
   chat: UseAgentChatReturn
+  sessionId: string
   onFiles: (files: File[]) => void
 }
 
-export function Conversation({ chat }: Props) {
+export function Conversation({ chat, sessionId }: Props) {
   const { messages, sendMessage, clearHistory, stop, status, isStreaming, isRecovering, regenerate } = chat as UseAgentChatReturn & {
     regenerate?: () => void
   }
@@ -396,6 +398,10 @@ export function Conversation({ chat }: Props) {
   const [stalled, setStalled] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [models, setModels] = useState<ModelOption[]>([])
+  const [activeModel, setActiveModel] = useState("")
+  const [modelBusy, setModelBusy] = useState(false)
+  const [modelError, setModelError] = useState<string | null>(null)
   const [atBottom, setAtBottom] = useState(true)
   const scroller = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -433,6 +439,38 @@ export function Conversation({ chat }: Props) {
     el.addEventListener("scroll", onScroll, { passive: true })
     return () => el.removeEventListener("scroll", onScroll)
   }, [])
+
+  // Model switcher: list + current pick live in the Chat Durable Object,
+  // so every tab on this session agrees. Applies to the next message sent.
+  useEffect(() => {
+    let dead = false
+    fetchChatModel(sessionId)
+      .then((r) => {
+        if (dead) return
+        setModels(r.available)
+        setActiveModel(r.model)
+      })
+      .catch(() => {
+        if (!dead) setModelError("models unavailable")
+      })
+    return () => {
+      dead = true
+    }
+  }, [sessionId])
+
+  async function changeModel(id: string) {
+    if (!id || id === activeModel || modelBusy) return
+    setModelBusy(true)
+    setModelError(null)
+    try {
+      const r = await setChatModel(sessionId, id)
+      setActiveModel(r.model)
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setModelBusy(false)
+    }
+  }
 
   // Timeline / Inspector / ProgressView suggest edits as window events.
   // They land in the draft — the user still sends, the agent still writes.
@@ -502,13 +540,30 @@ export function Conversation({ chat }: Props) {
 
   return (
     <aside className="flex min-h-0 flex-col border-line lg:border-l" aria-label="Conversation">
-      <header className="flex shrink-0 items-center justify-between border-b border-line px-4 py-2.5">
+      <header className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2.5">
         <span className="eyebrow">brief</span>
+        {models.length > 0 ? (
+          <select
+            value={activeModel}
+            disabled={busy || modelBusy}
+            onChange={(e) => void changeModel(e.target.value)}
+            title={models.find((m) => m.id === activeModel)?.blurb ?? "Applies to the next message"}
+            aria-label="Model"
+            className="max-w-[170px] shrink-0 truncate rounded border border-line bg-panel-2 px-1.5 py-1 font-mono text-[10px] text-muted focus:border-tungsten focus:outline-none disabled:opacity-40"
+          >
+            {models.map((m) => (
+              <option key={m.id} value={m.id} title={m.blurb}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {modelError ? <span className="font-mono text-[10px] text-bad">{modelError}</span> : null}
         <button
           type="button"
           onClick={clearHistory}
           disabled={isStreaming}
-          className="font-mono text-[10px] text-dim transition-colors hover:text-paper disabled:opacity-40"
+          className="ml-auto font-mono text-[10px] text-dim transition-colors hover:text-paper disabled:opacity-40"
         >
           new cut
         </button>

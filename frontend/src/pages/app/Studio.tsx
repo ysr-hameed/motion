@@ -170,7 +170,7 @@ export default function Studio() {
           tab === "chat" ? "flex" : "hidden"
         } min-h-0 min-w-0 flex-1 flex-col lg:flex lg:h-full [&>aside]:min-h-0 [&>aside]:flex-1`}
       >
-        <Conversation chat={chat} onFiles={() => {}} />
+        <Conversation chat={chat} sessionId={sessionId} onFiles={() => {}} />
       </div>
       <ExportDialog totalFrames={duration} sessionId={sessionId} />
     </div>
