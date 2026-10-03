@@ -93,12 +93,20 @@ reports the current version, which is worth a call only when you need it.
    effects, shapes, spring, interpolate, easing, audio, images, video, fonts.
 2. plan_motion — beats with real frame numbers, real props, real easing. A plan
    names what you are about to type. "Add a nice transition" is not a plan.
-3. write_composition — the WHOLE file in one call. Every import, every
-   component, every beat, the default export.
-4. validate_composition, then review_motion on the source, then fix what it
-   actually found with edit_file (mechanical failures: auto_fix_code first,
-   linear motion: auto_enhance_motion). Then verify_no_errors — the blocking
-   gate. Preview only on ok:true.
+ 3. write_composition — the WHOLE file in one call. Every import, every
+    component, every beat, the default export.
+    Icons: lucide-react is in scope ONLY as the Lucide namespace —
+    write \`import * as Lucide from "lucide-react"\` and use
+    <Lucide.Zap/>. NEVER \`import {Zap} from "lucide-react"\` — it
+    throws "<name> is not available" in the player. Safest is an inline
+    <svg>. Fonts is already a global — NEVER \`import {Fonts} from
+    "../fonts"\`. Verify scope doubts with dependency_resolve first.
+ 4. validate_composition, then review_motion on the source, then fix what it
+    actually found (mechanical failures: auto_fix_code first,
+    linear motion: auto_enhance_motion). Several small fixes at once go
+    through bulk_edit (one call, atomic, one version bump), not five
+    edit_file calls. Then verify_no_errors — the blocking gate.
+    Preview only on ok:true.
 5. preview_composition, then read_render_report (it waits for the browser).
    preview ok:true means PUBLISHED, not rendering — the browser still has to
    compile and mount the cut.
@@ -213,6 +221,8 @@ export interface RenderReport {
   version: number
   /** True when the cut compiled AND mounted in the player. */
   ok: boolean
+  /** Compile-only reports set phase:"compile" — never enough to verify. */
+  phase?: "compile" | "mount" | "layout" | "runtime"
   /** Compile/runtime failure text, or compile timing on success. */
   message?: string
   /** Frame a layout measurement was taken at, if any. */
@@ -295,6 +305,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       const body = (await request.json()) as {
         version?: number
         ok?: boolean
+        phase?: "compile" | "mount" | "layout" | "runtime"
         message?: string
         line?: number
         frame?: number
@@ -308,11 +319,19 @@ export class Chat extends AIChatAgent<Env, ChatState> {
           rawMessage && body.line !== undefined ? `${rawMessage} (line ${body.line})` : rawMessage
         const incoming = (body.findings ?? []).slice(0, 12)
         const merged = prev && version === prev.version ? [...prev.findings, ...incoming] : incoming
+        // A stale compile-only report must never overwrite a newer
+        // mount/runtime verdict for the same version.
+        const incomingRank = body.ok === false ? 2 : body.phase === "compile" ? 0 : 1
+        const prevRank = !prev || prev.version !== version ? -1 : prev.ok === false ? 2 : (prev.phase ?? "layout") === "compile" ? 0 : 1
+        if (incomingRank < prevRank) {
+          return new Response(null, { status: 204 })
+        }
         this.setState({
           ...(this.state ?? {}),
           audit: {
             version,
             ok: body.ok !== false,
+            ...(body.phase ? { phase: body.phase } : {}),
             ...(message ? { message } : {}),
             ...(typeof body.frame === "number" ? { frame: body.frame } : {}),
             findings: [...new Set(merged)].slice(0, 12),
@@ -429,26 +448,49 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       system: SYSTEM,
       tools,
       messages: pruneMessages({
-        messages: await convertToModelMessages(this.messages),
-        // The model has a 991k context window, so pruning is only here to keep
-        // each request cheap — it is not a hard constraint. Reasoning and old
-        // tool output are dead weight once a newer turn exists.
+        // Ling 3.1 Flash is text-only on the gateway: image/PDF file parts
+        // 400 the request, while a manual text-only curl succeeds. The
+        // frontend still attaches references as file parts, so downgrade
+        // them to a text note instead of failing the whole turn.
+        messages: ((await convertToModelMessages(this.messages)) as Array<any>).map((m) => {
+          const content = (m as { content?: unknown }).content
+          if (!Array.isArray(content)) return m
+          let stripped = false
+          const kept: Array<any> = []
+          for (const part of content as Array<{ type?: string }>) {
+            if (part?.type === "image" || part?.type === "file") {
+              stripped = true
+              continue
+            }
+            kept.push(part)
+          }
+          if (!stripped) return m
+          return {
+            ...m,
+            content: [
+              ...kept,
+              { type: "text", text: "[Reference image/PDF omitted: this model accepts text only. Describe the reference in words.]" },
+            ],
+          }
+        }) as never,
+        // Ling has a 262k context window (not 991k like Qwen), so pruning is
+        // only here to keep each request cheap — not a hard constraint.
+        // Reasoning and old tool output are dead weight once a newer turn exists.
         reasoning: "before-last-message",
         toolCalls: "before-last-2-messages",
       }),
       stopWhen: stepCountIs(MAX_STEPS),
       /**
-       * Ask the model to show its working.
+       * Reasoning effort is intentionally NOT set.
        *
-       * qwen3.7-flash advertises `reasoning` and `include_reasoning`, so the
-       * chain of thought comes back as real reasoning parts and the UI can show
-       * it live instead of leaving the user watching a spinner. Effort is kept
-       * low: this is a code-writing agent, and a long deliberation spends one of
-       * five requests a minute without making the cut better.
+       * Ling 3.1 Flash reasons by default and only accepts
+       * `reasoning_effort: "none"` — any other value ("low", "medium",
+       * "high") is refused with a 400. A manual curl without that field
+       * works, while the agent failed before the first token, which read
+       * in the UI as a stall with no output. Omitting the field keeps
+       * default reasoning, which arrives via `delta.reasoning` and is
+       * mapped by the openai-compatible provider.
        */
-      providerOptions: {
-        gateway: { reasoningEffort: "low" },
-      },
       /**
        * Guarantee the turn ends in verified words.
        *
@@ -544,7 +586,26 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       },
       onError: (error) => {
         this.coolDown("inclusionai/ling-3.1-flash")
-        console.error(JSON.stringify({ msg: "agent-model-error", err: String(error) }))
+        const err = error as unknown as Record<string, unknown>
+        console.error(
+          JSON.stringify({
+            msg: "agent-model-error",
+            err: String(error),
+            name: (err?.name as string) ?? null,
+            message: (err?.message as string) ?? null,
+            status: (err as { status?: unknown })?.status ?? null,
+            statusCode: (err as { statusCode?: unknown })?.statusCode ?? null,
+            code: (err as { code?: unknown })?.code ?? null,
+            response: (() => {
+              try {
+                const r = (err as { responseBody?: unknown; response?: unknown })?.responseBody
+                return typeof r === "string" ? r.slice(0, 1000) : r ?? null
+              } catch {
+                return null
+              }
+            })(),
+          })
+        )
       },
     })
 

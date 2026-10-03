@@ -146,7 +146,10 @@ export function iconGenerate(concept: string): { concept: string; icons: string[
   return {
     concept,
     icons: [...final, `(full set: ${ICONS.join(", ")})`],
-    snippet: `import { ${final[0]} } from "lucide-react"; // <${final[0]} size={48} color="#fff" /> — lucide-react is in scope, stroke-width 2 default`,
+    // The player scope registers lucide-react as the `Lucide`
+    // namespace only — named imports throw "<name> is not available"
+    // at mount. Inline SVGs are always safe.
+    snippet: `import * as Lucide from "lucide-react"; // <Lucide.${final[0]} size={48} color="#D7FF3F" strokeWidth={2.2} /> — or an inline <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">`,
   }
 }
 

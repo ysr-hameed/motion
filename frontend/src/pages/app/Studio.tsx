@@ -105,7 +105,11 @@ export default function Studio() {
   const duration = last ? Math.max(30, Math.ceil(last.to)) : 150;
 
   return (
-    <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[1fr_400px]">
+    // Mobile: the app shell's content div is an unbounded scroll container,
+    // so h-full collapses and the preview's fit-box measures 0px — the
+    // player looks missing. Bound the studio to the viewport on small
+    // screens (lg keeps h-full inside the desktop grid).
+    <div className="flex h-[calc(100dvh-3rem)] min-h-0 flex-col lg:h-full lg:grid lg:grid-cols-[1fr_400px]">
       <div className="flex shrink-0 gap-1 border-b border-line p-2 lg:hidden" role="tablist" aria-label="Studio panels">
         {(["preview", "chat"] as const).map((t) => (
           <button
@@ -148,7 +152,13 @@ export default function Studio() {
             </button>
           </div>
         ) : null}
-        <Stage code={code} plan={plan} version={version} reloadKey={reloadKey} sessionId={sessionId} />
+        {/* Fixed stage height on mobile: inside the scrolling column the
+            Stage's flex-1 would otherwise resolve against unbounded content
+            height and the fit-box measures 0px. Desktop keeps the old
+            flex-1 behaviour inside the bounded grid. */}
+        <div className="flex h-[42dvh] min-h-[280px] shrink-0 flex-col lg:h-auto lg:min-h-0 lg:flex-1">
+          <Stage code={code} plan={plan} version={version} reloadKey={reloadKey} sessionId={sessionId} />
+        </div>
         <Timeline plan={plan} duration={duration} />
         <div className="flex shrink-0 flex-col gap-3 xl:flex-row">
           <Inspector plan={plan} code={code} version={version} />

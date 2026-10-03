@@ -66,6 +66,108 @@ const PROVIDED_PACKAGES = [
   "lucide-react",
 ]
 
+// The player strips every import and resolves identifiers from a fixed
+// scope. lucide-react is registered there ONLY as the `Lucide`
+// namespace, so a named import like `import {Zap} from "lucide-react"`
+// compiles but throws "<name> is not available" the moment the player
+// mounts it. Named lucide imports are therefore hard errors.
+const LUCIDE_SAFE: ReadonlySet<string> = new Set()
+
+/** Capitalised names the browser scope provides without an import. */
+const SCOPE_GLOBALS = new Set([
+  "React", "Fonts", "Lucide", "Shapes", "Paths", "Noise",
+  "TransitionSeries", "Transition", "Overlay", "Interactive",
+  "Solid", "CanvasImage", "HtmlInCanvas", "AnimatedImage", "IFrame",
+  "CameraMotionBlur", "HtmlInCanvasMotionBlur", "Trail",
+])
+
+/** Standard JS globals and TS utility types that never throw at runtime. */
+const LANGUAGE_GLOBALS = new Set([
+  "Error", "Set", "Map", "WeakSet", "WeakMap", "Promise", "RegExp",
+  "Object", "Array", "String", "Number", "Boolean", "Symbol",
+  "Date", "Math", "JSON", "Intl", "Record", "Partial", "Omit", "Pick",
+  "Readonly", "Required", "Exclude", "Extract", "NonNullable",
+  "HTMLElement", "Element", "Event", "Node", "Window", "Document",
+  "ComponentType", "ReactNode", "CSSProperties",
+])
+
+/**
+ * Names a composition references that the browser scope cannot
+ * provide. The player strips imports and resolves every identifier
+ * from a fixed scope, so anything outside it is a hard ReferenceError
+ * at mount — caught here, in the same turn, instead of at preview.
+ */
+function scopeViolations(src: string, imports: Array<{ clause: string; source: string }>): Check[] {
+  const out: Check[] = []
+
+  for (const imp of imports) {
+    if (imp.source !== "lucide-react") continue
+    const named = imp.clause.match(/\{([\s\S]*?)\}/)?.[1]
+    if (!named) continue
+    for (const raw of named.split(",")) {
+      const name = raw.split(/\s+as\s+/).pop()?.trim()
+      if (name && !LUCIDE_SAFE.has(name)) {
+        out.push({
+          level: "error",
+          message: `"${name}" from lucide-react is not registered in the player scope — it compiles but throws "${name} is not available" at mount. Use the Lucide namespace instead (import * as Lucide, then <Lucide.${name} />) or an inline <svg>.`,
+        })
+      }
+    }
+  }
+
+  // `import {Fonts} from "../fonts"` — there is no such module; Fonts
+  // is already a global in the player scope, and the broken path
+  // blanks the preview at compile time.
+  for (const imp of imports) {
+    if (imp.source.startsWith(".") && /Fonts/.test(imp.clause)) {
+      out.push({
+        level: "error",
+        message: `Do not import Fonts from "${imp.source}" — Fonts is already in scope as a global. Write fontFamily: Fonts.unbounded.family directly, no import.`,
+      })
+    }
+  }
+
+  // Capitalised identifiers that are neither declared, nor imported,
+  // nor core Remotion API: the exact class of failure the player
+  // reports as "<name> is not available".
+  const declared = new Set<string>()
+  for (const m of src.matchAll(/\b(?:const|let|var|function|class|type|interface)\s+([A-Za-z_$][\w$]*)/g)) {
+    declared.add(m[1]!)
+  }
+  for (const imp of imports) {
+    const def = imp.clause.match(/^\s*([A-Za-z_$][\w$]*)\s*(?:,|$)/)
+    if (def?.[1] && def[1] !== "type") declared.add(def[1])
+    const named = imp.clause.match(/\{([\s\S]*?)\}/)
+    for (const raw of (named?.[1] ?? "").split(",")) {
+      const parts = raw.split(/\s+as\s+/)
+      const name = (parts[1] ?? parts[0])?.trim()
+      if (name && name !== "type") declared.add(name)
+    }
+  }
+  const REMOTION_CORE = new Set([
+    "AbsoluteFill", "Sequence", "Series", "Composition", "useCurrentFrame",
+    "useVideoConfig", "interpolate", "interpolateColors", "spring", "Easing",
+    "cancelRender", "continueRender", "delayRender", "staticFile", "random",
+    "Noise", "Loop", "Freeze", "Still", "Audio", "Img", "Video",
+    "OffthreadVideo", "Shapes", "Paths", "TransitionSeries", "Transition",
+    "Overlay", "linearTiming", "springTiming", "useTransitionProgress",
+  ])
+  for (const m of src.matchAll(/(?<![.\w$'"`])([A-Z][A-Za-z0-9_$]{1,})\s*(?=[(<{[\s,;)}])/g)) {
+    const name = m[1]!
+    if (
+      declared.has(name) ||
+      REMOTION_CORE.has(name) ||
+      SCOPE_GLOBALS.has(name) ||
+      LANGUAGE_GLOBALS.has(name)
+    ) continue
+    out.push({
+      level: "error",
+      message: `"${name}" is not defined here and not in the player scope — it will throw "${name} is not available" at mount. Declare it, import it from remotion/react, or use Lucide.${name}.`,
+    })
+  }
+  return out
+}
+
 export function checkComposition(code: string): Check[] {
   const out: Check[] = []
   const src = code.trim()
@@ -119,6 +221,9 @@ export function checkComposition(code: string): Check[] {
       })
     }
   }
+  // Hard failures the browser compiler would throw at mount: unregistered
+  // lucide icons, phantom relative imports, undefined identifiers.
+  out.push(...scopeViolations(src, imports))
 
   // --- imports that are never used ---------------------------------------
   for (const imp of imports) {
@@ -136,36 +241,6 @@ export function checkComposition(code: string): Check[] {
         })
       }
     }
-  }
-
-  // --- free identifiers the scope does not provide ------------------------
-  const declared = new Set<string>()
-  for (const m of src.matchAll(/\b(?:const|let|var|function|class|type|interface)\s+([A-Za-z_$][\w$]*)/g)) {
-    declared.add(m[1]!)
-  }
-  // Anything bound by an import is fine.
-  for (const imp of imports) {
-    const def = imp.clause.match(/^\s*([A-Za-z_$][\w$]*)\s*(?:,|$)/)
-    if (def?.[1] && def[1] !== "type") declared.add(def[1])
-    const named = imp.clause.match(/\{([\s\S]*?)\}/)
-    for (const raw of (named?.[1] ?? "").split(",")) {
-      const parts = raw.split(/\s+as\s+/)
-      const name = (parts[1] ?? parts[0])?.trim()
-      if (name && name !== "type") declared.add(name)
-    }
-  }
-  // Function params and JSX tags are declared elsewhere; only flag
-  // capitalised identifiers, which is where hallucinated names show up.
-  for (const m of src.matchAll(/(?<![.\w$'"`])([A-Z][A-Za-z0-9_$]{1,})\s*(?=[(<{[\s,;)}])/g)) {
-    const name = m[1]!
-    if (declared.has(name) || REMOTION_CORE.has(name)) continue
-    out.push({
-      level: "warn",
-      message:
-        `"${name}" is not defined here. Either it is a component you have not ` +
-        `written yet, or it needs an import from remotion, react or one of the ` +
-        `supported packages.`,
-    })
   }
 
   // --- type scale and layout discipline ---------------------------------
@@ -633,6 +708,11 @@ export function dependencyResolve(imports: string[]): {
   const resolved = imports.map((source) => {
     const s = source.trim()
     if (s.startsWith(".") || PROVIDED.has(s)) {
+      // lucide-react resolves as a namespace only: `import * as Lucide`
+      // works, but named imports (import {Zap}) throw at mount.
+      if (s === "lucide-react") {
+        return { source: s, status: "ok" as const, hint: "Available ONLY as the Lucide namespace — `import * as Lucide`, then <Lucide.Zap/>. Named imports (import {Zap}) throw. When in doubt use an inline <svg>." }
+      }
       return { source: s, status: "ok" as const, hint: "Available in the browser scope." }
     }
     if (s === "@remotion/google-fonts/Anton" || s.startsWith("@remotion/google-fonts/")) {

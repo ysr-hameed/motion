@@ -141,10 +141,15 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
         if (cancelled) return
         setState({ kind: "ready", Component: r.component })
         const ms = Math.round(performance.now() - started)
+        // Compile-only: the agent's read_render_report treats this as
+        // "not yet rendered" and keeps waiting for the mount report.
+        // Posting ok:true here used to verify cuts that then threw at
+        // mount — the exact false-verified bug.
         postOnce(`ok:${version}`, {
           version,
           ok: true,
-          message: `compiled in ${ms}ms and mounted in the player`,
+          phase: "compile",
+          message: `compiled in ${ms}ms, waiting to mount`,
         })
         fetch(agentUrl(sessionId, "event"), {
           method: "POST",
@@ -163,6 +168,7 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
         postOnce(`fail:${version}:${message.slice(0, 120)}`, {
           version,
           ok: false,
+          phase: "compile",
           message,
           ...(ce?.line !== undefined ? { line: ce.line } : {}),
         })
@@ -182,20 +188,22 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
 
   // Layout truth from the real pixels: once the frame settles (scrub or
   // pause), measure what is actually on screen and report findings. Measuring
-  // never disturbs playback — it only reads the mounted DOM.
+  // never disturbs playback — it only reads the mounted DOM. The report
+  // posts even with zero findings: that empty layout report is the
+  // mount-proof the agent's read_render_report waits for.
   useEffect(() => {
     if (state.kind !== "ready") return undefined
     const t = setTimeout(() => {
       try {
         const report = measureStage(frame)
-        if (report && report.findings.length > 0) {
-          postOnce(`layout:${version}:${frame}`, {
-            version,
-            ok: true,
-            frame,
-            findings: report.findings,
-          })
-        }
+        postOnce(`layout:${version}`, {
+          version,
+          ok: true,
+          phase: "layout",
+          frame,
+          findings: report?.findings ?? [],
+          message: `rendered ${version === 0 ? "" : `v${version} `}at frame ${frame} — ${width}x${height}@${fps}`,
+        })
       } catch {
         // Measuring must never break playback.
       }
@@ -206,11 +214,24 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
   }, [frame, state.kind, version])
 
   // The Player is an event emitter rather than a props-driven component, so the
-  // timecode and playhead are wired to its events.
+  // timecode and playhead are wired to its events. The first frameupdate is
+  // also the mount-proof the agent waits for: it only fires when a frame
+  // actually rendered, so a cut that throws inside its component never
+  // posts it (the errorFallback posts the failure instead).
   useEffect(() => {
     if (!player) return
 
-    const onFrame = (e: { detail: { frame: number } }) => setFrame(e.detail.frame)
+    const onFrame = (e: { detail: { frame: number } }) => {
+      const f = e.detail.frame
+      setFrame(f)
+      postOnce(`mount:${version}`, {
+        version,
+        ok: true,
+        phase: "mount",
+        frame: f,
+        message: `mounted in the player and rendering — ${width}x${height}@${fps}`,
+      })
+    }
     const onPlay = () => setPlaying(true)
     const onPause = () => setPlaying(false)
 
@@ -222,7 +243,7 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
       player.removeEventListener("play", onPlay)
       player.removeEventListener("pause", onPause)
     }
-  }, [player])
+  }, [player, version])
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-2" aria-label="Stage">
@@ -291,6 +312,7 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
               postOnce(`runtime:${version}:${message.slice(0, 120)}`, {
                 version,
                 ok: false,
+                phase: "runtime",
                 message: `runtime: ${message}`,
               })
               return (

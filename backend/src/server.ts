@@ -15,7 +15,7 @@ import { requireAuth } from "./middleware/require-auth"
 export { Chat }
 
 /** The single model this agent uses. */
-const MODEL = "alibaba/qwen3.7-flash"
+const MODEL = "inclusionai/ling-3.1-flash"
 
 /**
  * The frontend is served from Cloudflare Pages at motion.slyxup.com and the

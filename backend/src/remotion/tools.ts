@@ -196,7 +196,8 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "one thing. Each op's `find` must be copied EXACTLY from read_file, " +
         "including indentation — it is a literal string match, and a near miss is " +
         "reported back as unapplied rather than silently ignored. Use write_composition " +
-        "instead only for a genuine rewrite.",
+        "instead only for a genuine rewrite. For multi-part changes (rename " +
+        "across the file, icon swaps, several small fixes) use bulk_edit.",
       inputSchema: z.object({
         ops: z
           .array(
@@ -208,64 +209,36 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
           .min(1)
           .describe("Applied in order."),
       }),
-      execute: async ({ ops }) => {
-        let code = store.current().code
-        if (!code) {
-          return { ok: false, error: "There is no composition yet — use write_composition." }
-        }
+      execute: async ({ ops }) => applyEditOps(store, ops, { allowPartial: true }),
+    }),
 
-        const applied: string[] = []
-        const failed: Array<{ find: string; reason: string }> = []
-
-        for (const op of ops) {
-          if (op.find === "") {
-            failed.push({ find: "<empty>", reason: "`find` cannot be empty." })
-            continue
-          }
-          const occurrences = code.split(op.find).length - 1
-          if (occurrences === 0) {
-            failed.push({
-              find: op.find.slice(0, 80),
-              reason: "No exact match. Copy the text from read_file, whitespace included.",
+    bulk_edit: tool({
+      description:
+        "Apply a batch of related edits to the composition in one call — " +
+        "renames, icon swaps, retiming several beats, fixing the same mistake " +
+        "in many places. Each op's `find` is an exact literal match from " +
+        "read_file; ops apply in order, the whole batch validates once, and " +
+        "the version bumps once. Any op may match MANY occurrences to " +
+        "rename/replace across the file (that is the difference from edit_file, " +
+        "which requires a unique match). Prefer this over five sequential " +
+        "edit_file calls.",
+      inputSchema: z.object({
+        ops: z
+          .array(
+            z.object({
+              find: z.string().describe("Exact existing text to replace."),
+              replace: z.string().describe("What it becomes. Empty string deletes it."),
+              all: z
+                .boolean()
+                .default(false)
+                .describe("Replace every occurrence, not just a unique match."),
             })
-            continue
-          }
-          if (occurrences > 1) {
-            failed.push({
-              find: op.find.slice(0, 80),
-              reason: `Matches ${occurrences} times — include more surrounding lines to make it unique.`,
-            })
-            continue
-          }
-          code = code.replace(op.find, op.replace)
-          applied.push(op.find.slice(0, 60))
-        }
-
-        if (applied.length === 0) {
-          return { ok: false, applied: 0, failed }
-        }
-
-        const checks = checkComposition(code)
-        const errors = checks.filter((c) => c.level === "error")
-        if (errors.length > 0) {
-          return {
-            ok: false,
-            applied: applied.length,
-            failed,
-            errors: errors.map((e) => e.message),
-            note: "Nothing was saved. Fix the errors and try again.",
-          }
-        }
-
-        const n = store.write(code, { bumpVersion: true })
-        return {
-          ok: true,
-          version: n,
-          applied: applied.length,
-          failed,
-          warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
-        }
-      },
+          )
+          .min(1)
+          .max(20)
+          .describe("Applied in order."),
+      }),
+      execute: async ({ ops }) => applyEditOps(store, ops, { allowPartial: false }),
     }),
 
     validate_composition: tool({
@@ -328,11 +301,11 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       description:
         "Read what the browser actually rendered for a published version. Call " +
         "this right after preview_composition — it waits up to ~24s for the " +
-        "browser to compile and mount the cut (waiting costs no model calls). " +
-        "verified means it renders and is the ONLY basis for telling the user " +
-        "it works. failed carries the exact browser error — fix it and " +
-        "re-preview. pending means the browser stayed silent: end the turn " +
-        "saying the render is unconfirmed.",
+        "browser to compile, mount and render the cut (waiting costs no model calls). " +
+        "verified means it mounted AND rendered in the player's browser — " +
+        "a compile-only report never verifies. failed carries the exact browser " +
+        "error — fix it and re-preview. pending means the browser stayed silent: " +
+        "end the turn saying the render is unconfirmed.",
       inputSchema: z.object({
         version: z
           .number()
@@ -346,7 +319,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         for (;;) {
           const report = agent?.state?.audit
           if (report && report.version >= want) {
-            if (report.ok) {
+            if (report.ok && (report as { phase?: string }).phase !== "compile") {
               return {
                 status: "verified",
                 version: report.version,
@@ -358,18 +331,22 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
                     : "Renders. This report is the only basis for telling the user it works.",
               }
             }
-            return {
-              status: "failed",
-              version: report.version,
-              message: report.message ?? "The browser failed to render this version.",
-              findings: report.findings,
+            if (!report.ok) {
+              return {
+                status: "failed",
+                version: report.version,
+                message: report.message ?? "The browser failed to render this version.",
+                findings: report.findings,
+              }
             }
+            // Compile succeeded but nothing has mounted yet — keep waiting
+            // for the mount/runtime/layout report instead of verifying early.
           }
           if (Date.now() >= deadline) {
             return {
               status: "pending",
               version: want,
-              hint: "No browser report yet — the tab may be closed or still compiling. End the turn saying the render is UNCONFIRMED; never claim it works.",
+              hint: "No browser render report yet — the tab may be closed or still compiling. End the turn saying the render is UNCONFIRMED; never claim it works.",
             }
           }
           await new Promise((r) => setTimeout(r, 2000))
@@ -1281,6 +1258,89 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         return { ok: true, version, ready: true }
       },
     }),
+  }
+}
+
+/**
+ * Shared edit engine behind edit_file (unique-match, partial apply) and
+ * bulk_edit (all-occurrences per op, atomic batch).
+ *
+ * edit_file tolerates a failed op and saves the rest — one note touches
+ * one thing. bulk_edit is atomic: if ANY op fails or the result has
+ * errors, nothing is saved and the agent retries the batch.
+ */
+async function applyEditOps(
+  store: CompositionStore,
+  ops: Array<{ find: string; replace: string; all?: boolean }>,
+  opts: { allowPartial: boolean }
+): Promise<unknown> {
+  let code = store.current().code
+  if (!code) {
+    return { ok: false, error: "There is no composition yet — use write_composition." }
+  }
+
+  const applied: Array<{ find: string; count: number }> = []
+  const failed: Array<{ find: string; reason: string }> = []
+
+  for (const op of ops) {
+    if (op.find === "") {
+      failed.push({ find: "<empty>", reason: "`find` cannot be empty." })
+      continue
+    }
+    const occurrences = code.split(op.find).length - 1
+    if (occurrences === 0) {
+      failed.push({
+        find: op.find.slice(0, 80),
+        reason: "No exact match. Copy the text from read_file, whitespace included.",
+      })
+      continue
+    }
+    if (occurrences > 1 && !op.all) {
+      failed.push({
+        find: op.find.slice(0, 80),
+        reason: `Matches ${occurrences} times — include more surrounding lines to make it unique, or use bulk_edit with all:true.`,
+      })
+      continue
+    }
+    code = op.all ? code.split(op.find).join(op.replace) : code.replace(op.find, op.replace)
+    applied.push({ find: op.find.slice(0, 60), count: occurrences > 1 && op.all ? occurrences : 1 })
+  }
+
+  if (applied.length === 0) {
+    return { ok: false, applied: 0, failed }
+  }
+
+  // bulk_edit is atomic: a failed op poisons the batch, so nothing saves.
+  if (!opts.allowPartial && failed.length > 0) {
+    return {
+      ok: false,
+      applied: 0,
+      appliedPreview: applied,
+      failed,
+      note: "bulk_edit is atomic — nothing was saved. Fix the failed ops and retry the batch.",
+    }
+  }
+
+  const checks = checkComposition(code)
+  const errors = checks.filter((c) => c.level === "error")
+  if (errors.length > 0) {
+    return {
+      ok: false,
+      applied: opts.allowPartial ? applied.length : 0,
+      failed,
+      errors: errors.map((e) => e.message),
+      note: "Nothing was saved. Fix the errors and try again.",
+    }
+  }
+
+  const n = store.write(code, { bumpVersion: true })
+  return {
+    ok: true,
+    version: n,
+    applied: applied.length,
+    appliedDetail: applied,
+    failed,
+    warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
   }
 }
 

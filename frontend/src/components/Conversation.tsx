@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { UIMessage } from "ai"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { TEMPLATES as TEMPLATE_CHIPS } from "~/lib/templates"
@@ -56,6 +56,7 @@ const TOOL_LABEL: Record<string, string> = {
   layout_plan: "plan layout",
   auto_enhance_motion: "enhance motion",
   verify_no_errors: "verify",
+  bulk_edit: "bulk edit",
   read_file: "read source",
   write_composition: "write",
   edit_file: "edit",
@@ -103,40 +104,140 @@ function toolSummary(part: Record<string, unknown>): string {
 type Part = Record<string, unknown>
 
 /**
- * Renders the agent's live thinking.
- *
- * Reasoning arrives as a stream of parts, so it is shown as it accumulates and
- * labelled for what it is — the model's own notes, not an answer. It stays
- * collapsed behind a count so a long chain of thought never buries the reply.
+ * Minimal chat markdown: fenced code blocks, headings, quotes, lists,
+ * bold/italic/inline-code/links. No dependency — the agent writes
+ * markdown constantly (code snippets, plans) and raw asterisks
+ * read as noise.
  */
-function Thinking({ parts }: { parts: Part[] }) {
-  const text = parts
-    .map((p) => (typeof p.text === "string" ? p.text : ""))
-    .join("")
-    .trim()
-  if (!text) return null
-  const words = text.split(/\s+/).length
-
+function Markdown({ text }: { text: string }) {
+  const blocks = useMemo(() => parseMarkdown(text), [text])
   return (
-    <details className="group my-2 rounded-sm border border-line-soft bg-panel-2/60">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[11px] text-dim transition-colors hover:text-muted">
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 8 8"
-          aria-hidden="true"
-          className="transition-transform group-open:rotate-90"
-        >
-          <path d="M2 0l4 4-4 4z" fill="currentColor" />
-        </svg>
-        <span className="font-mono">thinking</span>
-        <span className="font-mono text-dim/70">{words}w</span>
-      </summary>
-      <p className="max-h-56 overflow-y-auto px-2.5 pb-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap text-muted scroll-thin">
-        {text}
-      </p>
-    </details>
+    <div className="min-w-0 space-y-1.5 text-[13.5px] leading-relaxed break-words">
+      {blocks}
+    </div>
   )
+}
+
+function renderInline(src: string, keyPrefix: string): React.ReactNode[] {
+  const out: React.ReactNode[] = []
+  // `code`, **bold**, *italic*, [label](url)
+  const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g
+  let last = 0
+  let m: RegExpExecArray | null
+  let k = 0
+  const pushText = (s: string) => {
+    if (s) out.push(<span key={`${keyPrefix}t${k++}`}>{s}</span>)
+  }
+  while ((m = re.exec(src)) !== null) {
+    pushText(src.slice(last, m.index))
+    last = m.index + m[0].length
+    const tok = m[0]
+    if (tok.startsWith("`")) {
+      out.push(
+        <code key={`${keyPrefix}c${k++}`} className="rounded-xs bg-panel-2 px-1 py-px font-mono text-[12px] text-tungsten">
+          {tok.slice(1, -1)}
+        </code>
+      )
+    } else if (tok.startsWith("**")) {
+      out.push(<strong key={`${keyPrefix}b${k++}`} className="font-semibold text-paper">{tok.slice(2, -2)}</strong>)
+    } else if (tok.startsWith("*")) {
+      out.push(<em key={`${keyPrefix}i${k++}`}>{tok.slice(1, -1)}</em>)
+    } else {
+      const lm = /\[([^\]]+)\]\(([^)]+)\)/.exec(tok)
+      if (lm) {
+        out.push(
+          <a key={`${keyPrefix}l${k++}`} href={lm[2]} target="_blank" rel="noreferrer" className="text-tungsten underline">
+            {lm[1]}
+          </a>
+        )
+      } else pushText(tok)
+    }
+  }
+  pushText(src.slice(last))
+  return out
+}
+
+function parseMarkdown(text: string): React.ReactNode[] {
+  const out: React.ReactNode[] = []
+  const lines = text.split("\n")
+  let i = 0
+  let k = 0
+  while (i < lines.length) {
+    const line = lines[i]!
+    // Fenced code block
+    if (/^```/.test(line.trim())) {
+      const lang = line.trim().slice(3).trim()
+      const buf: string[] = []
+      i++
+      while (i < lines.length && !/^```/.test(lines[i]!.trim())) buf.push(lines[i++]!)
+      i++
+      out.push(
+        <pre key={`md${k++}`} className="overflow-x-auto rounded-md border border-line bg-panel-2 p-2.5 font-mono text-[12px] leading-relaxed text-paper scroll-thin">
+          {lang && <span className="mb-1 block text-[10px] text-dim">{lang}</span>}
+          <code>{buf.join("\n")}</code>
+        </pre>
+      )
+      continue
+    }
+    // Heading
+    const h = /^(#{1,4})\s+(.*)/.exec(line)
+    if (h) {
+      const level = h[1]!.length
+      out.push(
+        <p key={`md${k++}`} className={level <= 2 ? "pt-1 text-[14px] font-semibold text-paper" : "pt-0.5 text-[13.5px] font-semibold text-paper"}>
+          {renderInline(h[2]!, `h${k}`)}
+        </p>
+      )
+      i++
+      continue
+    }
+    // Quote
+    if (/^>\s?/.test(line)) {
+      out.push(
+        <p key={`md${k++}`} className="border-l-2 border-tungsten/60 pl-2.5 text-muted">
+          {renderInline(line.replace(/^>\s?/, ""), `q${k}`)}
+        </p>
+      )
+      i++
+      continue
+    }
+    // Bulleted list run
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items: string[] = []
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i]!)) items.push(lines[i++]!.replace(/^\s*[-*]\s+/, ""))
+      out.push(
+        <ul key={`md${k++}`} className="space-y-0.5">
+          {items.map((it, j) => (
+            <li key={j} className="flex gap-2">
+              <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-tungsten/60" />
+              <span>{renderInline(it, `li${k}-${j}`)}</span>
+            </li>
+          ))}
+        </ul>
+      )
+      continue
+    }
+    // Numbered list run
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items: string[] = []
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i]!)) items.push(lines[i++]!.replace(/^\s*\d+[.)]\s+/, ""))
+      out.push(
+        <ol key={`md${k++}`} className="space-y-0.5">
+          {items.map((it, j) => (
+            <li key={j} className="flex gap-2">
+              <span className="font-mono text-[11px] text-tungsten">{j + 1}.</span>
+              <span>{renderInline(it, `ol${k}-${j}`)}</span>
+            </li>
+          ))}
+        </ol>
+      )
+      continue
+    }
+    if (!line.trim()) { i++; continue }
+    out.push(<p key={`md${k++}`}>{renderInline(line, `p${k}`)}</p>)
+    i++
+  }
+  return out
 }
 
 function ToolCall({ part }: { part: Part }) {
@@ -184,26 +285,80 @@ function Attachments({ parts }: { parts: Part[] }) {
   )
 }
 
+/**
+ * One thought — a run of consecutive reasoning parts rendered as a
+ * single collapsible, in place. The stream delivers thinking, tool
+ * calls and text interleaved; grouping only consecutive reasoning
+ * keeps each thought next to the tool call it led to (opencode
+ * style) instead of piling everything at the top of the bubble.
+ */
+function Thought({ text }: { text: string }) {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  const words = trimmed.split(/\s+/).length
+  return (
+    <details className="group my-2 rounded-sm border border-line-soft bg-panel-2/60">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[11px] text-dim transition-colors hover:text-muted">
+        <svg
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+          aria-hidden="true"
+          className="transition-transform group-open:rotate-90"
+        >
+          <path d="M2 0l4 4-4 4z" fill="currentColor" />
+        </svg>
+        <span className="font-mono">thinking</span>
+        <span className="font-mono text-dim/70">{words}w</span>
+      </summary>
+      <p className="max-h-56 overflow-y-auto px-2.5 pb-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap text-muted scroll-thin">
+        {trimmed}
+      </p>
+    </details>
+  )
+}
+
 function Bubble({ message }: { message: UIMessage }) {
   const parts = message.parts as unknown as Part[]
-  const thinking = parts.filter((p) => p.type === "reasoning")
-  const tools = parts.filter((p) => typeof p.type === "string" && p.type.startsWith("tool-"))
-  const text = parts.filter((p) => p.type === "text" && typeof p.text === "string")
   const isUser = message.role === "user"
+
+  // Render parts in stream order: consecutive reasoning merges into one
+  // Thought, tool calls and text land where they happened.
+  const nodes: React.ReactNode[] = []
+  let thought = ""
+  const flushThought = () => {
+    if (thought.trim()) {
+      nodes.push(<Thought key={`th${nodes.length}`} text={thought} />)
+      thought = ""
+    }
+  }
+  parts.forEach((p, i) => {
+    if (p.type === "reasoning") {
+      if (typeof p.text === "string") thought += p.text
+      return
+    }
+    flushThought()
+    if (typeof p.type === "string" && p.type.startsWith("tool-")) {
+      nodes.push(<ToolCall key={`tl${i}`} part={p} />)
+    } else if (p.type === "text" && typeof p.text === "string" && p.text) {
+      nodes.push(
+        isUser ? (
+          <p key={`tx${i}`} className="whitespace-pre-wrap text-[13.5px] leading-relaxed break-words">
+            {String(p.text)}
+          </p>
+        ) : (
+          <Markdown key={`tx${i}`} text={String(p.text)} />
+        )
+      )
+    }
+  })
+  flushThought()
 
   return (
     <div className={isUser ? "flex justify-end" : ""}>
-      <div className={isUser ? "max-w-[85%] rounded-md bg-tungsten px-3 py-2 text-ink" : "w-full"}>
+      <div className={isUser ? "max-w-[85%] rounded-md bg-tungsten px-3 py-2 text-ink" : "w-full min-w-0"}>
         {isUser && <Attachments parts={parts} />}
-        {thinking.length > 0 && <Thinking parts={thinking} />}
-        {tools.map((p, i) => (
-          <ToolCall key={i} part={p} />
-        ))}
-        {text.map((p, i) => (
-          <p key={i} className="whitespace-pre-wrap text-[13.5px] leading-relaxed break-words">
-            {String(p.text ?? "")}
-          </p>
-        ))}
+        {nodes}
       </div>
     </div>
   )
@@ -230,23 +385,54 @@ interface Props {
 }
 
 export function Conversation({ chat }: Props) {
-  const { messages, sendMessage, clearHistory, stop, status, isStreaming, isRecovering } = chat
+  const { messages, sendMessage, clearHistory, stop, status, isStreaming, isRecovering, regenerate } = chat as UseAgentChatReturn & {
+    regenerate?: () => void
+  }
+  const streamError = (chat as { error?: unknown }).error as Error | null | undefined
+  const connectionError = (chat as { connectionError?: { message?: string; reason?: string } | null }).connectionError
 
   const [draft, setDraft] = useState("")
   const [pending, setPending] = useState<File[]>([])
   const [stalled, setStalled] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [atBottom, setAtBottom] = useState(true)
   const scroller = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const lastActivity = useRef(Date.now())
+  // True while the user sits at (or near) the bottom. Streaming tool
+  // updates re-render on every part — yanking to the bottom on each
+  // one made it impossible to scroll up and read history mid-turn.
+  // Now: follow only while stuck to the bottom; otherwise show a
+  // "jump to latest" pill instead of stealing the scroll.
+  const stickToBottom = useRef(true)
 
   const busy = status === "submitted" || status === "streaming"
 
+  const nearBottom = () => {
+    const el = scroller.current
+    if (!el) return true
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 90
+  }
+
   useEffect(() => {
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })
+    if (stickToBottom.current) {
+      scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
+    }
     lastActivity.current = Date.now()
   }, [messages])
+
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const onScroll = () => {
+      stickToBottom.current = nearBottom()
+      // Re-render only the pill: store stickiness in state.
+      setAtBottom(stickToBottom.current)
+    }
+    el.addEventListener("scroll", onScroll, { passive: true })
+    return () => el.removeEventListener("scroll", onScroll)
+  }, [])
 
   // Timeline / Inspector / ProgressView suggest edits as window events.
   // They land in the draft — the user still sends, the agent still writes.
@@ -276,6 +462,10 @@ export function Conversation({ chat }: Props) {
     if ((!text && pending.length === 0) || busy || sending) return
     setDraft("")
     setStalled(false)
+    // The user just sent — re-stick to the bottom so their message
+    // and the reply are followed.
+    stickToBottom.current = true
+    setAtBottom(true)
 
     if (pending.length > 0) {
       setSending(true)
@@ -330,6 +520,21 @@ export function Conversation({ chat }: Props) {
           <Bubble key={m.id} message={m} />
         ))}
         {busy && <Working label={isRecovering ? "recovering" : "working"} />}
+        {status === "error" && !busy && (
+          <div className="border-l-2 border-bad pl-2.5 text-[11.5px]">
+            <p className="text-bad">
+              Failed: {streamError instanceof Error ? streamError.message : streamError ? String(streamError) : "stream broke — retry"}
+              {connectionError?.message ? ` (${connectionError.message})` : ""}
+            </p>
+            <button
+              type="button"
+              onClick={() => (regenerate ? regenerate() : undefined)}
+              className="mt-1 font-mono text-[10px] text-muted underline hover:text-paper"
+            >
+              retry
+            </button>
+          </div>
+        )}
         {stalled && !busy && (
           <p className="border-l-2 border-bad pl-2.5 text-[11.5px] text-muted">
             The model stopped responding. Send again to retry.
@@ -337,6 +542,20 @@ export function Conversation({ chat }: Props) {
         )}
         {error && <p className="border-l-2 border-bad pl-2.5 text-[11.5px] text-bad">{error}</p>}
       </div>
+
+      {!atBottom && (
+        <button
+          type="button"
+          onClick={() => {
+            stickToBottom.current = true
+            setAtBottom(true)
+            scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })
+          }}
+          className="mx-auto -mt-9 mb-1 flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-panel-2/95 px-3 py-1 font-mono text-[10px] text-muted shadow-lg backdrop-blur transition-colors hover:border-tungsten hover:text-paper"
+        >
+          ↓ latest
+        </button>
+      )}
 
       {pending.length > 0 && (
         <div className="flex shrink-0 flex-wrap gap-1.5 border-t border-line px-3 pt-2.5">
