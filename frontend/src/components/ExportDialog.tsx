@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { X } from "lucide-react"
 import { EXPORT_EVENT, EXPORT_PRESETS } from "~/lib/exportPresets"
 import { suggest } from "~/components/Timeline"
 import { agentUrl } from "~/lib/composition"
@@ -56,9 +57,9 @@ export function ExportDialog({ totalFrames, sessionId }: { totalFrames: number; 
             type="button"
             onClick={() => setOpen(false)}
             aria-label="Close export dialog"
-            className="ml-auto font-mono text-[12px] text-dim hover:text-paper"
+            className="ml-auto p-1 text-dim hover:text-paper"
           >
-            ✕
+            <X size={14} aria-hidden />
           </button>
         </div>
         <p className="mb-2 text-[12px] text-muted">Where will you share this?</p>

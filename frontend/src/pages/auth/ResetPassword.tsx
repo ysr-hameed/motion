@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { PasswordStrength, useAuth } from "@slyxup/ui";
 import { Alert, AuthShell, Button, Field } from "~/components/ui";
 import { friendlyAuthError } from "~/lib/stack";
@@ -18,8 +19,8 @@ export default function ResetPassword() {
     return (
       <AuthShell title="Invalid reset link">
         <Alert>This link is missing its token. Request a fresh one.</Alert>
-        <Link to="/forgot-password" className="text-sm text-tungsten hover:underline">
-          Request a new link →
+        <Link to="/forgot-password" className="inline-flex items-center gap-1 text-sm text-tungsten hover:underline">
+          Request a new link <ArrowRight size={13} aria-hidden />
         </Link>
       </AuthShell>
     );

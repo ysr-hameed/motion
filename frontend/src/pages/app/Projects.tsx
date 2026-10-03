@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Alert, Button, Card, Field, LoadingPage } from "~/components/ui";
+import { ArrowRight, Clapperboard, Search } from "lucide-react";
+import { Alert, Button, Card, EmptyState, Field, LoadingPage } from "~/components/ui";
 import { MotionApiError, motionApi } from "~/lib/stack";
 import { Page, PageHeader, useMotionGet, useMotionToken } from "./data";
 
@@ -93,12 +94,16 @@ export default function Projects() {
         </form>
       ) : null}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="🔍 Search projects"
-          className="h-9 w-56 rounded-md border border-line bg-panel px-3 text-sm outline-none placeholder:text-dim focus:border-tungsten"
-        />
+        <span className="relative">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dim" aria-hidden />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search projects"
+            aria-label="Search projects"
+            className="h-9 w-56 rounded-md border border-line bg-panel pl-9 pr-3 text-sm outline-none placeholder:text-dim focus:border-tungsten"
+          />
+        </span>
         {(["all", "active", "archived"] as const).map((s) => (
           <button
             key={s}
@@ -122,15 +127,19 @@ export default function Projects() {
           ) : null}
         </Alert>
       ) : !data?.projects.length ? (
-        <Card>
-          <p className="text-center text-2xl">🎬</p>
-          <p className="mt-2 text-center text-sm text-muted">No projects yet</p>
-          <div className="mt-3 text-center">
-            <Link to="/studio" className="text-sm text-tungsten hover:underline">
-              Create your first motion →
+        <EmptyState
+          icon={Clapperboard}
+          title="No projects yet"
+          body="Group compositions into projects to keep campaigns and clients separate."
+          action={
+            <Link to="/studio">
+              <Button>
+                Create your first motion
+                <ArrowRight size={15} aria-hidden />
+              </Button>
             </Link>
-          </div>
-        </Card>
+          }
+        />
       ) : filtered.length === 0 ? (
         <Card><p className="text-center text-sm text-muted">No projects match.</p></Card>
       ) : (

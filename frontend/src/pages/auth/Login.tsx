@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowRight, Check } from "lucide-react";
 import { useAuth, useUser } from "@slyxup/ui";
 import { Alert, AuthShell, Button, Field } from "~/components/ui";
 import { friendlyAuthError } from "~/lib/stack";
@@ -91,7 +92,14 @@ export default function Login() {
                     .catch((err: unknown) => setError(friendlyAuthError(err)));
                 }}
               >
-                {resent ? "Verification email sent ✓" : "Resend verification email"}
+                {resent ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Check size={14} className="text-ok" aria-hidden />
+                    Verification email sent
+                  </span>
+                ) : (
+                  "Resend verification email"
+                )}
               </Button>
             ) : null}
             <Field
@@ -115,7 +123,8 @@ export default function Login() {
                 Forgot password?
               </Link>
               <Button type="submit" loading={busy}>
-                Sign In →
+                Sign In
+                <ArrowRight size={15} aria-hidden />
               </Button>
             </div>
           </form>

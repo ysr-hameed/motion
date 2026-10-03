@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { UIMessage } from "ai"
+import { X } from "lucide-react"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
 import { TEMPLATES as TEMPLATE_CHIPS } from "~/lib/templates"
 import { fetchChatModel, setChatModel, type ModelOption } from "~/lib/composition"
@@ -622,7 +623,7 @@ export function Conversation({ chat, sessionId }: Props) {
               className="flex items-center gap-1.5 rounded-xs border border-line bg-panel-2 px-1.5 py-1 font-mono text-[10px] text-muted hover:border-bad hover:text-bad"
               aria-label={`Remove ${f.name}`}
             >
-              {f.name} ✕
+              {f.name} <X size={11} aria-hidden />
             </button>
           ))}
         </div>

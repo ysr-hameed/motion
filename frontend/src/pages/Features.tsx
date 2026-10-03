@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { Check } from "lucide-react";
 import { PublicShell } from "~/components/layout";
 
 const GROUPS: Array<[string, string[]]> = [
@@ -26,7 +27,10 @@ export default function Features() {
               <p className="font-semibold">{title}</p>
               <ul className="mt-2 flex flex-col gap-1 text-sm text-muted">
                 {items.map((i) => (
-                  <li key={i}>✓ {i}</li>
+                  <li key={i} className="flex items-start gap-2">
+                    <Check size={14} className="mt-0.5 shrink-0 text-ok" aria-hidden />
+                    {i}
+                  </li>
                 ))}
               </ul>
             </div>

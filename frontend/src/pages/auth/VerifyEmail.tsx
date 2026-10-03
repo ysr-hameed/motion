@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { useAuth } from "@slyxup/ui";
 import { Alert, AuthShell, Button, Field, LoadingPage } from "~/components/ui";
 import { friendlyAuthError } from "~/lib/stack";
@@ -39,10 +40,11 @@ export default function VerifyEmail() {
 
   if (done) {
     return (
-      <AuthShell title="Email verified ✓">
+      <AuthShell title="Email verified">
         <Alert tone="success">Your email is confirmed. Welcome aboard.</Alert>
         <Button onClick={() => navigate("/studio", { replace: true })}>
-          Open Studio →
+          Open Studio
+          <ArrowRight size={15} aria-hidden />
         </Button>
       </AuthShell>
     );
@@ -71,10 +73,18 @@ export default function VerifyEmail() {
               .catch((err: unknown) => setError(friendlyAuthError(err)));
           }}
         >
-          {resent ? "Verification email sent ✓" : "Resend verification email"}
+          {resent ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Check size={14} className="text-ok" aria-hidden />
+              Verification email sent
+            </span>
+          ) : (
+            "Resend verification email"
+          )}
         </Button>
-        <Link to="/login" className="text-sm text-muted hover:text-paper">
-          ← Back to login
+        <Link to="/login" className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-paper">
+          <ArrowLeft size={14} aria-hidden />
+          Back to login
         </Link>
       </div>
     </AuthShell>

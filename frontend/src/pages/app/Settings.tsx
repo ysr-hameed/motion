@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ArrowRight, Check } from "lucide-react";
 import { useAuth } from "@slyxup/ui";
 import { Alert, Button, Card, Field, LoadingPage } from "~/components/ui";
 import { motionApi } from "~/lib/stack";
@@ -101,8 +102,19 @@ export default function Settings() {
               <Field label="New password" type="password" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
               <div><Button type="submit" size="sm" variant="secondary">Update Password</Button></div>
             </form>
-            <p className="mt-3 text-xs text-muted">
-              Two-factor: {twofa.data ? (twofa.data.enabled ? "enabled ✓" : "not enabled") : "…"}
+            <p className="mt-3 flex items-center gap-1.5 text-xs text-muted">
+              Two-factor:{" "}
+              {twofa.data ? (
+                twofa.data.enabled ? (
+                  <span className="inline-flex items-center gap-1 text-ok">
+                    <Check size={12} aria-hidden /> enabled
+                  </span>
+                ) : (
+                  "not enabled"
+                )
+              ) : (
+                "…"
+              )}
             </p>
           </Card>
 
@@ -275,8 +287,17 @@ function TwoFactorCard() {
   return (
     <Card>
       <p className="mb-1 text-sm font-semibold">Two-factor authentication</p>
-      <p className="mb-3 text-xs text-muted">
-        Status: {status === null ? "…" : status ? "enabled ✓" : "not enabled"}
+      <p className="mb-3 flex items-center gap-1.5 text-xs text-muted">
+        Status:{" "}
+        {status === null ? (
+          "…"
+        ) : status ? (
+          <span className="inline-flex items-center gap-1 text-ok">
+            <Check size={12} aria-hidden /> enabled
+          </span>
+        ) : (
+          "not enabled"
+        )}
       </p>
       {msg ? <div className="mb-3"><Alert tone="success">{msg}</Alert></div> : null}
       {err ? <div className="mb-3"><Alert>{err}</Alert></div> : null}
@@ -290,7 +311,9 @@ function TwoFactorCard() {
           <Alert tone="info">
             Scan this secret into your authenticator app, or open the provisioning link:<br />
             <code className="break-all text-xs">{setup.secret}</code><br />
-            <a href={setup.provisioningUri} className="text-tungsten hover:underline">Open in authenticator app →</a>
+            <a href={setup.provisioningUri} className="inline-flex items-center gap-1 text-tungsten hover:underline">
+              Open in authenticator app <ArrowRight size={12} aria-hidden />
+            </a>
           </Alert>
           <Field label="6-digit code" value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" />
           <div className="flex gap-2">

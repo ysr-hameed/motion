@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { Alert, Button, Card, Field, LoadingPage } from "~/components/ui";
 import { motionApi } from "~/lib/stack";
 import { Page, PageHeader, useMotionGet, useMotionToken } from "./data";
@@ -64,7 +65,7 @@ export default function Team() {
       ) : error ? (
         <Alert>
           {error.includes("upgrade") || error.includes("Pro") ? (
-            <>Team is a Pro feature. <Link to="/pricing" className="text-tungsten hover:underline">See plans →</Link></>
+            <>Team is a Pro feature. <Link to="/pricing" className="inline-flex items-center gap-1 text-tungsten hover:underline">See plans <ArrowRight size={13} aria-hidden /></Link></>
           ) : (
             error
           )}

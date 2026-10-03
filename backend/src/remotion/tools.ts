@@ -1107,9 +1107,17 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       description: "Camera keyframe path with per-segment easing, synced to beats.",
       inputSchema: z.object({
         type: z.enum(["dolly", "pan", "orbit", "fly-through"]).default("orbit"),
-        keyframes: z.array(z.tuple([z.number(), z.number(), z.number()])).default([]),
+        // NOTE: no z.tuple here — tuple schemas emit draft-07 `items: [...]`
+        // + `additionalItems`, which OpenAI-compatible providers (novita via
+        // the Vercel gateway) reject with 400 and fail EVERY turn, since all
+        // tools ship on every model call. An [x, y, z] triple is expressed as
+        // a length-3 number array instead; the runtime shape is unchanged.
+        keyframes: z
+          .array(z.array(z.number()).min(3).max(3).describe("One [x, y, z] camera position"))
+          .default([]),
       }),
-      execute: async ({ type, keyframes }) => threeCameraPath(type, keyframes),
+      execute: async ({ type, keyframes }) =>
+        threeCameraPath(type, keyframes as Array<[number, number, number]>),
     }),
 
     three_model_animate: tool({

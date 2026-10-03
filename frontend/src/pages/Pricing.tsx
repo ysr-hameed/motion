@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBilling, usePlans, useUser } from "@slyxup/ui";
+import { ArrowRight, Check, Minus, ShieldCheck, Zap } from "lucide-react";
 import { PublicShell } from "~/components/layout";
-import { Alert, Button, LoadingPage } from "~/components/ui";
+import { Alert, Badge, Button, LoadingPage } from "~/components/ui";
 import { SLYXUP_PROJECT_ID, friendlyAuthError } from "~/lib/stack";
 
 /**
@@ -40,22 +41,28 @@ export default function Pricing() {
   return (
     <PublicShell>
       <section className="mx-auto max-w-6xl px-4 py-16">
+        <p className="eyebrow mb-2 text-center">Pricing</p>
         <h1 className="text-center text-3xl font-bold tracking-tight md:text-4xl">
-          Plans that scale with you
+          Plans that scale <span className="gold-text">with you</span>
         </h1>
-        <p className="mt-3 text-center text-muted">
+        <p className="mx-auto mt-3 max-w-xl text-center text-muted">
           Subscriptions activate via Paddle webhook — access appears once payment clears.
         </p>
 
         <div className="mt-10 grid gap-4 md:grid-cols-3">
-          <div className="rounded-md border border-line bg-panel p-6">
-            <p className="font-semibold">Free</p>
-            <p className="mt-2 text-3xl font-bold">$0</p>
+          <div className="panel-lift card-hover p-6">
+            <p className="flex items-center gap-2 font-semibold text-paper">
+              <Zap size={15} className="text-muted" aria-hidden />
+              Free
+            </p>
+            <p className="mt-2 text-3xl font-bold text-paper">$0</p>
             <ul className="mt-4 flex flex-col gap-1.5 text-sm text-muted">
-              <li>5 videos / month</li>
-              <li>720p export</li>
-              <li>Watermarked</li>
-              <li>Core templates</li>
+              {["5 videos / month", "720p export", "Watermarked", "Core templates"].map((f) => (
+                <li key={f} className="flex items-start gap-2">
+                  <Check size={14} className="mt-0.5 shrink-0 text-ok" aria-hidden />
+                  {f}
+                </li>
+              ))}
             </ul>
             <Link to="/signup" className="mt-6 block">
               <Button variant="secondary" className="w-full">Start Free</Button>
@@ -77,17 +84,15 @@ export default function Pricing() {
             plans.map((plan) => (
               <div
                 key={plan.id}
-                className={`rounded-md border p-6 ${plan.isPopular ? "border-tungsten bg-panel" : "border-line bg-panel"}`}
+                className={`panel-lift card-hover relative p-6 ${plan.isPopular ? "border-tungsten/50" : ""}`}
               >
-                <p className="flex items-center gap-2 font-semibold">
-                  {plan.name}
-                  {plan.isPopular ? (
-                    <span className="rounded-full bg-tungsten px-2 py-0.5 text-[11px] font-bold text-ink">
-                      Popular
-                    </span>
-                  ) : null}
-                </p>
-                <p className="mt-2 text-3xl font-bold">
+                {plan.isPopular ? (
+                  <span className="absolute -top-2.5 left-5 rounded-full bg-tungsten px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-ink">
+                    Popular
+                  </span>
+                ) : null}
+                <p className="font-semibold text-paper">{plan.name}</p>
+                <p className="mt-2 text-3xl font-bold text-paper">
                   ${(plan.amount / 100).toFixed(plan.amount % 100 ? 2 : 0)}
                   <span className="text-sm font-normal text-muted">
                     /{plan.interval === "year" ? "yr" : "mo"}
@@ -95,7 +100,10 @@ export default function Pricing() {
                 </p>
                 <ul className="mt-4 flex flex-col gap-1.5 text-sm text-muted">
                   {plan.features.map((f) => (
-                    <li key={f}>✓ {f}</li>
+                    <li key={f} className="flex items-start gap-2">
+                      <Check size={14} className="mt-0.5 shrink-0 text-ok" aria-hidden />
+                      {f}
+                    </li>
                   ))}
                 </ul>
                 <Button
@@ -130,17 +138,25 @@ export default function Pricing() {
                   ["Videos / month", "5", "Unlimited", "Unlimited"],
                   ["Export resolution", "720p", "4K", "4K"],
                   ["Watermark", "Yes", "No", "No"],
-                  ["Priority queue", "—", "✓", "✓"],
-                  ["3D support", "—", "✓", "✓"],
+                  ["Priority queue", false, true, true],
+                  ["3D support", false, true, true],
                   ["Team seats", "—", "3", "10"],
-                  ["White-label", "—", "—", "✓"],
-                  ["API access", "—", "—", "✓"],
+                  ["White-label", false, false, true],
+                  ["API access", false, false, true],
                 ].map(([k, a, b, c]) => (
-                  <tr key={k} className="border-b border-line-soft last:border-0">
+                  <tr key={k as string} className="border-b border-line-soft last:border-0">
                     <td className="p-3 text-paper">{k}</td>
-                    <td className="p-3">{a}</td>
-                    <td className="p-3">{b}</td>
-                    <td className="p-3">{c}</td>
+                    {[a, b, c].map((v, i) => (
+                      <td key={i} className="p-3">
+                        {v === true ? (
+                          <Check size={14} className="text-ok" aria-label="Included" />
+                        ) : v === false ? (
+                          <Minus size={14} className="text-dim" aria-label="Not included" />
+                        ) : (
+                          v as string
+                        )}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
@@ -159,18 +175,20 @@ export default function Pricing() {
               ["Do you offer annual billing?", "Yes — yearly plans are ~20% cheaper when published on this page."],
             ].map(([q, a]) => (
               <details key={q} className="rounded-md border border-line bg-panel px-4 py-3 text-sm">
-                <summary className="cursor-pointer font-medium">{q}</summary>
+                <summary className="cursor-pointer font-medium text-paper">{q}</summary>
                 <p className="mt-2 text-muted">{a}</p>
               </details>
             ))}
           </div>
         </div>
 
-        <div className="mx-auto mt-14 max-w-2xl rounded-md border border-line bg-panel p-6 text-center">
-          <p className="font-semibold">Need custom pricing?</p>
+        <div className="panel-lift mx-auto mt-14 max-w-2xl p-6 text-center">
+          <Badge tone="muted" icon={ShieldCheck}>Enterprise</Badge>
+          <p className="mt-3 font-semibold text-paper">Need custom pricing?</p>
           <p className="mt-1 text-sm text-muted">Volume seats, SSO, dedicated support and SLAs.</p>
-          <Link to="/contact" className="mt-4 inline-flex h-10 items-center rounded-md bg-tungsten px-5 text-sm font-semibold text-ink hover:brightness-110">
+          <Link to="/contact" className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-tungsten px-5 text-sm font-semibold text-ink hover:brightness-110">
             Talk to Sales
+            <ArrowRight size={15} aria-hidden />
           </Link>
         </div>
       </section>

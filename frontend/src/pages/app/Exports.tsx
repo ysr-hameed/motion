@@ -21,7 +21,7 @@ export default function Exports() {
 
   const copy = (text: string) => {
     void navigator.clipboard.writeText(text).then(
-      () => setNotice("Copied to clipboard ✓"),
+      () => setNotice("Copied to clipboard"),
       () => setNotice("Copy failed — select the link manually."),
     );
   };

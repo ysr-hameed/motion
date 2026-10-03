@@ -18,6 +18,7 @@
 
   --color-tungsten: #ffb340;
   --color-tungsten-dim: #b87a24;
+  --color-tungsten-bright: #ffd08a;
   --color-live: #5ac8fa;
   --color-ok: #7ddc8b;
   --color-bad: #ff7a7a;
@@ -29,6 +30,10 @@
   --radius-xs: 3px;
   --radius-sm: 5px;
   --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --shadow-panel: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 12px 32px -16px rgb(0 0 0 / 0.7);
+  --shadow-lift: 0 2px 0 rgb(255 255 255 / 0.05) inset, 0 20px 48px -16px rgb(0 0 0 / 0.8);
 }
 
 @layer base {
@@ -92,6 +97,39 @@
     border-radius: var(--radius-md);
   }
 
+  /* Raised surface: gradient face + inset highlight for cards that must
+     read as one level above the panel they sit on. */
+  .panel-lift {
+    background: linear-gradient(180deg, var(--color-panel-2), var(--color-panel));
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-panel);
+  }
+
+  .card-hover {
+    transition: transform 160ms ease-out, border-color 160ms ease-out, box-shadow 160ms ease-out;
+  }
+
+  .card-hover:hover {
+    transform: translateY(-2px);
+    border-color: var(--color-dim);
+    box-shadow: var(--shadow-lift);
+  }
+
+  /* Molten-gold display text: reserved for the single hero headline per page. */
+  .gold-text {
+    background: linear-gradient(100deg, var(--color-tungsten-bright) 10%, var(--color-tungsten) 45%, var(--color-tungsten-dim) 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Hairline divider with a tungsten core — section breaks. */
+  .rule-glow {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgb(255 179 64 / 0.45), transparent);
+  }
+
   /* A playhead that reads as a physical needle rather than a div. */
   .playhead {
     position: absolute;
@@ -142,6 +180,37 @@
 
 .tick-in {
   animation: tick-in 140ms ease-out both;
+}
+
+/* Entrance for page sections: rise + settle, staggered via inline delay. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise-in {
+  animation: rise-in 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Slow ambient drift for hero backdrops. */
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2%, -3%, 0) scale(1.06);
+  }
+}
+
+.drift {
+  animation: drift 14s ease-in-out infinite;
 }
 
 @keyframes pulse-live {

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { PasswordStrength } from "@slyxup/ui";
 import { useAuth, useUser } from "@slyxup/ui";
 import { Alert, AuthShell, Button, Field } from "~/components/ui";
@@ -50,7 +51,7 @@ export default function Signup() {
           verify it, then sign in.
         </Alert>
         <Link to="/login">
-          <Button className="w-full">Continue to login →</Button>
+          <Button className="w-full">Continue to login <ArrowRight size={15} aria-hidden /></Button>
         </Link>
       </AuthShell>
     );
@@ -111,7 +112,7 @@ export default function Signup() {
           I agree to the Terms &amp; Privacy Policy
         </label>
         <Button type="submit" loading={busy}>
-          Create Account →
+          Create Account <ArrowRight size={15} aria-hidden />
         </Button>
       </form>
     </AuthShell>

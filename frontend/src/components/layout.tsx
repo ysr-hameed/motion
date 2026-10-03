@@ -1,7 +1,23 @@
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useState } from "react";
+import {
+  ArrowRight,
+  Clapperboard,
+  CreditCard,
+  Download,
+  Folders,
+  LayoutTemplate,
+  LogOut,
+  Menu,
+  Palette,
+  Settings,
+  SlidersHorizontal,
+  Users,
+  X,
+} from "lucide-react";
 import { useAuth, useUser } from "@slyxup/ui";
 import type { ReactNode } from "react";
+import { Logo } from "./ui";
 
 /** Public marketing shell: header + footer per FRONTEND_DESIGN_PLAN §2.2. */
 export function PublicShell({ children }: { children: ReactNode }) {
@@ -10,9 +26,7 @@ export function PublicShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-10 border-b border-line bg-ink/90 backdrop-blur">
         <nav className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4 text-sm">
-          <Link to="/" className="font-bold tracking-tight">
-            SlyxUp <span className="text-tungsten">Motion</span>
-          </Link>
+          <Logo />
           <div className="hidden items-center gap-5 text-muted md:flex">
             <NavLink to="/features" className="hover:text-paper">Features</NavLink>
             <NavLink to="/use-cases" className="hover:text-paper">Use Cases</NavLink>
@@ -22,9 +36,10 @@ export function PublicShell({ children }: { children: ReactNode }) {
             {isSignedIn ? (
               <Link
                 to="/studio"
-                className="inline-flex h-9 items-center rounded-md bg-tungsten px-4 text-sm font-semibold text-ink hover:brightness-110"
+                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-tungsten px-4 text-sm font-semibold text-ink hover:brightness-110"
               >
                 Open Studio
+                <ArrowRight size={15} aria-hidden />
               </Link>
             ) : (
               <>
@@ -36,9 +51,10 @@ export function PublicShell({ children }: { children: ReactNode }) {
                 </Link>
                 <Link
                   to="/signup"
-                  className="inline-flex h-9 items-center rounded-md bg-tungsten px-4 text-sm font-semibold text-ink hover:brightness-110"
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md bg-tungsten px-4 text-sm font-semibold text-ink hover:brightness-110"
                 >
                   Sign Up
+                  <ArrowRight size={15} aria-hidden />
                 </Link>
               </>
             )}
@@ -87,14 +103,14 @@ export function PublicShell({ children }: { children: ReactNode }) {
 }
 
 const NAV = [
-  { to: "/studio", label: "Studio" },
-  { to: "/projects", label: "Projects" },
-  { to: "/templates", label: "Templates" },
-  { to: "/brand-kit", label: "Brand Kit" },
-  { to: "/exports", label: "Exports" },
-  { to: "/team", label: "Team" },
-  { to: "/billing", label: "Billing" },
-  { to: "/settings", label: "Settings" },
+  { to: "/studio", label: "Studio", icon: SlidersHorizontal },
+  { to: "/projects", label: "Projects", icon: Folders },
+  { to: "/templates", label: "Templates", icon: LayoutTemplate },
+  { to: "/brand-kit", label: "Brand Kit", icon: Palette },
+  { to: "/exports", label: "Exports", icon: Download },
+  { to: "/team", label: "Team", icon: Users },
+  { to: "/billing", label: "Billing", icon: CreditCard },
+  { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 /** Authenticated app shell: top bar + sidebar per FRONTEND_DESIGN_PLAN §2.2. */
@@ -108,13 +124,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-3">
         <button
-          className="rounded-md px-2 py-1 text-lg text-muted hover:text-paper md:hidden"
+          className="rounded-md p-1.5 text-muted hover:text-paper md:hidden"
           aria-label="Open navigation"
           onClick={() => setMenuOpen(true)}
         >
-          ≡
+          <Menu size={18} aria-hidden />
         </button>
-        <Link to="/studio" className="text-[13px] font-semibold tracking-tight">
+        <Link to="/studio" className="flex items-center gap-2 text-[13px] font-semibold tracking-tight">
+          <span className="flex h-6 w-6 items-center justify-center rounded bg-tungsten text-ink">
+            <Clapperboard size={13} strokeWidth={2.4} aria-hidden />
+          </span>
           SlyxUp Motion <span className="eyebrow ml-1">studio</span>
         </Link>
         <div className="ml-auto flex items-center gap-2 text-xs text-muted">
@@ -122,11 +141,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             {(user?.email as string) ?? ""}
           </span>
           <button
-            className="rounded-md border border-line px-2.5 py-1.5 hover:bg-panel"
+            className="inline-flex items-center gap-1.5 rounded-md border border-line px-2.5 py-1.5 hover:bg-panel"
             onClick={() => {
               void signOut().then(() => navigate("/"));
             }}
           >
+            <LogOut size={13} aria-hidden />
             Sign out
           </button>
         </div>
@@ -139,11 +159,11 @@ export function AppShell({ children }: { children: ReactNode }) {
               <div className="mb-2 flex items-center justify-between px-1">
                 <span className="text-[13px] font-semibold">SlyxUp Motion</span>
                 <button
-                  className="rounded-md px-2 py-1 text-muted hover:text-paper"
+                  className="rounded-md p-1.5 text-muted hover:text-paper"
                   aria-label="Close navigation"
                   onClick={() => setMenuOpen(false)}
                 >
-                  ✕
+                  <X size={16} aria-hidden />
                 </button>
               </div>
               {NAV.map((item) => (
@@ -152,30 +172,32 @@ export function AppShell({ children }: { children: ReactNode }) {
                   to={item.to}
                   onClick={() => setMenuOpen(false)}
                   className={({ isActive }) =>
-                    `rounded-md px-3 py-2.5 text-sm transition-colors ${
+                    `flex items-center gap-2.5 rounded-md px-3 py-2.5 text-sm transition-colors ${
                       isActive ? "bg-panel text-paper" : "text-muted hover:text-paper"
                     }`
                   }
                 >
+                  <item.icon size={15} aria-hidden />
                   {item.label}
                 </NavLink>
               ))}
             </nav>
           </div>
         ) : null}
-        <aside className="hidden w-44 shrink-0 flex-col gap-1 border-r border-line p-2 md:flex">
+        <aside className="hidden w-48 shrink-0 flex-col gap-1 border-r border-line p-2 md:flex">
           {NAV.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               className={({ isActive }) =>
-                `rounded-md px-3 py-2 text-sm transition-colors hover:bg-panel ${
+                `flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors hover:bg-panel ${
                   isActive
                     ? "border-l-2 border-tungsten bg-panel text-paper"
                     : "text-muted hover:text-paper"
                 }`
               }
             >
+              <item.icon size={15} aria-hidden />
               {item.label}
             </NavLink>
           ))}

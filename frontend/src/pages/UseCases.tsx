@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { PublicShell } from "~/components/layout";
 
 const CASES = [
@@ -23,8 +24,8 @@ export default function UseCases() {
             <div key={title} className="rounded-md border border-line bg-panel p-5">
               <p className="font-semibold">{title}</p>
               <p className="mt-1 text-sm text-muted">{body}</p>
-              <Link to="/templates" className="mt-3 inline-block text-sm text-tungsten hover:underline">
-                Browse templates →
+              <Link to="/templates" className="mt-3 inline-flex items-center gap-1 text-sm text-tungsten hover:underline">
+                Browse templates <ArrowRight size={13} aria-hidden />
               </Link>
             </div>
           ))}

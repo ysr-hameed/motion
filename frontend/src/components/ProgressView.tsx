@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import type { UIMessage } from "ai"
+import { AlertTriangle, Check, Loader2, Star } from "lucide-react"
 import type { MotionPlan } from "~/lib/composition"
 import { suggest } from "~/components/Timeline"
 import { openExport } from "~/lib/exportPresets"
@@ -138,7 +139,11 @@ export function ProgressView({ code, plan, version, busy, messages, sessionId }:
         <ul className="mt-2 space-y-0.5">
           {stages.map((s) => (
             <li key={s.label} className="flex items-center gap-1.5 font-mono text-[10.5px] text-muted">
-              <span className={s.done ? "text-ok" : "text-dim"}>{s.done ? "✓" : "⏳"}</span>
+              {s.done ? (
+                <Check size={12} className="text-ok" aria-hidden />
+              ) : (
+                <Loader2 size={12} className="animate-spin text-dim" aria-hidden />
+              )}
               {s.label}
             </li>
           ))}
@@ -160,9 +165,9 @@ export function ProgressView({ code, plan, version, busy, messages, sessionId }:
               type="button"
               onClick={() => void rate(n)}
               aria-label={`${n} star${n > 1 ? "s" : ""}`}
-              className={`text-[13px] transition-colors ${n <= stars ? "text-tungsten" : "text-dim hover:text-tungsten"}`}
+              className={`transition-colors ${n <= stars ? "text-tungsten" : "text-dim hover:text-tungsten"}`}
             >
-              ★
+              <Star size={13} fill={n <= stars ? "currentColor" : "none"} aria-hidden />
             </button>
           ))}
           {rated && <span className="font-mono text-[10px] text-dim">thanks</span>}
@@ -172,12 +177,16 @@ export function ProgressView({ code, plan, version, busy, messages, sessionId }:
       {showCheck && (
         <div className="mt-2 rounded-sm border border-line-soft bg-panel-2/60 p-2">
           {issues.length === 0 ? (
-            <p className="text-[11.5px] text-muted">✓ No export blockers found.</p>
+            <p className="flex items-center gap-1.5 text-[11.5px] text-muted">
+              <Check size={12} className="text-ok" aria-hidden />
+              No export blockers found.
+            </p>
           ) : (
             <ul className="space-y-1.5">
               {issues.map((i) => (
-                <li key={i.text} className="text-[11.5px] text-muted">
-                  <span className="text-tungsten">⚠</span> {i.text}
+                <li key={i.text} className="flex items-start gap-1.5 text-[11.5px] text-muted">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0 text-tungsten" aria-hidden />
+                  <span>{i.text}</span>
                   <button
                     type="button"
                     onClick={() => suggest(i.fix)}

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { ArrowLeft } from "lucide-react";
 import { useAuth } from "@slyxup/ui";
 import { Alert, AuthShell, Button, Field } from "~/components/ui";
 import { SLYXUP_PROJECT_ID, friendlyAuthError } from "~/lib/stack";
@@ -17,8 +18,9 @@ export default function ForgotPassword() {
         <Alert tone="success">
           If an account exists for <strong>{email}</strong>, a reset link is on its way.
         </Alert>
-        <Link to="/login" className="text-sm text-tungsten hover:underline">
-          ← Back to login
+        <Link to="/login" className="inline-flex items-center gap-1.5 text-sm text-tungsten hover:underline">
+          <ArrowLeft size={14} aria-hidden />
+          Back to login
         </Link>
       </AuthShell>
     );
@@ -53,8 +55,9 @@ export default function ForgotPassword() {
         <Button type="submit" loading={busy}>
           Send Reset Link
         </Button>
-        <Link to="/login" className="text-sm text-muted hover:text-paper">
-          ← Back to login
+        <Link to="/login" className="inline-flex items-center gap-1.5 text-sm text-muted hover:text-paper">
+          <ArrowLeft size={14} aria-hidden />
+          Back to login
         </Link>
       </form>
     </AuthShell>

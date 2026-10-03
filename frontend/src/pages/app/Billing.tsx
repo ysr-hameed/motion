@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Clapperboard, Download } from "lucide-react";
 import { useBilling, useInvoices, useSubscription } from "@slyxup/ui";
 import { Alert, Button, Card, LoadingPage } from "~/components/ui";
 import { SLYXUP_PROJECT_ID, friendlyAuthError } from "~/lib/stack";
@@ -81,11 +82,15 @@ export default function Billing() {
             </p>
             <div className="mt-3 flex flex-col gap-2">
               <div className="flex items-center gap-3 text-sm">
-                <span className="w-28 text-muted">Compositions</span>
+                <span className="flex w-28 items-center gap-1.5 text-muted">
+                  <Clapperboard size={13} aria-hidden /> Compositions
+                </span>
                 <Bar used={plan.data.usage.compositions.used} limit={plan.data.usage.compositions.limit} />
               </div>
               <div className="flex items-center gap-3 text-sm">
-                <span className="w-28 text-muted">Exports</span>
+                <span className="flex w-28 items-center gap-1.5 text-muted">
+                  <Download size={13} aria-hidden /> Exports
+                </span>
                 <Bar used={plan.data.usage.exports.used} limit={plan.data.usage.exports.limit} />
               </div>
             </div>
