@@ -16,7 +16,7 @@ import { DISPLAY_FACES, MAX_FONT, MIN_FONT, SAFE_MARGIN, TEXT_FACES, TYPE_SCALE 
 import { CompositionStore } from "./remotion/store"
 
 /** Vercel AI Gateway, OpenAI-compatible. */
-const MODEL = "alibaba/qwen3.7-flash"
+const MODEL = "inclusionai/ling-3.1-flash"
 const GATEWAY_BASE = "https://ai-gateway.vercel.sh/v1"
 
 /**
@@ -543,7 +543,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         return onFinish(result)
       },
       onError: (error) => {
-        this.coolDown("alibaba/qwen3.7-flash")
+        this.coolDown("inclusionai/ling-3.1-flash")
         console.error(JSON.stringify({ msg: "agent-model-error", err: String(error) }))
       },
     })
