@@ -1,0 +1,7 @@
+# Hashed build output is immutable — cache it hard.
+# index.html and SPA routes always revalidate so tabs pick up new hashes.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+/*
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff

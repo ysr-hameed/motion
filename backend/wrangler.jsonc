@@ -37,6 +37,32 @@
 
   "observability": { "enabled": true },
 
+  // Motion product data (auth lives in SlyxUp Stack, not here).
+  // NOTE: `slyxup-motion-db` holds pre-rewrite tables and is left untouched;
+  // the new schema lives in `slyxup-motion-api`.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "slyxup-motion-api", "database_id": "c464746d-65ca-4c69-8b56-0111ab46035c" }
+  ],
+  "kv_namespaces": [
+    { "binding": "RATE_LIMIT_KV", "id": "f81a2f99d5444b8aacb5a3acd5882523" },
+    { "binding": "ASSET_CACHE_KV", "id": "6484918c8ca547d9913070f6d3eaf717" }
+  ],
+  "r2_buckets": [
+    { "binding": "ASSETS_BUCKET", "bucket_name": "motion-assets" },
+    { "binding": "EXPORTS_BUCKET", "bucket_name": "motion-exports" }
+  ],
+
+  // Public SlyxUp Stack project config (publishable values only — secrets go
+  // via `wrangler secret put`: INTERNAL_SECRET + any sk_* / Paddle keys).
+  // WORKER_SELF_URL lets the Chat DO call back into /api/internal/*.
+  "vars": {
+    "WORKER_SELF_URL": "https://slyxup-motion-api.slyxup-smarketing.workers.dev",
+    "SLYXUP_AUTH_URL": "https://auth-slyxup-com.auth-0f4.workers.dev",
+    "SLYXUP_BILLING_URL": "https://billing-slyxup-com.billing-86c.workers.dev",
+    "SLYXUP_PUBLISHABLE_KEY": "pk_4fe385f0e6e8448df10679fb30183cf37c5ff4467ab3fd0b",
+    "SLYXUP_PROJECT_ID": "b52a7938-ec8d-4fdb-87fe-03d8d1d7ff4c"
+  },
+
   // The frontend is NOT served from here — it is deployed to Cloudflare Pages
   // and served from motion.slyxup.com, so this Worker serves API + agent only.
   //

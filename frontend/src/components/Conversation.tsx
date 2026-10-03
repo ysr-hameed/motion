@@ -1,16 +1,67 @@
 import { useEffect, useRef, useState } from "react"
 import type { UIMessage } from "ai"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
+import { TEMPLATES as TEMPLATE_CHIPS } from "~/lib/templates"
 
 const TOOL_LABEL: Record<string, string> = {
   load_skill: "load skill",
   get_canvas: "read canvas",
   plan_motion: "plan",
+  pre_validate_plan: "pre-validate",
+  constraint_solve: "solve constraints",
+  dependency_resolve: "resolve imports",
+  auto_fix_code: "auto-fix",
+  asset_search: "find asset",
+  asset_optimize: "optimize asset",
+  font_suggest: "suggest fonts",
+  intent_deep_analyze: "analyze intent",
+  intent_questionnaire: "questionnaire",
+  decision_make: "decide",
+  preference_apply: "apply prefs",
+  brand_learn: "learn brand",
+  design_analyze: "analyze design",
+  performance_profile: "profile perf",
+  accessibility_audit: "audit a11y",
+  template_apply_intelligent: "apply template",
+  template_list: "list templates",
+  blackboard_write: "post note",
+  blackboard_read: "read note",
+  blackboard_list: "list notes",
+  execute_batch: "batch",
+  prefetch_tools: "prefetch",
+  copy_generate: "write copy",
+  voiceover_generate: "time VO",
+  music_search: "find music",
+  sound_effects_library: "pick SFX",
+  subtitle_generate: "caption",
+  icon_generate: "pick icon",
+  background_generate: "make bg",
+  export_preset: "export spec",
+  export_bundle: "export bundle",
+  cdn_publish: "publish",
+  thumbnail_generate: "thumbnail",
+  watermark_apply: "watermark",
+  analytics_track: "track",
+  version_tag: "tag version",
+  template_save: "save template",
+  share_create: "share",
+  comment_add: "comment",
+  feedback_request: "request feedback",
+  team_invite: "invite",
+  activity_log: "activity",
+  three_scene_create: "3D scene",
+  three_camera_path: "3D camera",
+  three_model_animate: "3D animate",
+  load_motion_preset: "motion preset",
+  layout_plan: "plan layout",
+  auto_enhance_motion: "enhance motion",
+  verify_no_errors: "verify",
   read_file: "read source",
   write_composition: "write",
   edit_file: "edit",
   validate_composition: "validate",
   preview_composition: "preview",
+  read_render_report: "verify render",
   review_motion: "review motion",
   list_versions: "list versions",
   restore_version: "restore",
@@ -196,6 +247,17 @@ export function Conversation({ chat }: Props) {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })
     lastActivity.current = Date.now()
   }, [messages])
+
+  // Timeline / Inspector / ProgressView suggest edits as window events.
+  // They land in the draft — the user still sends, the agent still writes.
+  useEffect(() => {
+    const onSuggest = (e: Event) => {
+      const text = (e as CustomEvent<string>).detail
+      if (typeof text === "string" && text) setDraft(text)
+    }
+    window.addEventListener("motion:suggest", onSuggest)
+    return () => window.removeEventListener("motion:suggest", onSuggest)
+  }, [])
 
   useEffect(() => {
     if (!busy) return
@@ -392,6 +454,19 @@ function EmptyBrief() {
           </li>
         ))}
       </ul>
+      <p className="eyebrow mt-5 mb-2">or start from a template</p>
+      <div className="flex flex-wrap gap-1.5">
+        {TEMPLATE_CHIPS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent("motion:suggest", { detail: t.prompt }))}
+            className="rounded border border-line px-2 py-1 text-[11.5px] text-muted transition-colors hover:border-tungsten hover:text-paper"
+          >
+            {t.name}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

@@ -6,3 +6,9 @@ AI_GATEWAY_API_KEY=
 # Model chain, comma-separated, tried in order. Overrides wrangler.jsonc for
 # local dev. Gateway model ids, e.g. alibaba/qwen3.7-flash
 AI_MODEL=alibaba/qwen3.7-flash
+
+# SlyxUp Stack — public project config (values per project; secrets via `wrangler secret put`).
+SLYXUP_AUTH_URL=https://auth-slyxup-com.auth-0f4.workers.dev
+SLYXUP_BILLING_URL=https://billing-slyxup-com.billing-86c.workers.dev
+SLYXUP_PUBLISHABLE_KEY=pk_REPLACE_WITH_REAL_KEY
+SLYXUP_PROJECT_ID=REPLACE_WITH_PROJECT_ID
