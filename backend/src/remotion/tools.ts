@@ -1774,6 +1774,47 @@ export function autoRepairInline(code: string): { code: string; applied: string[
       applied.push(`extraplate → extrapolate typo (${matches.length}x)`)
     }
   }
+
+  // One-sided clamps keep drifting on the open side (rotation that never
+  // stops, opacity climbing past 1). Backfill the missing side inside flat
+  // option bags. Only touches bags that already clamp one side, so calls
+  // with deliberate unclamped physics are never rewritten.
+  {
+    let count = 0
+    next = next.replace(/\{([^{}]*)\}/g, (bag) => {
+      const hasLeft = /\bextrapolateLeft\s*:/.test(bag)
+      const hasRight = /\bextrapolateRight\s*:/.test(bag)
+      if (hasLeft === hasRight || !/\bclamp\b/.test(bag)) return bag
+      count++
+      const missing = hasLeft ? `extrapolateRight: "clamp"` : `extrapolateLeft: "clamp"`
+      return bag.replace(/\s*\}$/, `, ${missing} }`)
+    })
+    if (count > 0) applied.push(`one-sided clamp → both sides (${count}x)`)
+  }
+
+  // Unused named remotion imports (Sequence/staticFile imported "just in
+  // case") are dead weight the validator warns about. Strip names never
+  // referenced outside their own import line. Conservative: remotion package
+  // only, whole-word match, never touches namespace or default imports.
+  {
+    const importRe = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/g
+    let m: RegExpExecArray | null
+    let stripped = 0
+    while ((m = importRe.exec(next)) !== null) {
+      const names = m[1]!.split(",").map((s) => s.trim()).filter(Boolean)
+      const body = next.slice(0, m.index) + next.slice(m.index + m[0].length)
+      const keep = names.filter((n) => {
+        const id = n.split(/\s+as\s+/)[0]!.trim()
+        return id !== "" && new RegExp(`\\b${id}\\b`).test(body)
+      })
+      if (keep.length !== names.length && keep.length > 0) {
+        next = body.slice(0, m.index) + `import { ${keep.join(", ")} } from "remotion"` + body.slice(m.index)
+        stripped += names.length - keep.length
+        importRe.lastIndex = 0
+      }
+    }
+    if (stripped > 0) applied.push(`unused remotion imports stripped (${stripped}x)`)
+  }
   const easing = ensureEasingImport(next)
   if (easing.added) {
     next = easing.code

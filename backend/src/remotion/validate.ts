@@ -676,15 +676,19 @@ export function checkComposition(code: string): Check[] {
       const afterOutputs = src.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 300)
       const optsEnd = afterOutputs.indexOf("})")
       const opts = optsEnd === -1 ? afterOutputs.split(")")[0] ?? "" : afterOutputs.slice(0, optsEnd)
-      const hasClamp = /extrapolate(?:Left|Right)\s*:\s*["']clamp["']/.test(opts)
-      if (!hasClamp) {
+      const hasLeft = /extrapolateLeft\s*:\s*["']clamp["']/.test(opts)
+      const hasRight = /extrapolateRight\s*:\s*["']clamp["']/.test(opts)
+      // Both sides are required: a call clamped only on the left keeps
+      // drifting past its end value (rotation that never stops, opacity that
+      // climbs past 1). Observed live on four calls of an advanced cut.
+      if (!hasLeft || !hasRight) {
         const near = lineOf(src, m.index ?? 0)
         out.push({
           level: "error",
           message:
-            `interpolate() on opacity/scale at line ${near} has no extrapolateRight: "clamp". ` +
+            `interpolate() on opacity/scale at line ${near} is missing a clamp side${!hasLeft && !hasRight ? "s" : !hasLeft ? " (no extrapolateLeft)" : " (no extrapolateRight)"}. ` +
             `After frame ${outputs[outputs.length - 1]} the value continues past ${max} — ` +
-            `element becomes invisible or oversized. Add { extrapolateRight: "clamp" } as the fourth argument.`,
+            `element becomes invisible or oversized. Add BOTH extrapolateLeft: "clamp" and extrapolateRight: "clamp" as the fourth argument.`,
         })
         break // one instance is enough to require a fix; avoid spam
       }

@@ -975,6 +975,29 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         ) {
           return { toolChoice: { type: "tool", toolName: "write_composition" } }
         }
+        // Full-path discipline: a cut written from scratch gets a design
+        // review before it may preview — that is what catches the
+        // human-judgment class (intentional vs accidental overlap, plan
+        // drift) no static check can decide. Only after a SUCCESSFUL write:
+        // a rejected write means nothing was saved, and reviewing stale code
+        // would burn a paced call. Fast path (quick_start) and follow-up
+        // edits skip this: review there costs a paced call for little
+        // signal, and MAX_STEPS headroom is finite.
+        let lastWriteOk = false
+        for (const s of steps) {
+          for (const r of s.toolResults ?? []) {
+            if (r.toolName === "write_composition") {
+              lastWriteOk = (r.output as { ok?: unknown } | null)?.ok === true
+            }
+          }
+        }
+        if (
+          lastWriteOk &&
+          !calls.includes("review_motion") &&
+          !calls.includes("preview_composition")
+        ) {
+          return { toolChoice: { type: "tool", toolName: "review_motion" } }
+        }
         if (!calls.includes("preview_composition")) return { toolChoice: "auto" }
         const read = lastReadStatus(steps)
         if (read === null) {
