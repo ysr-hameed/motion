@@ -538,6 +538,22 @@ export function checkComposition(code: string): Check[] {
     }
   }
 
+  // Decor placed outside its own container: absolute + top/bottom at or past
+  // 100% renders as a floating line or a lost element (observed live as a
+  // chart "baseline" hovering above its chart). Advisory — full-bleed
+  // overlays use inset: 0, never top/bottom 100%.
+  {
+    const m = /position:\s*['"]absolute['"][\s\S]{0,800}?(?:bottom|top):\s*['"]?(?:calc\(\s*100%|100%)/i.exec(src)
+    if (m) {
+      out.push({
+        level: "warn",
+        message:
+          `An absolutely-positioned element sits at top/bottom 100% or more (line ${lineOf(src, m.index ?? 0)}) — ` +
+          `it renders outside its container. Anchor decor to the content edge, never to 100%.`,
+      })
+    }
+  }
+
   // Display type set too tight, body type set too tight.
   {
     const sizes = [...src.matchAll(/fontSize:\s*(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]))
@@ -852,9 +868,10 @@ export function checkComposition(code: string): Check[] {
     const hasTransform = /translate[XY]?|scale|rotate|skew/i.test(src)
     const hasOpacity = /opacity/i.test(src)
     const hasMap = /\.map\(/.test(src)
-    // Stagger patterns: explicit delay/stagger variable, or index multiplied/added
-    // to a number (e.g. `i * 3`, `index + 2`, `idx * 5`).
-    const hasStagger = /\bdelay\b|\bstagger\b|\b(?:index|idx|i)\s*[\*\+]\s*\d/.test(src)
+    // Stagger patterns: explicit delay/stagger variable (any case), or an
+    // index multiplied/added to a number OR identifier
+    // (e.g. `i * 3`, `index + 2`, `i * STAGGER`, `staggerStart`).
+    const hasStagger = /\bdelay\b|\bstagger\w*|\b(?:index|idx|i)\b\s*[*+]\s*[\w$]+/i.test(src)
 
     if (interpolates > 0 && easings === 0 && springs === 0) {
       out.push({

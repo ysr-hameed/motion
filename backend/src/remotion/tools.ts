@@ -431,7 +431,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       description:
         "Critique the cut as a motion designer. Call after a preview, then act on findings. " +
         "Detects: linear-only timing, opacity-only motion, no settle, no stagger, " +
-        "overlapping elements, off-canvas overflow, single-beat plans.",
+        "overlapping elements, off-canvas overflow, single-beat plans, " +
+        "plan-vs-code drift (promised pulse/stagger/highlight missing), decor " +
+        "placed outside its container, and data that contradicts a rising brief.",
       inputSchema: z.object({
         focus: z
           .string()
@@ -446,12 +448,16 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         const frames = (code.match(/interpolate\(\s*frame\s*,\s*\[[^\]]*\]/g) ?? []).length
         const springs = (code.match(/\bspring\(/g) ?? []).length
         const easings = (code.match(/Easing\./g) ?? []).length
-        const transforms = (code.match(/translate[XY]|scale|rotate|skew/gi) ?? []).length
+        const transforms = (code.match(/translate|scale|rotate|skew/gi) ?? []).length
         const opacities = (code.match(/opacity/gi) ?? []).length
-        const staggers = (code.match(/delay|offset|stagger/i) ?? []).length
+        const staggers = (code.match(/delay|offset|stagger\w*|index\s*\*|\bi\s*\*\s*\w+/gi) ?? []).length
         const maps = (code.match(/\.map\(/g) ?? []).length
 
-        if (frames > 0 && easings === 0) {
+        // NOTE: springs count as easing — a cut landing everything on spring()
+        // with plain clamps is organic, not robotic. Only flag linear when
+        // there is neither Easing nor spring.
+
+        if (frames > 0 && easings === 0 && springs === 0) {
           findings.push(
             "Every interpolation uses the default linear curve. Linear motion reads as robotic — " +
               "give each move an Easing.bezier(...) or a spring()."
@@ -519,6 +525,73 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
                 `Only fix if the element never appears on screen.`
             )
             break
+          }
+        }
+
+        // --- Plan-vs-code drift: every beat's promised motion must exist ----
+        // A plan that promises a pulse the code never implements is a lie the
+        // validator cannot see. Each signal below is a promise the plan makes
+        // and the exact code pattern that keeps it.
+        if (plan && plan.beats.length > 0) {
+          const beatText = plan.beats.map((b) => `f${b.from}-${b.to}: ${b.what}`).join("\n")
+          const drift: Array<{ re: RegExp; need: RegExp; fix: string }> = [
+            {
+              re: /breath|pulse|pulsing|idle|drift|alive|heartbeat/i,
+              need: /Math\.(sin|cos)\s*\(/,
+              fix: "it promises idle life (pulse/breathing) but no frame-driven drift exists. Add a deterministic Math.sin(frame) drift of 2-4px after the landing.",
+            },
+            {
+              re: /stagger|cascade|one by one|each \w+ in turn/i,
+              need: /(?:index|i)\s*\*\s*\d|STAGGER|staggerStart/i,
+              fix: "it promises staggered entrances but no index-based offset exists. Offset each start frame (e.g. 12 + i * 6).",
+            },
+            {
+              re: /spring|bounce|overshoot|settle|elastic/i,
+              need: /\bspring\s*\(/,
+              fix: "it promises spring motion but no spring() call exists. Land at least the hero element with a spring.",
+            },
+            {
+              re: /highlight/i,
+              need: /highlight/i,
+              fix: "it promises a highlight but no highlight layer exists. Add the marked layer with a spring scaleX reveal.",
+            },
+          ]
+          for (const { re, need, fix } of drift) {
+            if (re.test(beatText) && !need.test(code)) {
+              findings.push(`Plan-vs-code drift: the plan promises motion that the code never implements — ${fix}`)
+            }
+          }
+        }
+
+        // Decor placed outside its own container: absolute + top/bottom at or
+        // past 100% renders as a floating line or a lost element. Observed
+        // live as a "baseline" hovering above its chart.
+        {
+          const outside = /position:\s*['"]absolute['"][\s\S]{0,800}?(?:bottom|top):\s*['"]?(?:calc\(\s*100%|100%)/i.exec(code)
+          if (outside) {
+            findings.push(
+              "An absolutely-positioned element sits at top/bottom 100% (or more) of its container — " +
+                "it renders OUTSIDE, as a floating line or a lost element. Anchor decor to the content " +
+                "edge (e.g. the bars' zero line above the label padding), never to 100%."
+            )
+          }
+        }
+
+        // Data that contradicts a rising brief: invented DATA dipping while the
+        // intent/plan says rising/growing/peak reads as a mistake, not noise.
+        {
+          const trendWords = /ris(e|ing)|grow|peak|ascending|record high/i
+          const briefText = `${plan?.intent ?? ""} ${plan?.beats.map((b) => b.what).join(" ") ?? ""}`
+          const values = [...code.matchAll(/value:\s*(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]))
+          if (values.length >= 4 && trendWords.test(briefText)) {
+            const dipAt = values.findIndex((v, i) => i > 0 && v < (values[i - 1] ?? 0))
+            if (dipAt !== -1) {
+              findings.push(
+                `The brief promises rising/growing data but the invented DATA dips at index ${dipAt} ` +
+                  `(${values[dipAt - 1]} → ${values[dipAt]}). Make the series monotonic unless the brief names a dip — ` +
+                  `an unexplained dip reads as an error.`
+              )
+            }
           }
         }
 
