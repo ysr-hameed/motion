@@ -172,18 +172,13 @@ function dedupe(list: string[]): string[] {
 }
 
 /**
- * Measures the mounted Player at one frame. Called from the Stage after a seek
- * so the reported frame is the one the user is actually looking at.
+ * Legacy entry point, kept for the exported `judge`/`measure` helpers.
+ *
+ * The web player renders inside an opaque-origin sandboxed iframe, so the
+ * parent cannot measure its DOM. Layout truth is measured INSIDE the iframe
+ * by the driver (see `src/web/runtime.ts`) and posted back as the layout
+ * audit. This function therefore always returns null.
  */
-export function measureStage(frame: number): LayoutReport | null {
-  // The Player wraps the composition in a div that scales to fit.
-  const canvas = document.querySelector<HTMLElement>(".__remotion-player, [data-remotion-player]")
-  const root = canvas ?? document.querySelector<HTMLElement>("#stage-canvas")
-  if (!root) return null
-
-  const rect = root.getBoundingClientRect()
-  if (rect.width < 10) return null
-  const scale = rect.width / CANVAS_W
-
-  return judge(measure(root, scale), frame)
+export function measureStage(_frame: number): LayoutReport | null {
+  return null
 }

@@ -96,7 +96,7 @@ export function watermarkSpec(position = "bottom-right"): { snippet: string; not
     "top-left": "left: 96, top: 96",
   }
   return {
-    snippet: `<Img src={staticFile("watermark.png")} style={{ position: "absolute", ${pos[position] ?? pos["bottom-right"]}, width: 160, opacity: 0.7 }} />`,
+    snippet: `<div class="watermark">SLYXUP</div>\n.watermark{position:absolute;${pos[position] ?? pos["bottom-right"]};font-size:22px;letter-spacing:4px;opacity:.7;z-index:40}`,
     note: `96px safe-margin respected. Opacity 0.7 max — visible without stealing the frame. Free-tier exports keep it; Pro removes it.`,
   }
 }

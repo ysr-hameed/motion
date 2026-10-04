@@ -4,12 +4,18 @@
  * Professional animation as data, not taste: every preset names its easing,
  * duration and transform so the model copies numbers instead of inventing
  * curves. Pure and deterministic — safe inside the paced turn.
+ *
+ * Web-bundle dialect: snippets assume they run inside `render(t, ctx)` with
+ * `const f = ctx.frame` in scope. Motion reads `f` (integer frames),
+ * springs read seconds (`ctx.spring(t - startSec, {...})`), easing is
+ * `ctx.Easing.bezier(...)`, interpolation `ctx.interpolate(...)` (clamped
+ * by default — no extrapolate options needed).
  */
 
 export interface MotionPreset {
   /** What the beat feels like in one line. */
   feel: string
-  /** Exact easing snippet to paste. */
+  /** Exact easing snippet to paste (web dialect: ctx.Easing.*). */
   easing: string
   /** Duration in frames at 30fps. */
   duration: number
@@ -30,27 +36,27 @@ export interface MotionPreset {
 export const MotionPresets: Record<string, MotionPreset> = {
   heroEntrance: {
     feel: "Confident arrival with anticipation and settle",
-    easing: "Easing.bezier(0.16, 1, 0.3, 1)",
+    easing: "ctx.Easing.bezier(0.16, 1, 0.3, 1)",
     duration: 60,
     transform: "translateY(40) + scale(0.95) → translateY(0) + scale(1)",
     spring: { damping: 18, mass: 0.8, stiffness: 120 },
   },
   punchIn: {
     feel: "Snappy emphasis that overshoots then lands",
-    easing: "Easing.bezier(0.8, 0, 0.2, 1)",
+    easing: "ctx.Easing.bezier(0.8, 0, 0.2, 1)",
     duration: 24,
     transform: "scale(0.8) + opacity(0) → scale(1) + opacity(1)",
     overshoot: 1.08,
   },
   slideReveal: {
     feel: "Editorial wipe with a masked edge",
-    easing: "Easing.bezier(0.16, 1, 0.3, 1)",
+    easing: "ctx.Easing.bezier(0.16, 1, 0.3, 1)",
     duration: 45,
     transform: "translateX(-30) + clipPath inset(0 100% 0 0) → translateX(0) + inset(0 0 0 0)",
   },
   seamlessHandoff: {
     feel: "Invisible beat change — next starts before previous ends",
-    easing: "Easing.bezier(0, 0, 0.2, 1)",
+    easing: "ctx.Easing.bezier(0, 0, 0.2, 1)",
     duration: 30,
     transform: "opacity(1) → opacity(0) crossed with opacity(0) → opacity(1)",
     overlap: 15,
@@ -58,7 +64,7 @@ export const MotionPresets: Record<string, MotionPreset> = {
   },
   elasticSettle: {
     feel: "Playful landing with visible overshoot",
-    easing: "Easing.bezier(0.16, 1, 0.3, 1)",
+    easing: "ctx.Easing.bezier(0.16, 1, 0.3, 1)",
     duration: 40,
     transform: "scale(1.12) → scale(1)",
     spring: { damping: 15, mass: 1.2, stiffness: 100 },
@@ -66,7 +72,7 @@ export const MotionPresets: Record<string, MotionPreset> = {
   },
   fadeToBlack: {
     feel: "Resolved ending that holds before the cut",
-    easing: "Easing.bezier(0.4, 0, 1, 1)",
+    easing: "ctx.Easing.bezier(0.4, 0, 1, 1)",
     duration: 30,
     transform: "opacity(1) → opacity(0)",
     holdFrames: 10,
@@ -80,14 +86,14 @@ export const MotionPresets: Record<string, MotionPreset> = {
 
   clipReveal: {
     feel: "Masked content becoming visible — clip-path wipe, not a fade",
-    easing: "Easing.bezier(0.16, 1, 0.3, 1)",
+    easing: "ctx.Easing.bezier(0.16, 1, 0.3, 1)",
     duration: 45,
     transform: "clipPath inset(0 100% 0 0) → inset(0 0 0 0)",
     overlap: 0,
   },
   anticipation: {
     feel: "Pre-movement scale-down before the main entrance — adds weight",
-    easing: "Easing.bezier(0.4, 0, 1, 1)",
+    easing: "ctx.Easing.bezier(0.4, 0, 1, 1)",
     duration: 12,
     transform: "scale(1) → scale(0.94) then scale(0.94) → scale(1.06)",
     spring: { damping: 20, mass: 0.6, stiffness: 200 },
@@ -95,14 +101,14 @@ export const MotionPresets: Record<string, MotionPreset> = {
   },
   cascade: {
     feel: "Per-word/per-char stagger — content that reads as it arrives",
-    easing: "Easing.bezier(0.16, 1, 0.3, 1)",
+    easing: "ctx.Easing.bezier(0.16, 1, 0.3, 1)",
     duration: 15,
     transform: "translateY(20) + opacity(0) → translateY(0) + opacity(1) per item",
     stagger: 3,
   },
   textCascade: {
     feel: "Per-character spring cascade — headline that feels alive",
-    easing: "Easing.bezier(0.16, 1, 0.3, 1)",
+    easing: "ctx.Easing.bezier(0.16, 1, 0.3, 1)",
     duration: 20,
     transform: "translateY(30) + opacity(0) → translateY(0) + opacity(1) per char, 2f stagger",
     spring: { damping: 18, mass: 0.5, stiffness: 180 },
@@ -110,42 +116,42 @@ export const MotionPresets: Record<string, MotionPreset> = {
   },
   counterMotion: {
     feel: "Secondary element moves opposite to primary — creates depth",
-    easing: "Easing.bezier(0.16, 1, 0.3, 1)",
+    easing: "ctx.Easing.bezier(0.16, 1, 0.3, 1)",
     duration: 45,
     transform: "primary: translateX(-40) → translateX(0); secondary: translateX(20) → translateX(-10)",
     stagger: 0,
   },
   hold: {
     feel: "Element held at rest while the composition breathes",
-    easing: "Easing.bezier(0.4, 0, 0.2, 1)",
+    easing: "ctx.Easing.bezier(0.4, 0, 0.2, 1)",
     duration: 30,
     transform: "opacity(1) — no movement, just presence",
     holdFrames: 30,
   },
   parallax: {
     feel: "Layers moving at different speeds as a viewport shifts — depth",
-    easing: "Easing.bezier(0.25, 0.1, 0.25, 1)",
+    easing: "ctx.Easing.bezier(0.25, 0.1, 0.25, 1)",
     duration: 60,
     transform: "background: translateX(0)→(-20), mid: translateX(0)→(-40), fg: translateX(0)→(-80)",
     stagger: 0,
   },
   morph: {
     feel: "Shape or colour transition from state A to state B",
-    easing: "Easing.bezier(0.4, 0, 0.2, 1)",
+    easing: "ctx.Easing.bezier(0.4, 0, 0.2, 1)",
     duration: 40,
     transform: "interpolateColors or borderRadius/clip-path morph across the beat",
     overlap: 8,
   },
   idleDrift: {
     feel: "The frame keeps breathing after the landing — 3px sine drift, never frozen",
-    easing: "Easing.bezier(0.4, 0, 0.2, 1)",
+    easing: "ctx.Easing.bezier(0.4, 0, 0.2, 1)",
     duration: 60,
     transform: "translateY(0) → translateY(±3) sine loop after settle frame",
     holdFrames: 60,
   },
   punchZoom: {
     feel: "Whole-scene push-in: felt as intent, invisible as movement",
-    easing: "Easing.bezier(0.25, 0.1, 0.25, 1)",
+    easing: "ctx.Easing.bezier(0.25, 0.1, 0.25, 1)",
     duration: 90,
     transform: "scale(1) → scale(1.04) across the full beat",
     overlap: 0,
@@ -195,27 +201,23 @@ export function presetForBeat(beatType: string): { id: MotionPresetId; preset: M
 
 /** Ready-to-paste snippet for a preset starting at a frame.
  *
- * Specialized snippets are emitted for the extended beat types (clipReveal,
- * cascade, textCascade, counterMotion, parallax, anticipation) so the model
- * gets copy-paste-ready code, not a generic progress variable.
+ * Web dialect: paste inside `render(t, ctx)` with `const f = ctx.frame`
+ * in scope. Springs take seconds (`t - startSec`); windows read frames.
+ * ctx.interpolate clamps by default — no extrapolate options needed.
  */
 export function presetSnippet(id: MotionPresetId, startFrame: number): string {
   const p = MotionPresets[id]
   const end = startFrame + p.duration
+  const s0 = (startFrame / 30).toFixed(2)
 
   // Specialized snippets for new beat types ---------------------------------
 
   if (id === "clipReveal") {
     return [
       `// clipReveal: ${p.feel} (frames ${startFrame}→${end})`,
-      `// IMPORTANT: interpolateColors and clip-path need extrapolateRight: "clamp"`,
-      `const revealProgress = interpolate(frame, [${startFrame}, ${end}], [0, 1], {`,
-      `  easing: ${p.easing},`,
-      `  extrapolateLeft: "clamp",`,
-      `  extrapolateRight: "clamp",`,
-      `});`,
+      `const revealProgress = ctx.interpolate(f, [${startFrame}, ${end}], [0, 1], { easing: ${p.easing} });`,
       `// Apply to the element's style:`,
-      `// clipPath: \`inset(0 \${(1 - revealProgress) * 100}% 0 0)\``,
+      `// el.style.clipPath = "inset(0 " + ((1 - revealProgress) * 100) + "% 0 0)"`,
     ].join("\n")
   }
 
@@ -227,88 +229,63 @@ export function presetSnippet(id: MotionPresetId, startFrame: number): string {
     return [
       `// ${id}: ${p.feel} (start frame ${startFrame}, ${stagger}f stagger per item)`,
       `// items is your array; i is the item index`,
-      `const itemDelay = (i: number) => ${startFrame} + i * ${stagger};`,
-      `const itemSpring = (i: number) => spring({`,
-      `  frame: frame - itemDelay(i),`,
-      `  fps: 30,`,
-      `  config: ${springCfg},`,
-      `});`,
-      `// Usage inside .map((item, i) => ...):`,
-      `// opacity: Math.min(1, itemSpring(i))`,
-      `// translate: \`0 \${interpolate(frame, [itemDelay(i), itemDelay(i) + ${p.duration}], [20, 0], { extrapolateRight: "clamp" })}px\``,
+      `const itemT = (i) => t - (${startFrame} + i * ${stagger}) / 30;`,
+      `const itemSpring = (i) => ctx.spring(itemT(i), ${springCfg});`,
+      `// Per item, per frame:`,
+      `// el.style.opacity = Math.max(0, Math.min(1, itemSpring(i)))`,
+      `// el.style.translate = "0 " + ctx.interpolate(f, [${startFrame} + i * ${stagger}, ${startFrame} + i * ${stagger} + ${p.duration}], [20, 0]) + "px"`,
     ].join("\n")
   }
 
   if (id === "counterMotion") {
     return [
       `// counterMotion: ${p.feel} (frames ${startFrame}→${end})`,
-      `const motionProgress = interpolate(frame, [${startFrame}, ${end}], [0, 1], {`,
-      `  easing: ${p.easing},`,
-      `  extrapolateLeft: "clamp",`,
-      `  extrapolateRight: "clamp",`,
-      `});`,
+      `const motionProgress = ctx.interpolate(f, [${startFrame}, ${end}], [0, 1], { easing: ${p.easing} });`,
       `// Primary element (hero/headline):`,
-      `// translate: \`\${interpolate(motionProgress, [0, 1], [-40, 0])}px 0\``,
+      `// el.style.translate = ctx.interpolate(motionProgress, [0, 1], [-40, 0]) + "px 0"`,
       `// Secondary element (sub/label) — moves opposite:`,
-      `// translate: \`\${interpolate(motionProgress, [0, 1], [20, -10])}px 0\``,
+      `// el2.style.translate = ctx.interpolate(motionProgress, [0, 1], [20, -10]) + "px 0"`,
     ].join("\n")
   }
 
   if (id === "parallax") {
     return [
       `// parallax: ${p.feel} (frames ${startFrame}→${end})`,
-      `const scrollProgress = interpolate(frame, [${startFrame}, ${end}], [0, 1], {`,
-      `  easing: ${p.easing},`,
-      `  extrapolateLeft: "clamp",`,
-      `  extrapolateRight: "clamp",`,
-      `});`,
-      `// Background layer (slowest):`,
-      `// translate: \`\${scrollProgress * -20}px 0\``,
-      `// Mid layer:`,
-      `// translate: \`\${scrollProgress * -40}px 0\``,
-      `// Foreground layer (fastest):`,
-      `// translate: \`\${scrollProgress * -80}px 0\``,
+      `const scrollProgress = ctx.interpolate(f, [${startFrame}, ${end}], [0, 1], { easing: ${p.easing} });`,
+      `// Background layer (slowest): el.style.translate = (scrollProgress * -20) + "px 0"`,
+      `// Mid layer: el.style.translate = (scrollProgress * -40) + "px 0"`,
+      `// Foreground layer (fastest): el.style.translate = (scrollProgress * -80) + "px 0"`,
     ].join("\n")
   }
 
   if (id === "idleDrift") {
     return [
       `// idleDrift: ${p.feel} (holds from frame ${startFrame})`,
-      `// Deterministic sine of frame — identical every render pass.`,
-      `const breathe = frame > ${startFrame}`,
-      `  ? Math.sin((frame - ${startFrame}) * 0.08) * 3`,
-      `  : 0;`,
-      `// Add to the settled translate: translate: "0 " + (baseY + breathe) + "px"`,
+      `// Deterministic sine of t — identical every scrub and export.`,
+      `const breathe = t > ${s0} ? Math.sin((t - ${s0}) * 2.4) * 3 : 0;`,
+      `// Add to the settled translate: el.style.translate = "0 " + (baseY + breathe) + "px"`,
     ].join("\n")
   }
 
   if (id === "punchZoom") {
-    const end = startFrame + p.duration
     return [
       `// punchZoom: ${p.feel} (frames ${startFrame}→${end})`,
-      `const push = interpolate(frame, [${startFrame}, ${end}], [1, 1.04], {`,
-      `  easing: ${p.easing},`,
-      `  extrapolateLeft: "clamp",`,
-      `  extrapolateRight: "clamp",`,
-      `});`,
-      `// Apply on the scene wrapper: scale: String(push)`,
+      `const push = ctx.interpolate(f, [${startFrame}, ${end}], [1, 1.04], { easing: ${p.easing} });`,
+      `// Apply on the scene wrapper: el.style.scale = String(push)`,
     ].join("\n")
   }
 
   if (id === "anticipation") {
     const preEnd = startFrame + Math.round(p.duration * 0.4)
     const mainEnd = startFrame + p.duration
+    const preSec = (preEnd / 30).toFixed(2)
     return [
       `// anticipation: ${p.feel} (frames ${startFrame}→${mainEnd})`,
       `// Phase 1: compress (${startFrame}→${preEnd})`,
-      `const compress = interpolate(frame, [${startFrame}, ${preEnd}], [1, 0.94], {`,
-      `  easing: Easing.bezier(0.4, 0, 1, 1),`,
-      `  extrapolateLeft: "clamp",`,
-      `  extrapolateRight: "clamp",`,
-      `});`,
+      `const compress = ctx.interpolate(f, [${startFrame}, ${preEnd}], [1, 0.94], { easing: ctx.Easing.bezier(0.4, 0, 1, 1) });`,
       `// Phase 2: release with overshoot (${preEnd}→${mainEnd})`,
-      `const release = spring({ frame: frame - ${preEnd}, fps: 30, config: { damping: ${p.spring!.damping}, mass: ${p.spring!.mass}, stiffness: ${p.spring!.stiffness} } });`,
-      `// Combine: scale: frame < ${preEnd} ? compress : 0.94 + release * 0.12`,
+      `const release = ctx.spring(t - ${preSec}, { damping: ${p.spring!.damping}, mass: ${p.spring!.mass}, stiffness: ${p.spring!.stiffness} });`,
+      `// Combine: el.style.scale = f < ${preEnd} ? compress : 0.94 + release * 0.12`,
     ].join("\n")
   }
 
@@ -316,15 +293,11 @@ export function presetSnippet(id: MotionPresetId, startFrame: number): string {
 
   const lines = [
     `// ${id}: ${p.feel} (frames ${startFrame}→${end})`,
-    `const progress = interpolate(frame, [${startFrame}, ${end}], [0, 1], {`,
-    `  easing: ${p.easing},`,
-    `  extrapolateLeft: "clamp",`,
-    `  extrapolateRight: "clamp",`,
-    `});`,
+    `const progress = ctx.interpolate(f, [${startFrame}, ${end}], [0, 1], { easing: ${p.easing} });`,
   ]
   if (p.spring) {
     lines.push(
-      `const settle = spring({ frame: frame - ${startFrame}, fps: 30, config: { damping: ${p.spring.damping}, mass: ${p.spring.mass}, stiffness: ${p.spring.stiffness} } });`
+      `const settle = ctx.spring(t - ${s0}, { damping: ${p.spring.damping}, mass: ${p.spring.mass}, stiffness: ${p.spring.stiffness} });`
     )
   }
   if (p.overlap !== undefined && p.overlap > 0) {
@@ -334,7 +307,7 @@ export function presetSnippet(id: MotionPresetId, startFrame: number): string {
     lines.push(`// Ending: hold the final state ${p.holdFrames}f past frame ${end} so the cut resolves.`)
   }
   if (p.stagger !== undefined && p.stagger > 0) {
-    lines.push(`// Stagger: offset each mapped item by i * ${p.stagger} frames.`)
+    lines.push(`// Stagger: offset each item by i * ${p.stagger} frames: t - (${startFrame} + i * ${p.stagger}) / 30.`)
   }
   lines.push(`// Transform: ${p.transform}`)
   return lines.join("\n")
@@ -342,37 +315,27 @@ export function presetSnippet(id: MotionPresetId, startFrame: number): string {
 
 /**
  * Keyframe sequence: the motion-graphic workhorse. A single A→B
- * interpolate reads as a slide; three or more stops with explicit easings
- * read as choreography (anticipation → action → overshoot → settle).
- * Emits a ready-to-paste multi-stop interpolate: copy it, never hand-roll
- * timing values.
+ * interpolate reads as a slide; three or more stops read as choreography
+ * (anticipation → action → overshoot → settle). Emits a ready-to-paste
+ * multi-stop interpolate: copy it, never hand-roll timing values.
  *
- * Example: keyframeSnippet("scale", [15, 30, 60], [0.94, 1.08, 1])
+ * Example: keyframeSnippet("heroScale", [15, 30, 60], [0.94, 1.08, 1])
  * gives compress → overshoot → land across frames 15→60.
  */
 export function keyframeSnippet(
   prop: string,
   frames: number[],
   values: number[],
-  easings?: string[]
+  _easings?: string[]
 ): string {
   const n = Math.min(frames.length, values.length)
   const f = frames.slice(0, n)
   const v = values.slice(0, n)
-  // Per-segment easings: interpolate() takes an array of n-1 easings, one
-  // per segment. Anticipation compresses in, action eases out, settle lands.
-  const segs: string[] = []
-  for (let i = 0; i < n - 1; i++) {
-    segs.push(easings?.[i] ?? (i === 0 ? "Easing.bezier(0.4, 0, 1, 1)" : "Easing.bezier(0.16, 1, 0.3, 1)"))
-  }
+  // One easing per call (the runtime takes a single easing fn): ease-out
+  // carries the action, the overshoot value itself carries the anticipation.
   const lines = [
     `// keyframes: ${prop} across ${n} stops (frames ${f[0]}→${f[n - 1]})`,
-    `const ${prop}Keys = interpolate(frame, [${f.join(", ")}], [${v.join(", ")}], {`,
-    `  easing: [${segs.join(", ")}],`,
-    `  extrapolateLeft: "clamp",`,
-    `  extrapolateRight: "clamp",`,
-    ...(prop === "scale" ? [`  output: "perceptual-scale",`] : []),
-    `});`,
+    `const ${prop}Keys = ctx.interpolate(f, [${f.join(", ")}], [${v.join(", ")}], { easing: ctx.Easing.easeOut });`,
   ]
   return lines.join("\n")
 }
@@ -440,6 +403,9 @@ export type TextAnimationStyle = "charByChar" | "wordByWord" | "maskReveal" | "c
  * (2f per character, 5f per word) so the model does not hand-roll timing.
  * "counter" is the Stargazer mechanic: an odometer that eases 0→N with a
  * spring overshoot on arrival — stats, milestones, subscriber counts.
+ *
+ * Web dialect: build the spans once in init() (or lazily in render with a
+ * childElementCount guard), then set inline styles per frame in render().
  */
 export function textAnimationSnippet(
   style: TextAnimationStyle,
@@ -449,17 +415,14 @@ export function textAnimationSnippet(
   if (style === "counter") {
     const target = Math.max(1, Math.round(Number(text.replace(/[^0-9.]/g, "")) || 1000))
     const end = startFrame + 60
+    const endSec = (end / 30).toFixed(2)
     return [
       `// counter: 0 → ${target.toLocaleString("en-US")} over frames ${startFrame}→${end} (Stargazer mechanic)`,
-      `const countRaw = interpolate(frame, [${startFrame}, ${end}], [0, ${target}], {`,
-      `  easing: Easing.bezier(0.16, 1, 0.3, 1),`,
-      `  extrapolateLeft: "clamp",`,
-      `  extrapolateRight: "clamp",`,
-      `});`,
-      `const countSettle = spring({ frame: frame - ${end}, fps: 30, config: { damping: 12, mass: 1, stiffness: 120 } });`,
-      `const countShown = Math.round(countRaw * (frame < ${end} ? 1 : Math.min(1.04, 1 + countSettle * 0.04)));`,
-      `// Render: <span>{countShown.toLocaleString("en-US")}</span> — tabular-nums via fontVariantNumeric: "tabular-nums" so digits don't jitter.`,
-      `// Pair with a scale punch on arrival: scale: String(1 + Math.max(0, countSettle) * 0.08) for the 10 frames after ${end}.`,
+      `const countRaw = ctx.interpolate(f, [${startFrame}, ${end}], [0, ${target}], { easing: ctx.Easing.easeOut });`,
+      `const countSettle = ctx.spring(t - ${endSec}, { damping: 12, mass: 1, stiffness: 120 });`,
+      `const countShown = Math.round(countRaw * (f < ${end} ? 1 : Math.min(1.04, 1 + countSettle * 0.04)));`,
+      `// Render: el.textContent = countShown.toLocaleString("en-US") — tabular-nums via font-variant-numeric so digits don't jitter.`,
+      `// Pair with a scale punch on arrival: el.style.scale = 1 + Math.max(0, countSettle) * 0.08 for the 10 frames after ${end}.`,
     ].join("\n")
   }
   const safe = text.replace(/`/g, "'").slice(0, 120)
@@ -467,33 +430,26 @@ export function textAnimationSnippet(
   if (style === "wordByWord") {
     return [
       `// wordByWord: ${literal} from frame ${startFrame} (snappy spring per word)`,
-      `{${literal}.split(" ").map((word, i) => (`,
-      `  <span key={i} style={{ display: "inline-block", marginRight: 16, opacity: spring({ frame: frame - (${startFrame} + i * 5), fps: 30, config: { damping: 18, mass: 0.5, stiffness: 180 } }) }}>`,
-      `    {word}`,
-      `  </span>`,
-      `))}`,
+      `// init(): split into spans once — <span class="w" data-i="0..n">word</span> inside #headline`,
+      `// render(), per span i:`,
+      `// const s = ctx.spring(t - (${startFrame} + i * 5) / 30, { damping: 18, mass: 0.5, stiffness: 180 });`,
+      `// span.style.opacity = Math.max(0, Math.min(1, s)); span.style.marginRight = "16px"; span.style.display = "inline-block";`,
     ].join("\n")
   }
   if (style === "maskReveal") {
     const end = startFrame + 45
     return [
       `// maskReveal: ${literal} frames ${startFrame}→${end}`,
-      `// Interpolate a NUMBER 0→1, then compute the inset string — interpolate() does not support string outputs.`,
-      `const maskProgress = interpolate(frame, [${startFrame}, ${end}], [0, 1], {`,
-      `  easing: Easing.bezier(0.16, 1, 0.3, 1),`,
-      `  extrapolateLeft: "clamp",`,
-      `  extrapolateRight: "clamp",`,
-      `});`,
-      `<div style={{ clipPath: \`inset(0 \${(1 - maskProgress) * 100}% 0 0)\` }}>`,
-      `  {${literal}}`,
-      `</div>`,
+      `// Interpolate a NUMBER 0→1, then compute the inset string.`,
+      `const maskProgress = ctx.interpolate(f, [${startFrame}, ${end}], [0, 1], { easing: ctx.Easing.easeOut });`,
+      `// maskEl.style.clipPath = "inset(0 " + ((1 - maskProgress) * 100) + "% 0 0)"`,
     ].join("\n")
   }
   return [
     `// charByChar: ${literal} from frame ${startFrame} (2f stagger per character)`,
-    `{${literal}.split("").map((char, i) => {`,
-    `  const t = interpolate(frame, [${startFrame} + i * 2, ${startFrame} + i * 2 + 15], [20, 0], { easing: Easing.bezier(0.16, 1, 0.3, 1) });`,
-    `  return <span key={i} style={{ display: "inline-block", opacity: interpolate(frame, [${startFrame} + i * 2, ${startFrame} + i * 2 + 10], [0, 1]), translate: \`0 \${t}px\` }}>{char}</span>;`,
-    `})}`,
+    `// init(): one <span> per char inside #headline. render(), per char i:`,
+    `// const d = ${startFrame} + i * 2;`,
+    `// const y = ctx.interpolate(f, [d, d + 15], [20, 0], { easing: ctx.Easing.easeOut });`,
+    `// span.style.translate = "0 " + y + "px"; span.style.opacity = ctx.interpolate(f, [d, d + 10], [0, 1]);`,
   ].join("\n")
 }

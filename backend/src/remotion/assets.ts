@@ -21,13 +21,13 @@ const CURATED: Record<string, AssetSuggestion[]> = {
       url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?w=1920&q=80&auto=format&fit=crop",
       label: "Tech workspace — dark, product-friendly",
       attribution: "Unsplash (check photo page for author)",
-      note: "1920px wide; use Img with crossOrigin for canvas use.",
+      note: "1920px wide; use <img> with crossOrigin=\"anonymous\" so export snapshots paint.",
     },
     {
       url: "https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=1920&q=80&auto=format&fit=crop",
       label: "Neon gradient — energetic background",
       attribution: "Unsplash (check photo page for author)",
-      note: "Works as a full-bleed AbsoluteFill background at 0.25 opacity.",
+      note: "Works as a full-bleed #wm-stage background at 0.25 opacity.",
     },
   ],
   video: [
@@ -35,7 +35,7 @@ const CURATED: Record<string, AssetSuggestion[]> = {
       url: "https://cdn.coverr.co/videos/coverr-abstract-gradient-5241/1080p.mp4",
       label: "Abstract gradient loop (Coverr)",
       attribution: "Coverr — free for commercial use, link appreciated",
-      note: "Loop with <Loop>; trim client-side with start/end frames, not re-encode.",
+      note: "Loop with the `loop` attribute; show/hide by t windows in render(), do not re-encode.",
     },
   ],
   audio: [
@@ -91,48 +91,49 @@ export function optimizeAsset(
     optimized,
     guidance:
       `Quality ${q}, target 1920px wide for a 1080p canvas. ` +
-      `Remote images need crossOrigin="anonymous" on Img; prefer R2 staticFile() for export. ` +
+      `Remote images need crossOrigin="anonymous" on <img>; same-host or R2 URLs paint best in export. ` +
       `If the source is under 1080p, upscale will soften — use vector/logo art instead.`,
   }
 }
 
 const MOOD_FONTS: Record<string, { display: string; text: string; css: string }> = {
   modern: {
-    display: "unbounded",
-    text: "manrope",
-    css: "fontFamily: Fonts.unbounded.family (hero) + Fonts.manrope.family (body)",
+    display: "Unbounded",
+    text: "Manrope",
+    css: "font-family: 'Unbounded' (hero) + 'Manrope' (body) — the runtime auto-loads cited families",
   },
   playful: {
-    display: "bricolage",
-    text: "karla",
-    css: "fontFamily: Fonts.bricolage.family (hero) + Fonts.karla.family (body)",
+    display: "Bricolage Grotesque",
+    text: "Karla",
+    css: "font-family: 'Bricolage Grotesque' (hero) + 'Karla' (body) — the runtime auto-loads cited families",
   },
   elegant: {
-    display: "instrumentSerif",
-    text: "newsreader",
-    css: "fontFamily: Fonts.instrumentSerif.family (hero) + Fonts.newsreader.family (body)",
+    display: "Instrument Serif",
+    text: "Newsreader",
+    css: "font-family: 'Instrument Serif' (hero) + 'Newsreader' (body) — the runtime auto-loads cited families",
   },
   bold: {
-    display: "anton",
-    text: "archivo",
-    css: "fontFamily: Fonts.anton.family (hero) + Fonts.archivo.family (body)",
+    display: "Anton",
+    text: "Archivo",
+    css: "font-family: 'Anton' (hero) + 'Archivo' (body) — the runtime auto-loads cited families",
   },
   tech: {
-    display: "spaceGrotesk",
-    text: "spaceMono",
-    css: "fontFamily: Fonts.spaceGrotesk.family (hero) + Fonts.spaceMono.family (labels)",
+    display: "Space Grotesk",
+    text: "Space Mono",
+    css: "font-family: 'Space Grotesk' (hero) + 'Space Mono' (labels) — the runtime auto-loads cited families",
   },
 }
 
 /**
  * Ground truth for any font/style name the user or brief mentions.
  *
- * Keys resolve against the curated registry first (exact key, CSS family
- * name, or lowercase), then style words (handwritten → caveat family of
- * choices), then the CamelCase rule the player itself applies
- * (playfairDisplay → "Playfair Display", loaded on demand). Anything left
- * is reported unknown with the closest curated fallback — never a guess
- * the render cannot honour.
+ * Names resolve against the curated catalogue first (CSS family name or
+ * lowercase), then style words (handwritten → Caveat family of choices).
+ * Any other well-formed family name loads on demand straight from Google
+ * Fonts — the sandbox runtime fetches a stylesheet for every cited family,
+ * so anything left is reported unknown with the closest curated fallback,
+ * never a guess the render cannot honour. The snippet is always plain CSS,
+ * never a registry reference.
  */
 export function resolveFont(name: string): {
   ok: boolean
@@ -168,12 +169,13 @@ export function resolveFont(name: string): {
     curatedKeys.find((k) => k === raw || k.toLowerCase() === nospace) ??
     curatedKeys.find((k) => (familyNames[k.toLowerCase()] ?? "").toLowerCase() === lower)
   if (direct) {
+    const family = familyNames[direct.toLowerCase()] ?? direct
     return {
       ok: true,
       key: direct,
-      snippet: `fontFamily: Fonts.${direct}.family`,
+      snippet: `font-family: '${family}'`,
       curated: true,
-      note: `${familyNames[direct.toLowerCase()] ?? direct} is curated — preloaded, zero risk.`,
+      note: `${family} is curated — auto-loaded by the runtime, zero risk. Cite it in CSS and it renders in preview and export.`,
     }
   }
   const styleMap: Array<[RegExp, string]> = [
@@ -186,29 +188,34 @@ export function resolveFont(name: string): {
   ]
   for (const [re, key] of styleMap) {
     if (re.test(raw)) {
+      const family = familyNames[key.toLowerCase()] ?? key
       return {
         ok: true,
         key,
-        snippet: `fontFamily: Fonts.${key}.family`,
+        snippet: `font-family: '${family}'`,
         curated: true,
         note:
-          `"${raw}" is a style, not a family — closest curated match is ${key}` +
+          `"${raw}" is a style, not a family — closest curated match is ${family}` +
           (key === "caveat" ? " (size at 1.4x: scripts render small)." : ".") +
           ` Use exactly this snippet.`,
       }
     }
   }
-  // CamelCase on-demand rule (mirrors the player's guessFamily): any
-  // Playfair-Display-shaped key loads from Google Fonts automatically.
-  const camel = raw.replace(/[\s_-]+(.)/g, (_, c: string) => (c as string).toUpperCase()).replace(/^./, (c) => c.toLowerCase()).replace(/[^A-Za-z0-9]/g, "")
-  if (/^[A-Za-z][A-Za-z0-9]{0,39}$/.test(camel)) {
+  // On-demand rule (mirrors the runtime): any well-formed family name loads
+  // straight from the Google Fonts CSS API.
+  const family = raw
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+  if (/^[A-Za-z][A-Za-z0-9 ']{0,39}$/.test(family)) {
     return {
       ok: true,
-      key: camel,
-      snippet: `fontFamily: Fonts.${camel}.family`,
+      key: family,
+      snippet: `font-family: '${family}'`,
       curated: false,
       note:
-        `${camel} is not curated but loads on demand from Google Fonts (verified ` +
+        `${family} is not curated but loads on demand from Google Fonts (verified ` +
         `at render; an unknown name falls back instead of failing). Confirm it ` +
         `in read_render_report's fonts status before claiming it worked.`,
     }
@@ -218,7 +225,7 @@ export function resolveFont(name: string): {
     key: null,
     snippet: null,
     curated: false,
-    note: `"${raw}" is not a usable font name. Closest curated fallbacks: caveat (handwritten), fraunces (serif), anton (bold). Pick one via font_suggest.`,
+    note: `"${raw}" is not a usable font name. Closest curated fallbacks: Caveat (handwritten), Fraunces (serif), Anton (bold). Pick one via font_suggest.`,
   }
 }
 
@@ -235,39 +242,39 @@ export function suggestFonts(
   const s = (style ?? "").toLowerCase()
   if (/hand|script|cursive|marker|signatur|wedding|romantic|love/.test(s)) {
     const script =
-      /elegant|luxury|wedding|romantic|love|formal/.test(`${s} ${key}`) ? "greatVibes"
-      : /bold|retro|fun|playful|logo/.test(`${s} ${key}`) ? "pacifico"
-      : /danc|casual|bounc/.test(s) ? "dancingScript"
-      : "caveat"
+      /elegant|luxury|wedding|romantic|love|formal/.test(`${s} ${key}`) ? "Great Vibes"
+      : /bold|retro|fun|playful|logo/.test(`${s} ${key}`) ? "Pacifico"
+      : /danc|casual|bounc/.test(s) ? "Dancing Script"
+      : "Caveat"
     return {
       mood: key,
       display: script,
-      text: /elegant|romantic|love/.test(`${s} ${key}`) ? "newsreader" : "karla",
-      css: `fontFamily: Fonts.${script}.family (hero) + text face (body)`,
+      text: /elegant|romantic|love/.test(`${s} ${key}`) ? "Newsreader" : "Karla",
+      css: `font-family: '${script}' (hero) + text face (body)`,
       note:
         `User asked for "${style}" — display is ${script}, no substitutes. ` +
         `Script faces render ~30% smaller than sans at the same px: size the hero ` +
         `at 1.4x the normal hero px (e.g. 200px instead of 140px) and add a slight ` +
-        `rotate (-2deg) for an authentic hand. Never system-ui/Arial — Fonts.* ` +
-        `is already in scope, no import needed.`,
+        `rotate (-2deg) for an authentic hand. Never system-ui/Arial — cite the ` +
+        `family in CSS and the runtime loads it, no import needed.`,
     }
   }
   if (/mono|code|terminal|typewriter/.test(s)) {
     return {
       mood: key,
-      display: "spaceMono",
-      text: "spaceMono",
-      css: `fontFamily: Fonts.spaceMono.family everywhere`,
-      note: `User asked for "${style}" — code/typewriter cuts are all-mono (spaceMono). Never proportional faces here.`,
+      display: "Space Mono",
+      text: "Space Mono",
+      css: `font-family: 'Space Mono' everywhere`,
+      note: `User asked for "${style}" — code/typewriter cuts are all-mono (Space Mono). Never proportional faces here.`,
     }
   }
   if (/serif|editorial|classic|book/.test(s)) {
     return {
       mood: key,
-      display: "fraunces",
-      text: "newsreader",
-      css: `fontFamily: Fonts.fraunces.family (hero) + Fonts.newsreader.family (body)`,
-      note: `User asked for "${style}" — display is fraunces, no substitutes.`,
+      display: "Fraunces",
+      text: "Newsreader",
+      css: `font-family: 'Fraunces' (hero) + 'Newsreader' (body)`,
+      note: `User asked for "${style}" — display is Fraunces, no substitutes.`,
     }
   }
   return {
@@ -276,6 +283,6 @@ export function suggestFonts(
     note:
       `Pairing for "${key}"${brand ? ` matching brand "${brand}"` : ""}. ` +
       `Display for hero only, text face for everything else. ` +
-      `Never system-ui/Arial — Fonts.* is already in scope, no import needed.`,
+      `Never system-ui/Arial — cite the family in CSS and the runtime loads it, no import needed.`,
   }
 }

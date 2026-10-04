@@ -25,18 +25,9 @@ export default defineConfig({
     },
   },
   build: {
-    rollupOptions: {
-      output: {
-        // Only the two things that are genuinely heavy AND always loaded get a
-        // manual chunk: the transpiler and Remotion core. The optional
-        // @remotion packages are dynamically imported by lazy-scope.ts, so
-        // lumping them into one named chunk here would force all of them into
-        // the initial graph and undo that splitting — leave them to Vite.
-        manualChunks(id) {
-          if (id.includes("sucrase")) return "transpiler"
-          if (id.includes("/node_modules/remotion/")) return "remotion"
-        },
-      },
-    },
+    // The web-motion player is dependency-free (sandboxed iframe + native
+    // MediaRecorder/WebCodecs) — no vendor chunk carve-outs needed. Three.js,
+    // GSAP and friends load from pinned CDN URLs inside the sandbox, never
+    // through this bundle.
   },
 })

@@ -1,10 +1,13 @@
 /**
- * Real 3D via @remotion/three (installed + in the player scope).
+ * Real 3D in web bundles via pinned Three.js CDN.
  *
- * The Remotion rule, always: declarative ThreeCanvas driven by
- * useCurrentFrame — useFrame() is FORBIDDEN (it flickers across renders).
- * Camera moves are numbers computed from frame, passed as props.
+ * The rule, always: a <canvas> in the html part, Three.js loaded from a
+ * pinned jsdelivr/unpkg URL in meta.assets.scripts, and the camera driven
+ * by t inside render() — never requestAnimationFrame loops of its own
+ * (the driver already owns the clock; a second loop desyncs scrub/export).
  */
+
+const THREE_CDN = "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.min.js"
 
 export function threeSceneCreate(
   kind: "orbit" | "dolly" | "pan" | "static" = "orbit",
@@ -13,32 +16,24 @@ export function threeSceneCreate(
   const frames = Math.min(900, Math.round(seconds * 30))
   const rig =
     kind === "orbit"
-      ? `const t = interpolate(frame, [0, ${frames}], [0, Math.PI * 2], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const camPos: [number, number, number] = [Math.sin(t) * 6, 2, Math.cos(t) * 6]; // orbit: radius 6, height 2`
+      ? `const a = ctx.interpolate(f, [0, ${frames}], [0, Math.PI * 2]);\ncamera.position.set(Math.sin(a) * 6, 2, Math.cos(a) * 6); // orbit: radius 6, height 2`
       : kind === "dolly"
-        ? `const dolly = interpolate(frame, [0, ${frames}], [7, 3], { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const camPos: [number, number, number] = [0, 1.5, dolly]; // dolly: push 7→3`
+        ? `const dolly = ctx.interpolate(f, [0, ${frames}], [7, 3], { easing: ctx.Easing.easeOut });\ncamera.position.set(0, 1.5, dolly); // dolly: push 7→3`
         : kind === "pan"
-          ? `const pan = interpolate(frame, [0, ${frames}], [-4, 4], { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const camPos: [number, number, number] = [pan, 1.5, 6]; // pan: sweep -4→4`
-          : `const camPos: [number, number, number] = [0, 1.5, 6]; // static: subject moves, camera holds`;
+          ? `const pan = ctx.interpolate(f, [0, ${frames}], [-4, 4], { easing: ctx.Easing.easeOut });\ncamera.position.set(pan, 1.5, 6); // pan: sweep -4→4`
+          : `camera.position.set(0, 1.5, 6); // static: subject moves, camera holds`
   return {
     snippet: [
-      `import { ThreeCanvas } from "@remotion/three";`,
-      `const frame = useCurrentFrame();`,
-      `const { width, height } = useVideoConfig();`,
-      `const spin = frame * 0.02; // subject rotation, frame-driven`,
+      `<!-- html part: --><canvas id="scene3d" width="1920" height="1080"></canvas>`,
+      `// meta.assets.scripts: ["${THREE_CDN}"]`,
+      `// init(ctx): renderer = new THREE.WebGLRenderer({ canvas: ctx.el("scene3d"), alpha: true });`,
+      `//   scene, camera(fov 45), ambient + directional lights, mesh (box/sphere/torus, segments ≤ 32).`,
+      `// render(t, ctx): const f = ctx.frame; const spin = t * 1.2; // subject rotation, t-driven`,
       `${rig}`,
-      `<ThreeCanvas width={width} height={height} camera={{ position: camPos, fov: 45 }}>`,
-      `  <ambientLight intensity={0.5} />`,
-      `  <directionalLight position={[5, 5, 5]} intensity={1} />`,
-      `  <mesh rotation={[0, spin, 0]}>`,
-      `    <boxGeometry args={[2, 2, 2]} />`,
-      `    <meshStandardMaterial color={ACCENT} roughness={0.3} />`,
-      `  </mesh>`,
-      `</ThreeCanvas> // declarative only — NEVER useFrame (flickers across renders)`,
+      `// camera.lookAt(0, 0, 0); mesh.rotation.y = spin; renderer.render(scene, camera);`,
+      `// NEVER requestAnimationFrame inside the bundle — the driver calls render(t, ctx) every frame.`,
     ].join("\n"),
-    note: `${kind} over ${frames}f, @remotion/three installed and in scope. Camera is a frame-computed prop. Keep geometry light (box/sphere/torus, segments ≤32) for Player perf. Models (.glb) still need R2/staticFile hosting first.`,
+    note: `${kind} over ${frames}f, Three.js pinned CDN in meta.assets. Camera is a t-computed value. Keep geometry light for iframe + export perf. Models (.glb) need an https host with CORS first.`,
   }
 }
 
@@ -55,8 +50,8 @@ export function threeCameraPath(
         ]
   return {
     path,
-    easing: "Easing.bezier(0.16,1,0.3,1) per segment — ease the CAMERA, not just the subject; hold 15f at each keyframe so the move reads as intentional.",
-    note: `${type} through ${path.length} keyframe(s). Bezier through points in code (no runtime curve lib wired). Sync segment boundaries to beat boundaries.`,
+    easing: "ctx.Easing.bezier(0.16,1,0.3,1) per segment — ease the CAMERA, not just the subject; hold 15f at each keyframe so the move reads as intentional.",
+    note: `${type} through ${path.length} keyframe(s). Lerp between points with ctx.interpolate(f, [segStart, segEnd], [0, 1]) per segment. Sync segment boundaries to beat boundaries.`,
   }
 }
 
@@ -66,21 +61,22 @@ export function threeModelAnimate(
   seconds = 5
 ): { snippet: string; note: string } {
   const frames = Math.min(900, Math.round(seconds * 30))
+  const endSec = (frames / 30).toFixed(2)
   return {
     snippet: [
-      `// model: ${model} (.glb/.gltf, Draco-compressed, <5MB, hosted in R2/staticFile first)`,
-      `const rotation = interpolate(frame, [0, ${frames}], [0, Math.PI * 2], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });`,
-      `const floatY = Math.sin(frame / 15) * 0.15; // deterministic hover`,
+      `// model: ${model} (.glb/.gltf, Draco-compressed, <5MB, https host with CORS first)`,
+      `// load once in init() with THREE.GLTFLoader (add its CDN script to meta.assets.scripts).`,
+      `const rotation = ctx.interpolate(f, [0, ${frames}], [0, Math.PI * 2]);`,
+      `const floatY = Math.sin(t * 4.2) * 0.15; // deterministic hover, t-driven`,
       animation === "entrance"
-        ? `const enter = spring({ frame, fps: 30, config: { damping: 14, mass: 1, stiffness: 120 } }); // overshoot landing`
+        ? `const enter = ctx.spring(t, { damping: 14, mass: 1, stiffness: 120 }); // overshoot landing`
         : `const enter = 1;`,
-      `// <primitive object={gltf.scene} rotation-y={rotation} position-y={animation === "float" ? floatY : 0} scale={enter} />`,
+      `// group.rotation.y = rotation; group.position.y = ${animation === "float" ? "floatY" : "0"}; group.scale.setScalar(Math.max(0.001, enter));`,
       `// No-model fallback (renders TODAY, no hosting): a torus knot hero —`,
-      `// <mesh rotation={[frame * 0.01, rotation, 0]} scale={enter}>`,
-      `//   <torusKnotGeometry args={[1.4, 0.4, 128, 24]} />`,
-      `//   <meshStandardMaterial color={ACCENT} roughness={0.25} metalness={0.6} />`,
-      `// </mesh>`,
+      `// const geo = new THREE.TorusKnotGeometry(1.4, 0.4, 128, 24);`,
+      `// const mat = new THREE.MeshStandardMaterial({ color: ACCENT, roughness: 0.25, metalness: 0.6 });`,
+      `// End state holds to ${endSec}s so the cut resolves.`,
     ].join("\n"),
-    note: `${animation} over ${frames}f, useCurrentFrame-driven (never useFrame). Without a hosted model, ship the torus-knot fallback — real 3D today, model swap later.`,
+    note: `${animation} over ${frames}f, t-driven (never requestAnimationFrame). Without a hosted model, ship the torus-knot fallback — real 3D today, model swap later.`,
   }
 }

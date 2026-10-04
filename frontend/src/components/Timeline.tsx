@@ -4,7 +4,7 @@ import type { MotionPlan } from "~/lib/composition"
 /**
  * Phase 1: interactive beats timeline (IMPLEMENTATION_PLAN.md §4.2).
  *
- * The Stage owns the Player and its transport scrubber; this is the
+ * The Stage owns the sandbox player and its transport scrubber; this is the
  * plan-visualization layer: per-beat blocks with real props on hover,
  * click-to-inspect, and retime actions that suggest (not apply) edits.
  * Suggestions travel as `motion:suggest` window events which the

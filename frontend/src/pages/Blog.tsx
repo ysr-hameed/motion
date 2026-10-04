@@ -10,8 +10,8 @@ const POSTS = [
     title: "Why we render in your browser",
     excerpt: "The preview IS the export path — same code, same frames, zero “but it looked fine in the editor”.",
     body: [
-      "Most motion tools preview an approximation and render something else on export. We compile the actual Remotion composition in your browser and mount it in Remotion's own player.",
-      "What you scrub is what the render farm gets. Font, timing, easing — identical, because there is only one code path.",
+      "Most motion tools preview an approximation and render something else on export. We run the actual web motion bundle in your browser inside a sandboxed player — the same code path that exports.",
+      "What you scrub is what you export. Font, timing, easing — identical, because preview and export run the same bundle in your browser.",
     ],
   },
   {

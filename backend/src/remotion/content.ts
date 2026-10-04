@@ -123,7 +123,7 @@ export function subtitleGenerate(
   return {
     language,
     captions,
-    note: "Render with @remotion/captions <Caption> per window; keep ≤42 chars/line, hold ≥30f. Auto-transcription is not connected — these cues come from the script.",
+    note: "Render each window as a positioned <div> in the html part, toggled by t in render() (find the window where t*30 in [from, to)); keep ≤42 chars/line, hold ≥30f. Auto-transcription is not connected — these cues come from the script.",
   }
 }
 
@@ -146,10 +146,10 @@ export function iconGenerate(concept: string): { concept: string; icons: string[
   return {
     concept,
     icons: [...final, `(full set: ${ICONS.join(", ")})`],
-    // The player scope registers lucide-react as the `Lucide`
-    // namespace only — named imports throw "<name> is not available"
-    // at mount. Inline SVGs are always safe.
-    snippet: `import * as Lucide from "lucide-react"; // <Lucide.${final[0]} size={48} color="#D7FF3F" strokeWidth={2.2} /> — or an inline <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">`,
+    // No icon package in the sandbox — inline SVGs (Lucide path data,
+    // 24×24, stroke=currentColor) are the only safe icon. Never an <img>
+    // to an icon CDN (CORS breaks export snapshots).
+    snippet: `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#D7FF3F" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><!-- ${final[0]} paths here --></svg>`,
   }
 }
 
@@ -160,13 +160,13 @@ export function backgroundGenerate(
   const [a, b] = [colors[0] ?? "#0a0a0f", colors[1] ?? "#1a1a2e"]
   const s = style.toLowerCase()
   const snippet = /noise|grain|texture/i.test(s)
-    ? `import { Noise } from "@remotion/noise";\n<AbsoluteFill style={{ background: "linear-gradient(135deg, ${a}, ${b})" }} />\n<Noise opacity={0.12} /> // seeded — deterministic across renders`
+    ? `<div class="bg"></div>\n.bg{background:linear-gradient(135deg, ${a}, ${b})}\n.bg::after{content:"";position:absolute;inset:0;opacity:.12;background-image:url("data:image/svg+xml,...fractalNoise...");} /* seeded SVG turbulence — deterministic across scrubs */`
     : /grid|lines/i.test(s)
-      ? `<AbsoluteFill style={{ background: "repeating-linear-gradient(0deg, ${a} 0 2px, ${b} 2px 120px)" }} />`
-      : `<AbsoluteFill style={{ background: "radial-gradient(ellipse at 30% 20%, ${b}, ${a} 70%)" }} /> // animated: interpolate frame → backgroundPosition`
+      ? `<div class="bg"></div>\n.bg{background:repeating-linear-gradient(0deg, ${a} 0 2px, ${b} 2px 120px)}`
+      : `<div class="bg"></div>\n.bg{background:radial-gradient(ellipse at 30% 20%, ${b}, ${a} 70%)} /* animated: interpolate t → background-position in render() */`
   return {
     style,
     snippet,
-    note: `Procedural ${s || "gradient"} background in ${a}→${b}. Animated gradients interpolate the gradient stops/position by frame — never CSS transitions (they do not render).`,
+    note: `Procedural ${s || "gradient"} background in ${a}→${b} as plain CSS in the css part. Animate stops/position from t in render() — never wall-clock CSS transitions (scrub/export drift).`,
   }
 }

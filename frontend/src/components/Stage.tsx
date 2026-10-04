@@ -1,84 +1,16 @@
-import { useEffect, useMemo, useRef, useState, lazy, Suspense } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Maximize, Minimize, Pause, Play, Repeat, RotateCcw } from "lucide-react"
-import type { PlayerRef } from "@remotion/player"
-import type { CompileError } from "~/remotion-code/compile"
 import { agentUrl, CANVAS, type MotionPlan } from "~/lib/composition"
-import { measureStage } from "~/lib/layout-audit"
-import { FONTS } from "~/remotion-code/fonts"
+import { buildSrcdoc, helloFamilies } from "~/web/runtime"
+import { bundleFrames, parseBundle, type WebBundle } from "~/web/types"
 
 const { width, height, fps } = CANVAS
-
-/**
- * The Player and the whole compile pipeline are ~800kB together and are needed
- * only once there is a cut on the stage. Loading them on demand keeps the first
- * paint — the chat, which is what the user is waiting on — small.
- */
-const Player = lazy(() => import("@remotion/player").then((m) => ({ default: m.Player })))
-const compile = (source: string) => import("~/remotion-code/compile").then((m) => m.compile(source))
-
-/**
- * A stale tab (open across a deploy) references hashed chunks the current
- * deployment no longer serves — Pages answers those with the SPA fallback
- * HTML, so the dynamic import rejects with one of these messages. That is an
- * app-version problem, never a composition problem, and the fix is a reload
- * (which fetches a fresh index.html pointing at live chunks).
- */
-export function isChunkLoadError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err)
-  return (
-    msg.includes("Failed to fetch dynamically imported module") ||
-    msg.includes("error loading dynamically imported module") ||
-    msg.includes("Importing a module script failed")
-  )
-}
-
-/** Prefetch the compile chunk so a stale tab fails fast with a reload prompt. */
-export function warmCompileChunk(onStale: () => void): void {
-  import("~/remotion-code/compile").then(
-    () => undefined,
-    (err: unknown) => {
-      if (isChunkLoadError(err)) onStale()
-    },
-  )
-}
-
-/**
- * Font load truth for the cited families: loaded vs silent fallback.
- * Family names come from the same FONTS registry the loader populates —
- * no guessing — and document.fonts.check is the verdict. Reported on the
- * layout audit so the agent stops claiming a font change worked from an
- * edit alone.
- */
-function fontStatuses(code: string): Array<{ family: string; ok: boolean }> {
-  try {
-    const keys = new Set<string>()
-    for (const m of code.matchAll(/Fonts\.(\w+)\.family/g)) keys.add(m[1]!)
-    if (keys.size === 0) return []
-    const doc = document as Document & { fonts?: FontFaceSet }
-    const api = doc.fonts
-    if (!api || typeof api.check !== "function") return []
-    const out: Array<{ family: string; ok: boolean }> = []
-    for (const key of [...keys].slice(0, 8)) {
-      const family = FONTS[key]?.family ?? key
-      let ok = false
-      try {
-        ok = api.check(`700 32px "${family}"`) || api.check(`400 32px "${family}"`)
-      } catch {
-        ok = false
-      }
-      out.push({ family, ok })
-    }
-    return out
-  } catch {
-    return []
-  }
-}
 
 interface Props {
   code: string
   plan: MotionPlan | null
   version: number
-  /** Bumped by the caller whenever new code lands, to force a recompile. */
+  /** Bumped by the caller whenever new code lands, to force a remount. */
   reloadKey: string
   /** DO session for advisory compile-timing events. */
   sessionId: string
@@ -86,17 +18,13 @@ interface Props {
 
 type State =
   | { kind: "empty" }
-  | { kind: "compiling" }
-  | { kind: "ready"; Component: React.ComponentType<Record<string, unknown>> }
-  | { kind: "error"; message: string; line?: number }
-  | { kind: "stale" }
+  | { kind: "legacy" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; bundle: WebBundle; srcdoc: string }
 
 /**
  * Fixed-ratio preview box: measures the black stage area and returns the
- * largest pixel box with the canvas aspect ratio that fits inside it. The
- * Player fills that box exactly, so a 16:9 cut letterboxes in a tall area
- * and a 9:16 cut pillars in a wide one — the frame on screen always has the
- * cut's own ratio instead of stretching to whatever the panel happens to be.
+ * largest pixel box with the canvas aspect ratio that fits inside it.
  */
 function useFitSize(ratio: number) {
   const ref = useRef<HTMLDivElement>(null)
@@ -120,26 +48,172 @@ function useFitSize(ratio: number) {
   return { ref, size }
 }
 
+interface IframeMsg {
+  ns?: string
+  ev?: string
+  phase?: "compile" | "mount" | "layout" | "runtime"
+  ok?: boolean
+  message?: string
+  frame?: number
+  findings?: string[]
+  fonts?: Array<{ family: string; ok: boolean }>
+  t?: number
+}
+
 /**
  * The stage.
  *
- * The composition is compiled in the browser and mounted in Remotion's own
- * Player, so what is on screen is the real render path — the same
- * useCurrentFrame/interpolate code that will export, not an approximation.
+ * The bundle is built into a srcdoc document and mounted in a sandboxed
+ * iframe (allow-scripts, opaque origin), so AI-written JS cannot touch the
+ * parent, cookies, or storage. What is on screen is the real render path —
+ * the same render(t, ctx) code that exports, not an approximation.
  */
 export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
-  const [state, setState] = useState<State>({ kind: "empty" })
-  // A callback ref rather than useRef: the Player is lazily loaded, so the
-  // instance does not exist on first render. A callback ref hands it over the
-  // moment it mounts, which is what lets the timecode subscribe.
-  const [player, setPlayer] = useState<PlayerRef | null>(null)
   const [frame, setFrame] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [loop, setLoop] = useState(false)
   const [speed, setSpeed] = useState<number>(1)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const sectionRef = useRef<HTMLElement>(null)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
   const { ref: fitRef, size: fitSize } = useFitSize(width / height)
+
+  const state: State = useMemo(() => {
+    if (!code.trim()) return { kind: "empty" }
+    const parsed = parseBundle(code)
+    if (parsed.legacy) return { kind: "legacy" }
+    if (!parsed.ok || !parsed.bundle) {
+      return { kind: "error", message: "This cut is not a valid web bundle — ask the director to regenerate it." }
+    }
+    try {
+      return { kind: "ready", bundle: parsed.bundle, srcdoc: buildSrcdoc(parsed.bundle) }
+    } catch (err) {
+      return { kind: "error", message: err instanceof Error ? err.message : String(err) }
+    }
+  }, [code])
+
+  const bundle = state.kind === "ready" ? state.bundle : null
+
+  // The plan's last beat is the honest duration; without a plan, the
+  // bundle's own duration drives the transport.
+  const duration = useMemo(() => {
+    const last = plan?.beats?.at(-1)
+    const fromPlan = last ? Math.max(30, Math.ceil(last.to)) : 0
+    if (fromPlan) return fromPlan
+    return bundle ? bundleFrames(bundle) : 150
+  }, [plan, bundle])
+
+  const post = (payload: Record<string, unknown>) => {
+    fetch(agentUrl(sessionId, "audit"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(() => undefined)
+  }
+
+  // Render reports already posted this session (version + kind). The
+  // agent's read_render_report is the only render claim it may make, so
+  // every terminal state reports exactly once.
+  const reported = useRef<Set<string>>(new Set())
+  const postOnce = (key: string, payload: Record<string, unknown>) => {
+    if (reported.current.has(key)) return
+    reported.current.add(key)
+    post(payload)
+  }
+
+  const send = (msg: Record<string, unknown>) => {
+    try {
+      iframeRef.current?.contentWindow?.postMessage({ ns: "wm", ...msg }, "*")
+    } catch { /* iframe not ready yet */ }
+  }
+
+  // Fresh source: reset transport, clear per-version report keys.
+  useEffect(() => {
+    reported.current.clear()
+    setFrame(0)
+    setPlaying(false)
+    setRuntimeError(null)
+  }, [reloadKey, version])
+
+  // Loop/speed follow the iframe.
+  useEffect(() => {
+    send({ cmd: "loop", loop })
+  }, [loop])
+  useEffect(() => {
+    send({ cmd: "speed", speed })
+  }, [speed])
+
+  // Iframe → parent: ticks drive the playhead, reports feed the agent.
+  useEffect(() => {
+    if (state.kind !== "ready") return undefined
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== iframeRef.current?.contentWindow) return
+      const m = (e.data ?? {}) as IframeMsg
+      if (m.ns !== "wm") return
+      if (m.ev === "tick" && typeof m.frame === "number") {
+        setFrame(m.frame)
+        if (m.frame === 0) return
+        postOnce(`mount:${version}`, {
+          version,
+          ok: true,
+          phase: "mount",
+          frame: m.frame,
+          message: `mounted in the sandbox and rendering — ${width}x${height}@${fps}`,
+        })
+        return
+      }
+      if (m.ev === "hello-ack") {
+        postOnce(`ok:${version}`, {
+          version,
+          ok: true,
+          phase: "compile",
+          message: "bundle evaluated, render(t, ctx) bound, waiting to mount",
+        })
+        return
+      }
+      if (m.ev === "report") {
+        if (m.phase === "compile" && m.ok === false) {
+          postOnce(`fail:${version}:${String(m.message ?? "").slice(0, 120)}`, {
+            version,
+            ok: false,
+            phase: "compile",
+            message: m.message ?? "bundle failed to evaluate",
+          })
+          setRuntimeError(m.message ?? "bundle failed to evaluate")
+        } else if (m.phase === "mount" && m.ok) {
+          postOnce(`mount:${version}`, {
+            version,
+            ok: true,
+            phase: "mount",
+            frame: m.frame ?? 0,
+            message: m.message ?? `mounted and rendering — ${width}x${height}@${fps}`,
+          })
+        } else if (m.phase === "layout" && m.ok) {
+          postOnce(`layout:${version}`, {
+            version,
+            ok: true,
+            phase: "layout",
+            frame: m.frame ?? 0,
+            findings: m.findings ?? [],
+            fonts: m.fonts ?? [],
+            message: m.message ?? `rendered v${version}`,
+          })
+        } else if (m.phase === "runtime" && m.ok === false) {
+          const msg = m.message ?? "runtime error"
+          postOnce(`runtime:${version}:${msg.slice(0, 120)}`, {
+            version,
+            ok: false,
+            phase: "runtime",
+            message: msg,
+          })
+          setRuntimeError(msg)
+        }
+      }
+    }
+    window.addEventListener("message", onMsg)
+    return () => window.removeEventListener("message", onMsg)
+  }, [state.kind, version])
 
   useEffect(() => {
     const onFs = () => setIsFullscreen(document.fullscreenElement != null)
@@ -161,151 +235,30 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
       return SPEEDS[(i + 1) % SPEEDS.length]!
     })
   }
-  // Render reports already posted this session (version + kind). The agent's
-  // read_render_report is the only render claim it may make, so every
-  // terminal state reports exactly once — success, compile failure, and
-  // player runtime failure alike.
-  const reported = useRef<Set<string>>(new Set())
 
-  const postOnce = (key: string, payload: Record<string, unknown>) => {
-    if (reported.current.has(key)) return
-    reported.current.add(key)
-    fetch(agentUrl(sessionId, "audit"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }).catch(() => undefined)
+  const togglePlay = () => {
+    if (state.kind !== "ready") return
+    if (playing) {
+      send({ cmd: "pause" })
+      setPlaying(false)
+    } else {
+      if (frame >= duration - 1) {
+        send({ cmd: "seek", t: 0 })
+        setFrame(0)
+      }
+      send({ cmd: "play" })
+      setPlaying(true)
+    }
   }
 
-  // The plan's last beat is the honest duration; without a plan, Remotion's
-  // default of 150 frames matches the 5s house default the agent is told to use.
-  const duration = useMemo(() => {
-    const last = plan?.beats?.at(-1)
-    const fromPlan = last ? Math.max(30, Math.ceil(last.to)) : 0
-    return fromPlan || 150
-  }, [plan])
-
-  useEffect(() => {
-    let cancelled = false
-    if (!code.trim()) {
-      setState({ kind: "empty" })
-      return
-    }
-    setState({ kind: "compiling" })
-    // Phase 5 perf signal: compile ms per version, advisory only.
-    const started = performance.now()
-    compile(code)
-      .then((r) => {
-        if (cancelled) return
-        setState({ kind: "ready", Component: r.component })
-        const ms = Math.round(performance.now() - started)
-        // Compile-only: the agent's read_render_report treats this as
-        // "not yet rendered" and keeps waiting for the mount report.
-        // Posting ok:true here used to verify cuts that then threw at
-        // mount — the exact false-verified bug.
-        postOnce(`ok:${version}`, {
-          version,
-          ok: true,
-          phase: "compile",
-          message: `compiled in ${ms}ms, waiting to mount`,
-        })
-        fetch(agentUrl(sessionId, "event"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: "compile", detail: `${ms}ms v${version} ${code.length}b` }),
-        }).catch(() => undefined)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        if (isChunkLoadError(err)) {
-          setState({ kind: "stale" })
-          return
-        }
-        const ce = err as CompileError
-        const message = ce?.message ?? String(err)
-        postOnce(`fail:${version}:${message.slice(0, 120)}`, {
-          version,
-          ok: false,
-          phase: "compile",
-          message,
-          ...(ce?.line !== undefined ? { line: ce.line } : {}),
-        })
-        setState({ kind: "error", message, line: ce?.line })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [code, reloadKey])
-
-  // A new version should start from the top, not from wherever the last one
-  // was left scrubbing.
-  useEffect(() => {
-    player?.seekTo(0)
-    setFrame(0)
-  }, [player, version, reloadKey])
-
-  // Layout truth from the real pixels: once the frame settles (scrub or
-  // pause), measure what is actually on screen and report findings. Measuring
-  // never disturbs playback — it only reads the mounted DOM. The report
-  // posts even with zero findings: that empty layout report is the
-  // mount-proof the agent's read_render_report waits for. Font truth rides
-  // along: every Fonts.* family the code cited is checked against
-  // document.fonts, so a silently-fallen-back face shows up as ok:false
-  // instead of the agent claiming a font change worked from an edit alone.
-  useEffect(() => {
-    if (state.kind !== "ready") return undefined
-    const t = setTimeout(() => {
-      try {
-        const report = measureStage(frame)
-        postOnce(`layout:${version}`, {
-          version,
-          ok: true,
-          phase: "layout",
-          frame,
-          findings: report?.findings ?? [],
-          fonts: fontStatuses(code),
-          message: `rendered ${version === 0 ? "" : `v${version} `}at frame ${frame} — ${width}x${height}@${fps}`,
-        })
-      } catch {
-        // Measuring must never break playback.
-      }
-    }, 2000)
-    return () => clearTimeout(t)
-    // postOnce is ref-stable by construction (reported ref + sessionId prop).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frame, state.kind, version])
-
-  // The Player is an event emitter rather than a props-driven component, so the
-  // timecode and playhead are wired to its events. The first frameupdate is
-  // also the mount-proof the agent waits for: it only fires when a frame
-  // actually rendered, so a cut that throws inside its component never
-  // posts it (the errorFallback posts the failure instead).
-  useEffect(() => {
-    if (!player) return
-
-    const onFrame = (e: { detail: { frame: number } }) => {
-      const f = e.detail.frame
-      setFrame(f)
-      postOnce(`mount:${version}`, {
-        version,
-        ok: true,
-        phase: "mount",
-        frame: f,
-        message: `mounted in the player and rendering — ${width}x${height}@${fps}`,
-      })
-    }
-    const onPlay = () => setPlaying(true)
-    const onPause = () => setPlaying(false)
-
-    player.addEventListener("frameupdate", onFrame)
-    player.addEventListener("play", onPlay)
-    player.addEventListener("pause", onPause)
-    return () => {
-      player.removeEventListener("frameupdate", onFrame)
-      player.removeEventListener("play", onPlay)
-      player.removeEventListener("pause", onPause)
-    }
-  }, [player, version])
+  const seekTo = (f: number) => {
+    send({ cmd: "seek", t: Math.min(duration, Math.max(0, f)) / fps })
+    setFrame(f)
+    setPlaying(false)
+  }
+  // The iframe onLoad closure needs the latest seekTo.
+  const seekToRef = useRef(seekTo)
+  seekToRef.current = seekTo
 
   return (
     <section ref={sectionRef} className="flex min-h-0 flex-1 flex-col gap-2" aria-label="Stage">
@@ -313,39 +266,22 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
         ref={fitRef}
         className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black"
       >
-        {state.kind === "empty" && (
-          <EmptyStage />
-        )}
+        {state.kind === "empty" && <EmptyStage />}
 
-        {state.kind === "compiling" && (
-          <p className="eyebrow">compiling…</p>
+        {state.kind === "legacy" && (
+          <div className="max-w-md px-6 text-center">
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-tungsten-bright">legacy cut</p>
+            <p className="text-sm leading-relaxed text-[#c9c2b4]">
+              This cut was built on the old Remotion engine. Ask the director
+              to rebuild it — it will render here as a web bundle.
+            </p>
+          </div>
         )}
 
         {state.kind === "error" && (
           <div className="max-w-md px-6 text-center">
             <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-bad">will not render</p>
             <p className="font-mono text-xs leading-relaxed text-[#c9c2b4]">{state.message}</p>
-            {state.line !== undefined && (
-              <p className="mt-2 font-mono text-[10px] text-[#8a8474]">line {state.line}</p>
-            )}
-          </div>
-        )}
-
-        {state.kind === "stale" && (
-          <div className="max-w-md px-6 text-center">
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-tungsten-bright">app updated</p>
-            <p className="text-sm leading-relaxed text-[#c9c2b4]">
-              This tab is running an older version of the studio whose preview
-              files are gone. Reload to pick up the latest version — your chat
-              and cut are saved.
-            </p>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="mt-4 rounded-lg bg-tungsten px-4 py-2 text-sm font-bold text-white hover:brightness-110"
-            >
-              Reload Studio
-            </button>
           </div>
         )}
 
@@ -358,42 +294,35 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
                 : { width: "100%", aspectRatio: `${width} / ${height}` }
             }
           >
-          <Suspense fallback={<p className="eyebrow">loading player…</p>}>
-          <Player
-            ref={setPlayer}
-            component={state.Component}
-            durationInFrames={duration}
-            fps={fps}
-            compositionWidth={width}
-            compositionHeight={height}
-            loop={loop}
-            playbackRate={speed}
-            style={{ width: "100%", height: "100%" }}
-            controls={false}
-            acknowledgeRemotionLicense
-            errorFallback={({ error }) => {
-              const message = String((error as { message?: string })?.message ?? error)
-              postOnce(`runtime:${version}:${message.slice(0, 120)}`, {
-                version,
-                ok: false,
-                phase: "runtime",
-                message: `runtime: ${message}`,
-              })
-              return (
-                <div className="max-w-md px-6 text-center">
-                  <p className="eyebrow mb-2 text-bad">runtime error</p>
-                  <p className="font-mono text-xs leading-relaxed text-muted">{message}</p>
-                </div>
-              )
-            }}
-          />
-          </Suspense>
+            <iframe
+              key={`${version}:${reloadKey}`}
+              ref={iframeRef}
+              title="Motion preview"
+              sandbox="allow-scripts"
+              srcDoc={state.srcdoc}
+              onLoad={() => {
+                // Handshake: font truth list, then start from the top.
+                try {
+                  iframeRef.current?.contentWindow?.postMessage(
+                    { ns: "wm", cmd: "hello", families: helloFamilies(state.bundle) },
+                    "*",
+                  )
+                } catch { /* will retry on tick */ }
+                seekToRef.current?.(0)
+              }}
+              style={{ width: "100%", height: "100%", border: 0, background: "#000" }}
+            />
+          </div>
+        )}
+
+        {runtimeError && state.kind === "ready" && (
+          <div className="absolute bottom-2 left-1/2 max-w-md -translate-x-1/2 rounded-xl border border-bad/40 bg-black/85 px-4 py-2 text-center">
+            <p className="font-mono text-[11px] leading-relaxed text-bad">{runtimeError.slice(0, 220)}</p>
           </div>
         )}
       </div>
 
       <Transport
-        player={player}
         frame={frame}
         duration={duration}
         playing={playing}
@@ -404,6 +333,9 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
         onCycleSpeed={cycleSpeed}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
+        onTogglePlay={togglePlay}
+        onSeek={seekTo}
+        disabled={state.kind !== "ready"}
       />
     </section>
   )
@@ -479,7 +411,6 @@ function IconBtn({
 }
 
 function Transport({
-  player,
   frame,
   duration,
   playing,
@@ -490,8 +421,10 @@ function Transport({
   onCycleSpeed,
   isFullscreen,
   onToggleFullscreen,
+  onTogglePlay,
+  onSeek,
+  disabled,
 }: {
-  player: PlayerRef | null
   frame: number
   duration: number
   playing: boolean
@@ -502,6 +435,9 @@ function Transport({
   onCycleSpeed: () => void
   isFullscreen: boolean
   onToggleFullscreen: () => void
+  onTogglePlay: () => void
+  onSeek: (f: number) => void
+  disabled: boolean
 }) {
   const pct = duration > 0 ? (frame / Math.max(1, duration - 1)) * 100 : 0
 
@@ -539,8 +475,9 @@ function Transport({
           min={0}
           max={Math.max(1, duration - 1)}
           value={frame}
-          onChange={(e) => player?.seekTo(Number(e.target.value))}
+          onChange={(e) => onSeek(Number(e.target.value))}
           aria-label="Seek"
+          disabled={disabled}
           className="absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0"
         />
       </div>
@@ -549,9 +486,10 @@ function Transport({
       <div className="mt-0.5 flex h-9 items-center gap-1">
         <button
           type="button"
-          onClick={() => (playing ? player?.pause() : player?.play())}
+          onClick={onTogglePlay}
           aria-label={playing ? "Pause" : "Play"}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-all hover:scale-105 hover:bg-tungsten hover:text-white"
+          disabled={disabled}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-all hover:scale-105 hover:bg-tungsten hover:text-white disabled:opacity-40"
         >
         {playing ? (
           <Pause size={14} fill="currentColor" aria-hidden />
@@ -560,7 +498,7 @@ function Transport({
         )}
         </button>
 
-      <IconBtn label="Restart" onClick={() => player?.seekTo(0)}>
+      <IconBtn label="Restart" onClick={() => onSeek(0)}>
         <RotateCcw size={14} aria-hidden />
       </IconBtn>
 

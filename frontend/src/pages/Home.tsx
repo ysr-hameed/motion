@@ -220,7 +220,7 @@ export default function Home() {
                     A 15s launch video. Bold, loud, ends on the logo.
                   </p>
                   <div className="w-fit max-w-[90%] rounded-2xl rounded-bl-md border border-line bg-ink px-4 py-3 text-xs">
-                    {["intent → product launch · 15s", "beats → 5 scenes planned", "spring() easing · beat-aligned", "v1 published to player ✓"].map((t) => (
+                    {["intent → product launch · 15s", "beats → 5 scenes planned", "spring easing · beat-aligned", "v1 published to player ✓"].map((t) => (
                       <p key={t} className="flex items-center gap-2 py-0.5 font-medium text-muted">
                         <span className="h-1 w-1 rounded-full bg-ok" /> {t}
                       </p>
@@ -228,7 +228,7 @@ export default function Home() {
                   </div>
                 </div>
                 <p className="mt-4 text-sm leading-relaxed text-muted">
-                  The agent plans beats, writes Remotion code, validates it — and your
+                  The agent plans beats, writes a web motion bundle, validates it — and your
                   brand kit rides along on every cut.
                 </p>
               </Spotlight>
@@ -364,7 +364,7 @@ export default function Home() {
             <div className="mt-8 flex flex-wrap items-center justify-center gap-2">
               <Badge tone="gold" icon={Sparkles}>60s turnaround</Badge>
               <Badge tone="green" icon={BadgeCheck}>No credit card</Badge>
-              <Badge tone="blue" icon={Clapperboard}>Real Remotion code</Badge>
+              <Badge tone="blue" icon={Clapperboard}>Real web motion code</Badge>
             </div>
           </Reveal>
         </div>

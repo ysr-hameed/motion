@@ -42,29 +42,31 @@ export interface FontNote {
 
 /**
  * Font faces that read as a deliberate choice, so the model does not default to
- * `system-ui`. Kept short on purpose: this list goes inline in the prompt, and
- * the full catalogue is one load_skill away.
+ * `system-ui`. CSS family names, cited verbatim in bundle stylesheets — the
+ * sandbox runtime auto-loads every cited family from Google Fonts. Kept short
+ * on purpose: this list goes inline in the prompt, and the full catalogue is
+ * one load_skill away.
  */
 export const DISPLAY_FACES = [
-  "anton",
-  "bebasNeue",
-  "archivoBlack",
-  "syne",
-  "unbounded",
-  "bricolage",
-  "fraunces",
-  "instrumentSerif",
-  "bodoni",
-  "dancingScript",
-  "caveat",
-  "pacifico",
-  "greatVibes",
-  "satisfy",
-  "shadowsIntoLight",
+  "Anton",
+  "Bebas Neue",
+  "Archivo Black",
+  "Syne",
+  "Unbounded",
+  "Bricolage Grotesque",
+  "Fraunces",
+  "Instrument Serif",
+  "Bodoni Moda",
+  "Dancing Script",
+  "Caveat",
+  "Pacifico",
+  "Great Vibes",
+  "Satisfy",
+  "Shadows Into Light",
 ] as const
 
 /** Neutral and mono faces, for UI-ish overlays and data. */
-export const TEXT_FACES = ["karla", "archivo", "manrope", "outfit", "spaceGrotesk", "spaceMono", "chivo"] as const
+export const TEXT_FACES = ["Karla", "Archivo", "Manrope", "Outfit", "Space Grotesk", "Space Mono", "Chivo"] as const
 
 /**
  * AGENT_UPGRADE_PLAN Phase 2: typography presets.

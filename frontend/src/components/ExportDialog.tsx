@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Download, FileVideo, X } from "lucide-react"
 import { EXPORT_EVENT } from "~/lib/exportPresets"
-import { suggest } from "~/components/Timeline"
 import { agentUrl } from "~/lib/composition"
+import { downloadBlob, exportBundleToVideo, type ExportProgress } from "~/web/export"
+import { parseBundle } from "~/web/types"
 
 const FORMATS = [
   { id: "MP4", blurb: "Universal — plays everywhere", recommended: true },
@@ -16,36 +17,90 @@ const FPS = [
 ] as const
 
 /**
- * Export is two questions: which format, which frame rate. The agent owns
- * all render math — the dialog only collects the choice and asks the
- * director to render. The finished file lands in Downloads.
+ * Export is two questions plus a render: which format, which frame rate,
+ * then a real client-side render. The bundle steps deterministically through
+ * every frame in a hidden iframe; snapshots play back onto a canvas while a
+ * MediaRecorder captures the stream. The finished file lands in Downloads —
+ * no server render, no queue.
  */
-export function ExportDialog({ totalFrames, sessionId }: { totalFrames: number; sessionId: string }) {
+export function ExportDialog({
+  totalFrames,
+  sessionId,
+  getCode,
+}: {
+  totalFrames: number
+  sessionId: string
+  /** Current bundle source — read lazily so the dialog never goes stale. */
+  getCode: () => string
+}) {
   const [open, setOpen] = useState(false)
   const [format, setFormat] = useState<(typeof FORMATS)[number]["id"]>("MP4")
   const [fps, setFps] = useState<number>(30)
+  const [progress, setProgress] = useState<ExportProgress | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const abort = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    const onOpen = () => setOpen(true)
+    const onOpen = () => {
+      setError(null)
+      setProgress(null)
+      setOpen(true)
+    }
     window.addEventListener(EXPORT_EVENT, onOpen)
     return () => window.removeEventListener(EXPORT_EVENT, onOpen)
   }, [])
 
+  useEffect(() => {
+    if (!open) {
+      abort.current?.abort()
+      abort.current = null
+      setProgress(null)
+    }
+  }, [open ])
+
   if (!open) return null
 
   const seconds = Math.round((totalFrames / 30) * 10) / 10
+  const busy = progress !== null
 
-  function render() {
-    fetch(agentUrl(sessionId, "event"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "export-pick", detail: `${format.toLowerCase()}-${fps}` }),
-    }).catch(() => undefined)
-    suggest(
-      `Render this cut now as ${format} at ${fps}fps, native 1920×1080 canvas. Publish the file and reply with the download link.`
-    )
-    setOpen(false)
+  async function render() {
+    setError(null)
+    const parsed = parseBundle(getCode())
+    if (!parsed.ok || !parsed.bundle) {
+      setError("No web bundle on stage — ask the director to build the cut first.")
+      return
+    }
+    const ac = new AbortController()
+    abort.current = ac
+    setProgress({ p: 0, phase: "render" })
+    try {
+      const out = await exportBundleToVideo(parsed.bundle, {
+        fps,
+        format: format.toLowerCase() as "webm" | "mp4",
+        signal: ac.signal,
+        onProgress: (p) => setProgress(p),
+      })
+      const stamp = new Date().toISOString().slice(0, 10)
+      downloadBlob(out.blob, `cut-${stamp}.${out.ext}`)
+      fetch(agentUrl(sessionId, "event"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "export", detail: `${out.ext}-${out.fps}fps-${out.frames}f` }),
+      }).catch(() => undefined)
+      setOpen(false)
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") {
+        setProgress(null)
+        return
+      }
+      setError(err instanceof Error ? err.message : String(err))
+      setProgress(null)
+    } finally {
+      abort.current = null
+    }
   }
+
+  const pct = progress ? Math.round(progress.p * 100) : 0
 
   return (
     <div
@@ -53,7 +108,7 @@ export function ExportDialog({ totalFrames, sessionId }: { totalFrames: number; 
       role="dialog"
       aria-modal="true"
       aria-label="Export video"
-      onClick={() => setOpen(false)}
+      onClick={() => (busy ? undefined : setOpen(false))}
     >
       <div
         className="panel-lift w-full max-w-md p-6"
@@ -63,8 +118,8 @@ export function ExportDialog({ totalFrames, sessionId }: { totalFrames: number; 
           <p className="text-lg font-extrabold tracking-tight text-paper">Export this cut</p>
           <button
             type="button"
-            onClick={() => setOpen(false)}
-            aria-label="Close export dialog"
+            onClick={() => (busy ? abort.current?.abort() : setOpen(false))}
+            aria-label={busy ? "Cancel export" : "Close export dialog"}
             className="ml-auto rounded-full p-1.5 text-dim transition-colors hover:bg-panel-2 hover:text-paper"
           >
             <X size={16} aria-hidden />
@@ -78,8 +133,9 @@ export function ExportDialog({ totalFrames, sessionId }: { totalFrames: number; 
             <button
               key={f.id}
               type="button"
-              onClick={() => setFormat(f.id)}
+              onClick={() => !busy && setFormat(f.id)}
               aria-pressed={format === f.id}
+              disabled={busy}
               className={`rounded-2xl border-[1.5px] p-3.5 text-left transition-all ${
                 format === f.id
                   ? "border-paper bg-paper text-ink shadow-[3px_3px_0_rgb(217_72_0)]"
@@ -108,8 +164,9 @@ export function ExportDialog({ totalFrames, sessionId }: { totalFrames: number; 
             <button
               key={o.value}
               type="button"
-              onClick={() => setFps(o.value)}
+              onClick={() => !busy && setFps(o.value)}
               aria-pressed={fps === o.value}
+              disabled={busy}
               className={`rounded-2xl border-[1.5px] px-3 py-2.5 text-center transition-all ${
                 fps === o.value
                   ? "border-paper bg-paper text-ink shadow-[3px_3px_0_rgb(217_72_0)]"
@@ -122,17 +179,39 @@ export function ExportDialog({ totalFrames, sessionId }: { totalFrames: number; 
           ))}
         </div>
 
-        <button
-          type="button"
-          onClick={render}
-          className="mt-6 inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-paper text-[15px] font-extrabold text-ink shadow-[4px_4px_0_rgb(217_72_0)] transition-all hover:translate-x-[2px] hover:translate-y-[2px] hover:bg-tungsten hover:text-white hover:shadow-none"
-        >
-          <Download size={17} aria-hidden />
-          Render video
-        </button>
-        <p className="mt-3 text-center text-xs font-medium text-dim">
-          The file lands in <span className="font-extrabold text-paper">Downloads</span> when it's ready.
-        </p>
+        {busy ? (
+          <div className="mt-6">
+            <div className="h-2 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-tungsten transition-all" style={{ width: `${pct}%` }} />
+            </div>
+            <p className="mt-2 text-center text-xs font-semibold text-muted">
+              {progress.phase === "render" ? `Rendering frames… ${pct}%` : `Encoding ${format}… ${pct}%`}
+            </p>
+            <button
+              type="button"
+              onClick={() => abort.current?.abort()}
+              className="mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-line text-sm font-bold text-muted transition-colors hover:border-bad hover:text-bad"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={render}
+            className="mt-6 inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-paper text-[15px] font-extrabold text-ink shadow-[4px_4px_0_rgb(217_72_0)] transition-all hover:translate-x-[2px] hover:translate-y-[2px] hover:bg-tungsten hover:text-white hover:shadow-none"
+          >
+            <Download size={17} aria-hidden />
+            Render video
+          </button>
+        )}
+        {error ? <p className="mt-3 text-center text-xs font-medium text-bad">{error}</p> : null}
+        {!busy && !error ? (
+          <p className="mt-3 text-center text-xs font-medium text-dim">
+            Rendered in <span className="font-extrabold text-paper">this browser</span> — the file lands in{" "}
+            <span className="font-extrabold text-paper">Downloads</span> when it's ready.
+          </p>
+        ) : null}
       </div>
     </div>
   )

@@ -12,7 +12,7 @@ const VALUES = [
 
 const TIMELINE: Array<[string, string, string]> = [
   ["2025", "The wait", "Every motion tool needed an expert or produced slop. Briefs died in queues."],
-  ["Early 2026", "The insight", "Remotion made video a React component. Agents made code writable. Nobody connected them."],
+  ["Early 2026", "The insight", "The browser is the renderer. Agents write the motion. Nobody connected them."],
   ["Mid 2026", "The cut", "SlyxUp Motion: describe it, watch scenes build live, export anywhere. Sixty seconds."],
   ["Now", "The studio", "7 directing models, 61 tools, versioned cuts, CDN publish. This page is the trailer."],
 ];
@@ -31,7 +31,7 @@ export default function About() {
             </h1>
             <p className="mx-auto mt-5 max-w-xl leading-relaxed text-muted">
               SlyxUp Motion turns a sentence into production-ready motion graphics:
-              real Remotion code, validated before it ever hits the player.
+              real web motion bundles, validated before they ever hit the sandbox player.
             </p>
           </Reveal>
         </div>

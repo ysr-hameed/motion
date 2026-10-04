@@ -131,7 +131,42 @@ function WarnRows({ items }: { items: string[] }) {
   );
 }
 
+function BundleView({ output, title }: { output: AnyRec; title: string }) {
+  const parts = (output.parts ?? {}) as AnyRec;
+  const rows = [
+    { k: "HTML", v: num(parts.htmlLines) },
+    { k: "CSS", v: num(parts.cssLines) },
+    { k: "JS", v: num(parts.jsLines) },
+  ].filter((r) => r.v > 0);
+  const snippet = str(output.snippet);
+  const repaired = arr<string>(output.autoRepaired);
+  const warnings = arr<string>(output.warnings);
+  return (
+    <Card>
+      <Title
+        icon={<Code2 size={11} />}
+        text={title}
+        right={rows.length > 0 ? <span className="font-mono text-dim">{rows.map((r) => `${r.k} ${r.v}L`).join(" · ")}</span> : undefined}
+      />
+      {snippet ? (
+        <div className="mt-1 border-t border-line/60">
+          <CodeBlock code={snippet} lines={10} />
+        </div>
+      ) : null}
+      {repaired.length > 0 ? (
+        <p className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10.5px] text-ok">
+          <Sparkles size={11} className="shrink-0" aria-hidden />
+          <span className="truncate">Auto-repaired: {repaired.join(" · ")}</span>
+        </p>
+      ) : null}
+      <WarnRows items={warnings} />
+    </Card>
+  );
+}
+
 function CodeView({ output, title }: { output: AnyRec; title: string }) {
+  // New bundle outputs carry parts + snippet; legacy outputs carry code.
+  if (output.parts || output.snippet) return <BundleView output={output} title={title} />;
   const code = str(output.code);
   const repaired = arr<string>(output.autoRepaired);
   const warnings = arr<string>(output.warnings);

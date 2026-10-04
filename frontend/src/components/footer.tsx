@@ -95,7 +95,7 @@ export function Footer() {
         <div className="rule-glow mt-10" />
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-dim">
           <p>© {new Date().getFullYear()} SlyxUp Motion. All rights reserved.</p>
-          <p>Built with Remotion · Cloudflare · React</p>
+          <p>Built with web motion · Cloudflare · React</p>
         </div>
       </div>
     </footer>

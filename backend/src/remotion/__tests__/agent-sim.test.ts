@@ -3,8 +3,7 @@
  * scripted turns the way the model would call them, and tracks everything —
  * which tools ran, what each returned, issues caught, warnings, failures, and
  * motion-quality scores. A live-model chat needs a gateway key and budget; this
- * harness covers every deterministic link in the chain (the links where all
- * observed breakage has lived) with zero model calls.
+ * harness covers every deterministic link in the chain with zero model calls.
  *
  * Run: compile with tsc to CommonJS, then `node --test` on the output.
  * The console report is the deliverable — rows per scenario plus a ledger of
@@ -109,55 +108,43 @@ function toolsFor(store: FakeStore, audit: Record<string, unknown> | null) {
   }
 }
 
-const GOOD_CUT = `import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring, Easing } from "remotion"
-import * as Lucide from "lucide-react"
-export default function GoodCut() {
-  const frame = useCurrentFrame()
-  const { fps } = useVideoConfig()
-  const enter = spring({ frame, fps, config: { damping: 18, mass: 0.8, stiffness: 120 } })
-  const items = ["Fast", "Alive", "Clean"]
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#0B0C10", fontFamily: Fonts.unbounded.family, alignItems: "center", justifyContent: "center" }}>
-      <Lucide.Sparkles size={48} color="#FFB340" />
-      <div style={{ display: "flex", gap: 12 }}>
-        {items.map((w, i) => {
-          const d = 20 + i * 4
-          const o = interpolate(frame, [d, d + 20], [0, 1], { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" })
-          const y = interpolate(frame, [d, d + 18], [22, 0], { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" })
-          return <span key={i} style={{ opacity: o, translate: "0 " + y + "px", fontSize: 64, color: "#F2F3F7" }}>{w}</span>
-        })}
-      </div>
-      <div style={{ opacity: enter, fontSize: 32, fontFamily: Fonts.manrope.family, color: "#F2F3F7" }}>Settles with spring</div>
-    </AbsoluteFill>
-  )
+const GOOD_WRITE = {
+  html: `<div class="hero" id="hero"><span>Fast</span><span>Alive</span><span>Clean</span></div><div class="sub" id="sub">Settles with spring</div>`,
+  css: `.hero{position:absolute;left:50%;top:40%;font-family:'Unbounded',sans-serif;font-size:64px;color:#F2F3F7}\n.hero span{display:inline-block;margin-right:12px}\n.sub{position:absolute;left:50%;top:60%;font-family:'Manrope',sans-serif;font-size:32px;color:#F2F3F7}`,
+  js: `function render(t, ctx) {
+  var f = ctx.frame;
+  var enter = ctx.spring(t, { damping: 18, mass: 0.8, stiffness: 120 });
+  var spans = ctx.el("hero").children;
+  for (var i = 0; i < spans.length; i++) {
+    var d = 20 + i * 4;
+    spans[i].style.opacity = ctx.interpolate(f, [d, d + 20], [0, 1], { easing: ctx.Easing.easeOut });
+    spans[i].style.translate = "0 " + ctx.interpolate(f, [d, d + 18], [22, 0], { easing: ctx.Easing.easeOut }) + "px";
+  }
+  ctx.el("sub").style.opacity = Math.max(0, Math.min(1, enter));
+}`,
+  title: "Good cut",
 }
-`
 
-const BAD_CUT = `import { AbsoluteFill, useCurrentFrame, interpolate } from "remotion"
-import { Zap } from "lucide-react"
-export default function BadCut() {
-  const frame = useCurrentFrame()
-  const x = Math.random()
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#000", fontFamily: "Arial" }}>
-      <Zap />
-      <div style={{ opacity: interpolate(frame, [0, 60], [0, 1]) }}>Hello {x}</div>
-    </AbsoluteFill>
-  )
+const BAD_WRITE = {
+  html: `<div id="a">Hello</div>`,
+  css: `#a{font-family: Arial; font-size: 64px}`,
+  js: `function render(t, ctx) {
+  var f = ctx.frame;
+  var x = Math.random();
+  ctx.el("a").style.opacity = ctx.interpolate(f, [0, 60], [0, x]);
+}`,
+  title: "Bad cut",
 }
-`
 
-const CHEAP_FADE = `import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion"
-export default function CheapFade() {
-  const frame = useCurrentFrame()
-  const o = interpolate(frame, [0, 90], [0, 1], { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" })
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#000", fontFamily: Fonts.unbounded.family, alignItems: "center", justifyContent: "center" }}>
-      <div style={{ opacity: o, fontSize: 120, color: "#fff" }}>Hello</div>
-    </AbsoluteFill>
-  )
+const CHEAP_WRITE = {
+  html: `<div id="a">Hello</div>`,
+  css: `#a{font-family:'Unbounded',sans-serif;font-size:120px;color:#fff}`,
+  js: `function render(t, ctx) {
+  var f = ctx.frame;
+  ctx.el("a").style.opacity = ctx.interpolate(f, [0, 90], [0, 1], { easing: ctx.Easing.easeOut });
+}`,
+  title: "Cheap fade",
 }
-`
 
 function printReport() {
   console.log("\n==== AGENT SIMULATION REPORT ====")
@@ -205,35 +192,37 @@ describe("Agent simulation — scripted turns through real tools", () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
     await call("S4", "quick_start", { product: "Acme" })
-    // v1 shipped with a named lucide import: compiles, throws at mount.
-    store.code = `import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion"
-import { Zap } from "lucide-react"
-export default function NamedCut() {
-  const frame = useCurrentFrame()
-  const o = interpolate(frame, [0, 30], [0, 1], { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" })
-  return <AbsoluteFill style={{ backgroundColor: "#000" }}><Zap size={40} color="#fff" /><div style={{ opacity: o, fontSize: 64, color: "#fff" }}>Hi</div></AbsoluteFill>
-}
-`
-    const failed = { version: 1, ok: false, phase: "runtime", message: '"Zap" is not available (line 8)', findings: [], at: Date.now() }
+    // v1 shipped wall-clock randomness: inline repair would normally fix it
+    // at write, so force the broken row the way a pre-validator turn would
+    // have stored it — then prove the gate + auto-fix recovery path.
+    const forced = JSON.stringify({
+      version: 1,
+      html: BAD_WRITE.html,
+      css: BAD_WRITE.css,
+      js: BAD_WRITE.js,
+      meta: { title: "v1", duration: 5, fps: 30, width: 1920, height: 1080 },
+    })
+    store.code = forced
+    const failed = { version: store.current().version, ok: false, phase: "runtime", message: "runtime: x is not defined", findings: [], at: Date.now() }
     const callF = toolsFor(store, failed)
     const v = await callF("S4", "verify_no_errors")
-    assert.equal(v.ok, false, "gate must block on a failed player report")
+    assert.equal(v.ok, false, "gate must block on a failed sandbox report")
     const r = await callF("S4", "read_render_report")
     assert.equal((r as { status: string }).status, "failed")
     assert.ok((r as { fixHint: string }).fixHint, "failed report must carry a fixHint")
     // The exact recovery path: browser message → auto_fix → gate passes on the new version.
-    const f = (await callF("S4", "auto_fix_code", { errors: ['"Zap" is not available (line 8)'] })) as {
+    const f = (await callF("S4", "auto_fix_code", { errors: ["runtime: x is not defined"] })) as {
       ok: boolean
       applied: Array<{ issue: string }>
     }
     assert.equal(f.ok, true, `auto-fix failed: ${JSON.stringify(f)}`)
-    assert.ok(f.applied.some((a) => /lucide|Lucide/i.test(a.issue)), "must convert to the Lucide namespace")
+    assert.ok(f.applied.some((a) => /random|font|easing/i.test(a.issue)), `no mechanical fix applied: ${JSON.stringify(f)}`)
     const v2 = await callF("S4", "verify_no_errors")
     assert.equal(v2.ok, true, `fixed version still blocked: ${JSON.stringify(v2)}`)
     await callF("S4", "preview_composition")
   })
 
-  it("S5 full path: creative_direct → layout → plan → write good code → preview", async () => {
+  it("S5 full path: creative_direct → layout → plan → write good bundle → preview", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
     const cd = await call("S5", "creative_direct", { brief: "Energetic 5s product reveal for Acme with staggered headline words" })
@@ -251,42 +240,41 @@ export default function NamedCut() {
       title: "Acme reveal",
       intent: "Punchy staggered headline with spring settle",
       beats: [
-        { from: 0, to: 12, what: "anticipation compress scale 1→0.94, Easing.bezier(0.4,0,1,1)" },
+        { from: 0, to: 12, what: "anticipation compress scale 1→0.94, easeIn" },
         { from: 12, to: 72, what: "headline cascade per-word spring stagger 4f" },
         { from: 72, to: 150, what: "settle + idle breathing, hold resolve" },
       ],
       ending: "Headline resolved, badge held.",
     })
     assert.equal(pm.ok, true)
-    const w = await call("S5", "write_composition", { code: GOOD_CUT })
-    assert.equal(w.ok, true, `good code rejected: ${JSON.stringify(w)}`)
+    const w = await call("S5", "write_composition", GOOD_WRITE)
+    assert.equal(w.ok, true, `good bundle rejected: ${JSON.stringify(w)}`)
     const v = await call("S5", "verify_no_errors")
-    assert.equal(v.ok, true, `good code blocked: ${JSON.stringify(v)}`)
+    assert.equal(v.ok, true, `good bundle blocked: ${JSON.stringify(v)}`)
     await call("S5", "preview_composition")
   })
 
-  it("S6 bad model code is repaired inline — zero round-trips, zero errors left", async () => {
+  it("S6 bad model bundle is repaired inline — zero round-trips, zero errors left", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    const w = await call("S6", "write_composition", { code: BAD_CUT })
-    // Inline repair fixes lucide + random + easing + font; the write lands.
-    assert.equal(w.ok, true, `bad code should be repaired inline: ${JSON.stringify(w)}`)
+    const w = await call("S6", "write_composition", BAD_WRITE)
+    // Inline repair fixes random + font + easing; the write lands.
+    assert.equal(w.ok, true, `bad bundle should be repaired inline: ${JSON.stringify(w)}`)
     const repaired = (w as { autoRepaired: string[] }).autoRepaired ?? []
-    assert.ok(repaired.length >= 3, `expected 3+ inline repairs, got ${JSON.stringify(repaired)}`)
+    assert.ok(repaired.length >= 2, `expected 2+ inline repairs, got ${JSON.stringify(repaired)}`)
     const v = await call("S6", "verify_no_errors")
-    assert.equal(v.ok, true, `repaired code blocked: ${JSON.stringify(v)}`)
+    assert.equal(v.ok, true, `repaired bundle blocked: ${JSON.stringify(v)}`)
   })
 
   it("S7 edit path: retitle without rewrite, still clean", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    // "Nova" seeds the center-stack golden, which preserves product casing
-    // (the mask variant uppercases by design, so "Acme" would not be found
-    // there — that is a style rule, not an edit-path failure).
-    await call("S7", "quick_start", { product: "Nova" })
-    const e = await call("S7", "edit_file", { ops: [{ find: "Nova", replace: "Acme" }] })
+    await call("S7", "quick_start", { product: "Acme", headline: "Motion that lands" })
+    const e = await call("S7", "edit_file", {
+      ops: [{ part: "js", find: "Motion that lands", replace: "Motion that truly lands" }],
+    })
     assert.equal(e.ok, true, `edit failed: ${JSON.stringify(e)}`)
-    assert.ok(store.current().code.includes("Acme"), "edit did not apply")
+    assert.ok(store.current().code.includes("truly"), "edit did not apply")
     const v = await call("S7", "verify_no_errors")
     assert.equal(v.ok, true)
   })
@@ -296,7 +284,8 @@ export default function NamedCut() {
     const call = toolsFor(store, null)
     await call("S8", "quick_start", { product: "Acme" })
     const gold = (await call("S8", "design_analyze")) as { score: number }
-    store.code = CHEAP_FADE
+    const w = await call("S8", "write_composition", CHEAP_WRITE)
+    assert.equal(w.ok, true, `cheap fade refused: ${JSON.stringify(w)}`)
     const cheap = (await call("S8", "design_analyze")) as { score: number; findings: string[] }
     assert.ok(gold.score - cheap.score >= 15, `gold ${gold.score} vs cheap ${cheap.score}`)
     assert.ok(cheap.findings.join(" ").length > 20, "cheap fade must produce actionable findings")
@@ -314,9 +303,9 @@ export default function NamedCut() {
   it("prints the tracked report", () => {
     printReport()
     const fails = LEDGER.filter((r) => r.ok === false)
-    // S4's blocked gate is the only expected non-ok: it proves the gate works.
+    // S4's blocked gate + refused write are the only expected non-oks.
     assert.ok(
-      fails.every((f) => f.scenario === "S4" && f.tool === "verify_no_errors"),
+      fails.every((f) => f.scenario === "S4" && (f.tool === "verify_no_errors" || f.tool === "write_composition")),
       `unexpected tool failures: ${fails.map((f) => `${f.scenario}/${f.tool}`).join(", ")}`
     )
   })

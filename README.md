@@ -6,7 +6,7 @@ Gateway for the model.
 ```
 backend/    Worker (slyxup-motion-api): the Chat Durable Object + /api/health
 frontend/   Vite + React, deployed to Cloudflare Pages
-skills/     Vendored Remotion reference docs, for the next phase
+skills/     Vendored web-motion reference docs the agent loads on demand
 ```
 
 | Piece | Where |
@@ -83,11 +83,11 @@ Full path and refinement:
 | Tool | Purpose |
 |---|---|
 | `creative_direct` | Art direction in one call: intent + palette + fonts + beat→preset map |
-| `load_skill` | One of 53 vendored skills (Remotion API + 9 working examples + 4 design skills), on demand |
+| `load_skill` | One of 41 vendored skills (web runtime + 9 working examples + 8 design skills), on demand |
 | `plan_motion` | Records the beat sheet; the player draws it as a timeline |
-| `read_file` | Current source, verbatim |
-| `write_composition` | The whole file in one call; auto-repairs inline, refuses invalid source |
-| `edit_file` / `bulk_edit` | Exact-string ops for small / batched changes |
+| `read_file` | Current bundle parts (html/css/js), verbatim |
+| `write_composition` | The whole bundle in one call; auto-repairs inline, refuses invalid source |
+| `edit_file` / `bulk_edit` | Exact-string ops per part (html/css/js) for small / batched changes |
 | `validate_composition` | Errors that stop a render, warnings that mean a blank frame |
 | `verify_no_errors` | Blocking gate before preview (errors + failed player report) |
 | `auto_fix_code` / `auto_enhance_motion` | Mechanical repairs, max 2 rounds |
@@ -95,10 +95,8 @@ Full path and refinement:
 | `list_versions` / `restore_version` | Roll back without losing history |
 
 `validate_composition` catches the failures that are expensive to discover late:
-`useState` in a composition, `Math.random()`, CSS transitions, an
-`interpolate()` with no frame, a transition with no timing config, a bare `all`
-transition without `springTimingConfig`, and imports from packages the browser
-scope does not provide.
+a missing `render(t, ctx)`, `Math.random()`, wall-clock time, event handlers,
+`eval`, insecure http URLs, page-default font stacks, and unreadable type sizes.
 
 `review_motion` is not a linter. It looks for the things that make motion read
 as cheap — all-linear timing, opacity as the only change, nothing that settles,
@@ -107,13 +105,12 @@ returns two or three specific findings rather than a generic list.
 
 ### Skills
 
-52 documents in `skills/remotion-markup/` (38 Remotion API + 9 working
-examples + 4 design skills: `creative-direction`, `kinetic-typography`,
-`cinematic-motion`, `layout-composition`), inlined into the Worker by
-`pnpm run skills:build` (53 entries with the live reference cut). Newest:
-`code-syntax` (Code Hike mechanic, zero dependencies), `shapes-paths`
-(SVG trim reveals + interpolateColors), `noise-grain` (film grain + seeded
-random rules), `captions` (TikTok-pattern subtitles).
+40 documents in `skills/web-motion/` (runtime helpers, timing, springs,
+typography + 9 working examples + 8 design skills: `creative-direction`,
+`kinetic-typography`, `cinematic-motion`, `layout-composition`), inlined into
+the Worker by `pnpm run skills:build` (41 entries with the live reference cut).
+Newest: `web-3d` (pinned Three.js CDN, t-driven camera), `captions`
+(TikTok-pattern subtitles as t-toggled divs).
 The model sees only the ids (~60 tokens) and pulls the one it needs, so a
 `load_skill` costs 1-3k tokens of context regardless of how many exist.
 

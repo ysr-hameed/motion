@@ -3,6 +3,16 @@ import { z } from "zod"
 import { findSkill, SKILL_IDS } from "./skills.generated"
 import type { Chat } from "../chat"
 import type { CompositionStore } from "./store"
+import {
+  combinedSource,
+  defaultMeta,
+  jsSnippet,
+  parseBundle,
+  partSummary,
+  serializeBundle,
+  type BundlePart,
+  type WebBundle,
+} from "./bundle"
 import { basicMotionBlocks, checkComposition, constraintSolve, dependencyResolve, preValidatePlan } from "./validate"
 import { optimizeAsset, resolveFont, suggestAssets, suggestFonts } from "./assets"
 import {
@@ -32,7 +42,6 @@ import { threeCameraPath, threeModelAnimate, threeSceneCreate } from "./motion3d
 import { keyframeSnippet, presetForBeat, presetSnippet, textAnimationSnippet } from "./motion-library"
 import { LayoutEngine, buildCompositionHints } from "./layout-engine"
 import type { ElementType, LayoutStrategy } from "./layout-engine"
-import { DISPLAY_FACES } from "./type"
 
 /**
  * What the browser actually measured on the real render, if it reported since
@@ -47,6 +56,41 @@ export interface Measured {
 
 /** Clips cap at 30s. Composition fps and size are fixed by the canvas. */
 export const CANVAS = { width: 1920, height: 1080, fps: 30, maxFrames: 900 } as const
+
+/**
+ * The stored `code` is a JSON web bundle. Heuristics that scan "the cut"
+ * (review, audits, auto-fix) run on the combined html+css+js source; a
+ * legacy Remotion row falls back to the raw string so the failure reads
+ * as legacy instead of crashing the scan.
+ */
+export function analysisSource(code: string): string {
+  const p = parseBundle(code)
+  if (p.ok && p.bundle) return combinedSource(p.bundle)
+  return code
+}
+
+/** Loads the current bundle or returns the legacy/empty failure payload. */
+function requireBundle(store: CompositionStore):
+  | { ok: true; bundle: WebBundle }
+  | { ok: false; error: string } {
+  const { code } = store.current()
+  if (!code) return { ok: false, error: "No bundle yet — use write_composition with html/css/js parts." }
+  const p = parseBundle(code)
+  if (p.legacy) {
+    return {
+      ok: false,
+      error:
+        "Legacy Remotion TSX is on stage — the player no longer mounts it. " +
+        "Regenerate with quick_start (or write_composition); do not edit the TSX.",
+    }
+  }
+  if (!p.ok || !p.bundle) {
+    return { ok: false, error: `Stored bundle is corrupt (${p.error}). Regenerate with quick_start.` }
+  }
+  return { ok: true, bundle: p.bundle }
+}
+
+const PART = z.enum(["html", "css", "js"])
 
 const FRAME = `frame numbers, 0-indexed, ${CANVAS.fps}fps, canvas ${CANVAS.width}x${CANVAS.height}, max ${CANVAS.maxFrames} frames (30s)`
 
@@ -87,9 +131,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
   return {
     load_skill: tool({
       description:
-        "Load the Remotion documentation for one topic. This is the reference for " +
-        "the exact Remotion version installed here — the API moves, so working from " +
-        "memory produces plausible code that does not render. Load a skill BEFORE " +
+        "Load the web-motion documentation for one topic. This is the reference " +
+        "for the exact bundle runtime in the sandbox — the helpers are fixed, so " +
+        "working from memory produces plausible code that does not render. Load a skill BEFORE " +
         "writing the code it covers, not when something is already broken. Design " +
         "skills (taste, not API): creative-direction, kinetic-typography, " +
         "cinematic-motion, layout-composition, charts-data-viz, spring-physics, " +
@@ -104,7 +148,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "model call plus thousands of context tokens on every later call — " +
         "but nothing is forbidden: any skill may load when the beat genuinely " +
         "needs it. API skills: " +
-        "timing, sequencing, compositions. Then as needed: animations, " +
+        "timing, sequencing, runtime-helpers. Then as needed: animations, " +
         "transitions, effects, shapes, audio, images, video, fonts, text, parameters, " +
         "multi-scene-video, spring, interpolate, easing, code-syntax, " +
         "shapes-paths, noise-grain, captions.",
@@ -194,45 +238,83 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     read_file: tool({
       description:
-        "Read the current composition source. Read before you edit — an edit whose " +
-        "find string is guessed will not apply.",
-      inputSchema: z.object({}),
-      execute: async () => {
-        const { code, plan, version } = store.current()
+        "Read the current bundle (html + css + js parts). Read before you edit — " +
+        "an edit whose find string is guessed will not apply. Pass part to " +
+        "read one part only and save context.",
+      inputSchema: z.object({
+        part: PART.optional().describe("One part only: html, css, or js. Omit for all three."),
+      }),
+      execute: async ({ part }) => {
+        const { plan, version } = store.current()
+        const loaded = requireBundle(store)
+        if (!loaded.ok) {
+          return { version, plan, parts: null, error: loaded.error }
+        }
+        const b = loaded.bundle
+        const summary = partSummary(b)
+        const all = { html: b.html, css: b.css, js: b.js }
         return {
           version,
           plan,
-          lines: code ? code.split("\n").length : 0,
-          code: code || "(no composition yet)",
+          meta: b.meta,
+          parts: part ? { [part]: all[part] } : all,
+          summary,
+          snippet: jsSnippet(b, 12),
         }
       },
     }),
 
     write_composition: tool({
       description:
-        "Write the WHOLE composition in one call. This is a single file, so build " +
-        "the complete scene here: every import, every component, every beat, the " +
-        "default export. Do NOT dribble it out in chunks — a scene written in " +
-        "fragments comes out thin, because each piece is written without the whole " +
-        "in view. Use edit_file for small changes to a composition that already exists. " +
-        "This tool is the ONLY place composition code may ever appear — never write " +
-        "TSX, imports, or code fences in chat text. If you catch yourself typing code " +
-        "outside this call, stop and put it here instead.",
+        "Write the WHOLE bundle in one call: html (markup for #wm-stage) + css " +
+        "(scoped stylesheet) + js (a script defining function render(t, ctx), " +
+        "optionally function init(ctx)). Build the complete scene here — every " +
+        "element, every beat. Do NOT dribble it out in chunks. Use edit_file " +
+        "for small changes to a bundle that already exists. " +
+        "This tool is the ONLY place bundle code may ever appear — never write " +
+        "markup, CSS, JS, or code fences in chat text. If you catch yourself typing code " +
+        "outside this call, stop and put it here instead. " +
+        "Motion contract: every move is a pure function of t (seconds) via the ctx " +
+        "helpers (ctx.interpolate, ctx.Easing, ctx.spring, ctx.rand). No imports, " +
+        "no exports, no <script> tags, no wall-clock time, no event handlers.",
       inputSchema: z.object({
-        code: z
+        html: z
           .string()
-          .describe("The complete TSX source of the composition, imports included."),
+          .describe("Inner markup mounted into #wm-stage. No <html>/<head>/<body>, no <script> tags."),
+        css: z
+          .string()
+          .describe("Scoped stylesheet. Cite Google Font families by name — the runtime loads them."),
+        js: z
+          .string()
+          .describe("Plain script defining function render(t, ctx) (and optionally function init(ctx)). Helpers arrive on ctx."),
+        duration: z
+          .number()
+          .min(2)
+          .max(30)
+          .optional()
+          .describe("Cut length in seconds. Defaults to 5."),
+        title: z.string().max(120).optional().describe("Short name for the cut."),
       }),
-      execute: async ({ code }) => {
-        // 50x fix: mechanical repairs run INLINE on every write, so a turn
-        // that needed write → validate → auto_fix_code → rewrite (4 paced
-        // model calls, ~48s) now lands in one call. Repairs are the same
-        // pure helpers auto_fix_code uses — results can never drift.
-        const repaired = autoRepairInline(code)
-        const checks = checkComposition(repaired.code)
+      execute: async ({ html, css, js, duration, title }) => {
+        // Mechanical repairs run INLINE on every write, so a turn that
+        // needed write → validate → auto_fix_code → rewrite now lands in
+        // one call. Same pure helpers auto_fix_code uses — no drift.
+        const bundle: WebBundle = {
+          version: 1,
+          html: html ?? "",
+          css: css ?? "",
+          js: js ?? "",
+          meta: defaultMeta({
+            ...(title ? { title } : {}),
+            ...(typeof duration === "number" ? { duration } : {}),
+          }),
+        }
+        const repaired = autoRepairBundle(bundle)
+        const code = serializeBundle(repaired.bundle)
+        const checks = checkComposition(code)
         const errors = checks.filter((c) => c.level === "error")
-        // Refuse a file that cannot run, with the reason. The alternative is
-        // storing broken source and discovering it at render time.
+        // Refuse a bundle that cannot run, with the reason. The alternative
+        // is storing broken source and discovering it at render time.
         if (errors.length > 0) {
           return {
             ok: false,
@@ -243,8 +325,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
           }
         }
         // Basic-motion gate: correct code that reads as a slide deck is
-        // refused with the fix, not stored. Taste is blocking at write;
-        // recovery scenarios (eased, no map) still pass by design.
+        // refused with the fix, not stored.
         const basicBlocks = basicMotionBlocks(checks)
         if (basicBlocks.length > 0) {
           return {
@@ -256,10 +337,12 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
             note: "Nothing was saved — add the named motion craft and call write_composition again. Do not paste code into chat.",
           }
         }
-        const n = store.write(repaired.code, { bumpVersion: true })
+        const n = store.write(code, { bumpVersion: true })
         return {
           ok: true,
           version: n,
+          parts: partSummary(repaired.bundle),
+          snippet: jsSnippet(repaired.bundle, 12),
           warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
           ...(repaired.applied.length > 0 ? { autoRepaired: repaired.applied } : {}),
         }
@@ -268,17 +351,18 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     edit_file: tool({
       description:
-        "Change a small, specific part of the existing composition. One note touches " +
-        "one thing. Each op's `find` must be copied EXACTLY from read_file, " +
-        "including indentation — it is a literal string match. When an op misses, " +
-        "the result names the closest real lines (suggestion): retry from those " +
-        "instead of re-guessing. Use write_composition " +
-        "instead only for a genuine rewrite. For multi-part changes (rename " +
-        "across the file, icon swaps, several small fixes) use bulk_edit.",
+        "Change a small, specific part of the existing bundle. One note touches " +
+        "one thing. Each op names its part (html, css, or js) and its `find` must be " +
+        "copied EXACTLY from read_file, including indentation — it is a literal " +
+        "string match. When an op misses, the result names the closest real lines " +
+        "(suggestion): retry from those instead of re-guessing. Use " +
+        "write_composition instead only for a genuine rewrite. For multi-part " +
+        "changes (retiming several beats, several small fixes) use bulk_edit.",
       inputSchema: z.object({
         ops: z
           .array(
             z.object({
+              part: PART.describe("Which bundle part this op edits: html, css, or js."),
               find: z.string().describe("Exact existing text to replace."),
               replace: z.string().describe("What it becomes. Empty string deletes it."),
             })
@@ -291,12 +375,12 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     bulk_edit: tool({
       description:
-        "Apply a batch of related edits to the composition in one call — " +
-        "renames, icon swaps, retiming several beats, fixing the same mistake " +
-        "in many places. Each op's `find` is an exact literal match from " +
+        "Apply a batch of related edits to the bundle in one call — retiming " +
+        "several beats, fixing the same mistake in many places. Each op names " +
+        "its part (html, css, or js) and its `find` is an exact literal match from " +
         "read_file; ops apply in order, the whole batch validates once, and " +
         "the version bumps once. Any op may match MANY occurrences to " +
-        "rename/replace across the file (that is the difference from edit_file, " +
+        "rename/replace across the part (that is the difference from edit_file, " +
         "which requires a unique match). Atomic: one missed op saves nothing, " +
         "but the failure names the closest real lines (suggestion) — retry the " +
         "batch from those. Prefer this over five sequential " +
@@ -305,6 +389,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         ops: z
           .array(
             z.object({
+              part: PART.describe("Which bundle part this op edits: html, css, or js."),
               find: z.string().describe("Exact existing text to replace."),
               replace: z.string().describe("What it becomes. Empty string deletes it."),
               all: z
@@ -470,15 +555,18 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       execute: async ({ focus }) => {
         const { code, plan, version } = store.current()
         if (!code) return { error: "Nothing to review yet." }
+        const loaded = requireBundle(store)
+        if (!loaded.ok) return { error: loaded.error }
+        const src = combinedSource(loaded.bundle)
 
         const findings: string[] = []
-        const frames = (code.match(/interpolate\(\s*frame\s*,\s*\[[^\]]*\]/g) ?? []).length
-        const springs = (code.match(/\bspring\(/g) ?? []).length
-        const easings = (code.match(/Easing\./g) ?? []).length
-        const transforms = (code.match(/translate|scale|rotate|skew/gi) ?? []).length
-        const opacities = (code.match(/opacity/gi) ?? []).length
-        const staggers = (code.match(/delay|offset|stagger\w*|index\s*\*|\bi\s*\*\s*\w+/gi) ?? []).length
-        const maps = (code.match(/\.map\(/g) ?? []).length
+        const frames = (src.match(/interpolate\(\s*(f|t)\b[^[]*\[[^\]]*\]/g) ?? []).length
+        const springs = (src.match(/\bspring\(/g) ?? []).length
+        const easings = (src.match(/Easing\./g) ?? []).length
+        const transforms = (src.match(/translate|scale|rotate|skew/gi) ?? []).length
+        const opacities = (src.match(/opacity/gi) ?? []).length
+        const staggers = (src.match(/delay|offset|stagger\w*|index\s*\*|\bi\s*\*\s*\w+/gi) ?? []).length
+        const maps = (src.match(/\.map\(|for\s*\(|data-repeat/gi) ?? []).length
 
         // NOTE: springs count as easing — a cut landing everything on spring()
         // with plain clamps is organic, not robotic. Only flag linear when
@@ -525,8 +613,8 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         const posRe = /position:\s*['"]absolute['"]/g
         const seen = new Map<string, number>()
         let m: RegExpExecArray | null
-        while ((m = posRe.exec(code)) !== null) {
-          const window = code.slice(m.index, m.index + 500)
+        while ((m = posRe.exec(src)) !== null) {
+          const window = src.slice(m.index, m.index + 500)
           const left = /left:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0] ?? "?"
           const top = /top:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0] ?? "?"
           const key = `${left} | ${top}`
@@ -541,11 +629,11 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         }
 
         // Detect translate ranges that push elements off-canvas
-        for (const m of code.matchAll(/interpolate\(\s*frame\s*,\s*\[([^\]]*)\]\s*,\s*\[([^\]]*)\]/g)) {
+        for (const m of src.matchAll(/interpolate\(\s*frame\s*,\s*\[([^\]]*)\]\s*,\s*\[([^\]]*)\]/g)) {
           const outs = (m[2] ?? "").split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
           if (outs.length === 0) continue
           const peak = Math.max(...outs.map((n) => Math.abs(n)))
-          const ctx = code.slice(Math.max(0, (m.index ?? 0) - 220), (m.index ?? 0) + 120)
+          const ctx = src.slice(Math.max(0, (m.index ?? 0) - 220), (m.index ?? 0) + 120)
           if (/translate/i.test(ctx) && peak > 1920) {
             findings.push(
               `translate range reaches ${peak}px — past the 1920px canvas edge. ` +
@@ -565,7 +653,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
             {
               re: /breath|pulse|pulsing|idle|drift|alive|heartbeat/i,
               need: /Math\.(sin|cos)\s*\(/,
-              fix: "it promises idle life (pulse/breathing) but no frame-driven drift exists. Add a deterministic Math.sin(frame) drift of 2-4px after the landing.",
+              fix: "it promises idle life (pulse/breathing) but no t-driven drift exists. Add a deterministic Math.sin(t * 2.4) drift of 2-4px after the landing.",
             },
             {
               re: /stagger|cascade|one by one|each \w+ in turn/i,
@@ -584,7 +672,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
             },
           ]
           for (const { re, need, fix } of drift) {
-            if (re.test(beatText) && !need.test(code)) {
+            if (re.test(beatText) && !need.test(src)) {
               findings.push(`Plan-vs-code drift: the plan promises motion that the code never implements — ${fix}`)
             }
           }
@@ -609,7 +697,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         {
           const trendWords = /ris(e|ing)|grow|peak|ascending|record high/i
           const briefText = `${plan?.intent ?? ""} ${plan?.beats.map((b) => b.what).join(" ") ?? ""}`
-          const values = [...code.matchAll(/value:\s*(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]))
+          const values = [...src.matchAll(/value:\s*(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]))
           if (values.length >= 4 && trendWords.test(briefText)) {
             const dipAt = values.findIndex((v, i) => i > 0 && v < (values[i - 1] ?? 0))
             if (dipAt !== -1) {
@@ -628,10 +716,10 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         {
           const beats = plan?.beats ?? []
           const total = beats.length > 0 ? Math.max(...beats.map((b) => b.to)) : 0
-          if (total >= 120 && !/Math\.(sin|cos)\s*\(/.test(code)) {
+          if (total >= 120 && !/Math\.(sin|cos)\s*\(/.test(src)) {
             findings.push(
               `The cut runs ${total} frames with no idle drift — after the landings the frame freezes. ` +
-                `Add 2-4px of deterministic Math.sin(frame) breathing so the hold stays alive.`
+                `Add 2-4px of deterministic Math.sin(t * 2.4) breathing so the hold stays alive.`
             )
           }
         }
@@ -728,10 +816,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     auto_fix_code: tool({
       description:
-        "Apply confidence-scored repairs to the current composition, then re-validate. " +
-        "High-confidence fixes (Math.random→random with import, page-default " +
-        "font→Fonts, lucide named imports→Lucide namespace with correct alias handling, " +
-        "linear interpolate→Easing.bezier, missing frame binding, missing default export) " +
+        "Apply confidence-scored repairs to the current bundle, then re-validate. " +
+        "High-confidence fixes (Math.random→ctx.rand, page-default font→Unbounded, " +
+        "linear interpolate→ctx.Easing.easeOut, missing f binding, missing render) " +
         "apply automatically. Pass it EITHER validate_composition errors OR a browser " +
         "failure message from read_render_report — it understands both. Medium/low-confidence " +
         "findings (overflow, z-conflict, missing spring) return with a preview for approval. " +
@@ -740,8 +827,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         errors: z.array(z.string()).min(1).describe("Error messages from validate_composition, or a browser failure message from read_render_report."),
       }),
       execute: async ({ errors }) => {
-        let code = store.current().code
-        if (!code) return { ok: false, error: "No composition to fix — use write_composition." }
+        const loaded = requireBundle(store)
+        if (!loaded.ok) return { ok: false, error: loaded.error }
+        const bundle = { ...loaded.bundle, meta: { ...loaded.bundle.meta } }
         interface Fix {
           issue: string
           fix: string
@@ -753,188 +841,144 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
         // --- high-confidence: objective errors, safe to apply ----------------
 
-        // Fix: only replace Math.random() in non-comment, non-string contexts
-        // Bug fix (Issue 8): the previous regex replaced Math.random() inside
-        // comments, which changed comment text without fixing the actual error.
+        // Math.random() outside comments/strings → seeded ctx.rand.
         {
-          const stripped = code
+          const stripped = bundle.js
             .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
             .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
             .replace(/`(?:\\.|[^`\\])*`/g, (m) => " ".repeat(m.length))
             .replace(/"(?:\\.|[^"\\])*"/g, (m) => " ".repeat(m.length))
             .replace(/'(?:\\.|[^'\\])*'/g, (m) => " ".repeat(m.length))
-          if (/Math\.random\s*\(/.test(stripped)) {
-            // Apply the replacement only to positions that are in the stripped version
-            const randomRe = /Math\.random\s*\(\s*\)/g
-            let newCode = ""
-            let lastIdx = 0
-            let match: RegExpExecArray | null
-            let count = 0
-            while ((match = randomRe.exec(code)) !== null) {
-              // Only replace if the same position in stripped is not whitespace-padded
-              const atPos = stripped.slice(match.index, match.index + match[0].length)
-              if (!/^\s+$/.test(atPos)) {
-                newCode += code.slice(lastIdx, match.index) + "random(null)"
-                lastIdx = match.index + match[0].length
-                count++
-              }
-            }
-            if (count > 0) {
-              code = newCode + code.slice(lastIdx)
-              code = ensureRandomImport(code).code
-              applied.push({
-                issue: `Non-deterministic Math.random() (${count} occurrence${count > 1 ? "s" : ""})`,
-                fix: "Replaced with Remotion's seeded random(null), import added from remotion",
-                confidence: "high",
-                preview: { before: "Math.random()", after: "random(null)" },
-              })
+          const randomRe = /Math\.random\s*\(\s*\)/g
+          let m: RegExpExecArray | null
+          let count = 0
+          let next = ""
+          let lastIdx = 0
+          while ((m = randomRe.exec(bundle.js)) !== null) {
+            const atPos = stripped.slice(m.index, m.index + m[0].length)
+            if (!/^\s+$/.test(atPos)) {
+              next += bundle.js.slice(lastIdx, m.index) + "ctx.rand(t.toFixed(3))()"
+              lastIdx = m.index + m[0].length
+              count++
             }
           }
-        }
-
-        {
-          const { code: next, names } = applyLucideNamespace(code)
-          if (names.length > 0) {
-            code = next
-            applied.push({
-              issue: `Named lucide-react import(s): ${names.join(", ")}`,
-              fix: "Converted to the Lucide namespace the player scope provides (<Lucide.Name/>) — named imports throw at mount. Alias mappings (import { X as Y }) handled correctly.",
-              confidence: "high",
-              preview: {
-                before: `import { ${names[0]} } from "lucide-react"`,
-                after: `import * as Lucide from "lucide-react" + <Lucide.${names[0]} />`,
-              },
-            })
-          }
-        }
-
-        // Fix: replace ALL occurrences of page-default fonts, not just the first
-        // Bug fix (Issue 8): previous code used a single .exec() + replace on m[0],
-        // so only the first occurrence was fixed.
-        {
-          const fontRe = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica|Inter|Roboto)["']/gi
-          const matches = [...code.matchAll(fontRe)]
-          if (matches.length > 0) {
-            const face = DISPLAY_FACES[0]
-            code = code.replace(fontRe, `fontFamily: Fonts.${face}.family`)
-            applied.push({
-              issue: `Page-default fontFamily (${matches.length} occurrence${matches.length > 1 ? "s" : ""})`,
-              fix: `Replaced all with Fonts.${face}.family`,
-              confidence: "high",
-              preview: { before: matches[0]![0], after: `fontFamily: Fonts.${face}.family` },
-            })
-          }
-        }
-
-        {
-          const { upgraded, count } = applyNakedEasing(code)
           if (count > 0) {
-            code = ensureEasingImport(upgraded).code
+            bundle.js = next + bundle.js.slice(lastIdx)
+            applied.push({
+              issue: `Non-deterministic Math.random() (${count} occurrence${count > 1 ? "s" : ""})`,
+              fix: "Replaced with seeded ctx.rand(t) — stable across scrubs and export",
+              confidence: "high",
+              preview: { before: "Math.random()", after: "ctx.rand(t.toFixed(3))()" },
+            })
+          }
+        }
+
+        // Page-default font stacks → Unbounded (a deliberate face).
+        {
+          const fontRe = /font-family\s*:\s*['"]?(system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica|Inter|Roboto)['"]?/gi
+          const matches = [...bundle.css.matchAll(fontRe), ...bundle.js.matchAll(fontRe)]
+          if (matches.length > 0) {
+            bundle.css = bundle.css.replace(fontRe, "font-family: 'Unbounded', sans-serif")
+            bundle.js = bundle.js.replace(fontRe, "font-family: 'Unbounded', sans-serif")
+            if (!bundle.meta.fonts?.includes("Unbounded")) {
+              bundle.meta.fonts = [...(bundle.meta.fonts ?? []), "Unbounded"]
+            }
+            applied.push({
+              issue: `Page-default font stack (${matches.length} occurrence${matches.length > 1 ? "s" : ""})`,
+              fix: "Replaced all with 'Unbounded' (runtime auto-loads it)",
+              confidence: "high",
+              preview: { before: matches[0]![0].slice(0, 60), after: "font-family: 'Unbounded', sans-serif" },
+            })
+          }
+        }
+
+        // Naked ctx.interpolate (no options) → easeOut. The runtime clamps
+        // by default, so only easing is added.
+        {
+          const { upgraded, count } = applyNakedEasing(bundle.js)
+          if (count > 0) {
+            bundle.js = upgraded
             applied.push({
               issue: `${count} linear interpolate() call(s)`,
-              fix: "Added Easing.bezier(0.16, 1, 0.3, 1) with clamped extrapolation",
+              fix: "Added { easing: ctx.Easing.easeOut }",
               confidence: "high",
               preview: {
-                before: "interpolate(frame, [a, b], [c, d])",
-                after: "interpolate(frame, [a, b], [c, d], { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: \"clamp\", extrapolateRight: \"clamp\" })",
+                before: "ctx.interpolate(f, [a, b], [c, d])",
+                after: "ctx.interpolate(f, [a, b], [c, d], { easing: ctx.Easing.easeOut })",
               },
             })
           }
         }
 
-        // Structural fix: missing frame binding — auto-add useCurrentFrame()
-        // Bug fix (Issue 8): previously only surfaced as "suggested", never applied.
-        // This is mechanical and safe: useCurrentFrame() is always the right fix.
+        // Missing f binding: ctx.interpolate(f, ...) with no frame binding.
         {
-          const needsFrame =
-            /interpolate\(\s*frame\b/.test(code) &&
-            !/useCurrentFrame\(\)/.test(code) &&
-            !/(?:const|let|var)\s+frame\b/.test(code)
-          if (needsFrame) {
-            // Insert `const frame = useCurrentFrame();` after the first `{` of
-            // the component function body. Match the first function/arrow body opening.
-            const bodyOpen = code.search(/(?:function\s+\w+[^{]*|=>\s*)\{/)
-            if (bodyOpen !== -1) {
-              const insertAt = code.indexOf("{", bodyOpen) + 1
-              const indent = "  "
-              const insertion = `\n${indent}const frame = useCurrentFrame();`
-              code = code.slice(0, insertAt) + insertion + code.slice(insertAt)
-              // Ensure useCurrentFrame is imported from remotion
-              if (!/useCurrentFrame/.test(code.split(insertion)[0] ?? "")) {
-                const m = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/.exec(code)
-                if (m) {
-                  code = code.replace(m[0], `import {${m[1].replace(/\s+$/, "")}, useCurrentFrame } from "remotion"`)
-                }
-              }
+          const needsF =
+            /ctx\.interpolate\(\s*f\b/.test(bundle.js) &&
+            !/ctx\.frame/.test(bundle.js) &&
+            !/(?:const|let|var)\s+f\b/.test(bundle.js)
+          if (needsF) {
+            const m = /function\s+render\s*\([^)]*\)\s*\{/.exec(bundle.js)
+            if (m) {
+              const at = m.index + m[0].length
+              bundle.js = bundle.js.slice(0, at) + "\n  var f = ctx.frame;" + bundle.js.slice(at)
               applied.push({
-                issue: "interpolate() reads `frame` but no frame binding exists",
-                fix: "Added `const frame = useCurrentFrame();` at the top of the component body",
+                issue: "ctx.interpolate(f, ...) reads `f` but no frame binding exists",
+                fix: "Added `var f = ctx.frame;` at the top of render()",
                 confidence: "high",
-                preview: { before: "(no frame binding)", after: "const frame = useCurrentFrame();" },
+                preview: { before: "(no frame binding)", after: "var f = ctx.frame;" },
               })
             }
           }
         }
 
-        // Structural fix: missing default export
-        // Bug fix (Issue 8): previously only surfaced as "suggested". This is mechanical:
-        // find the last top-level function/const that looks like a component.
+        // Missing render(t, ctx) entry point — named, never auto-applied.
         {
-          if (!/export\s+default\b/.test(code)) {
-            const compMatch = [...code.matchAll(/^(?:const|function)\s+([A-Z][A-Za-z0-9_]*)\s*(?:=|{|\()/gm)].pop()
-            if (compMatch?.[1]) {
-              const name = compMatch[1]
-              code = code.trimEnd() + `\n\nexport default ${name};\n`
-              applied.push({
-                issue: "Missing default export",
-                fix: `Appended \`export default ${name};\` — matched the last top-level component`,
-                confidence: "high",
-                preview: { before: "(no default export)", after: `export default ${name};` },
-              })
-            } else {
-              suggested.push({
-                issue: "Missing default export",
-                fix: "Append `export default <TopLevelComponent>;` matching the component name",
-                confidence: "medium",
-                preview: { before: "(no default export)", after: "export default MyCut;" },
-              })
-            }
+          const clean = bundle.js
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/\/\/[^\n]*/g, "")
+          if (!/function\s+render\s*\(/.test(clean)) {
+            suggested.push({
+              issue: "No render(t, ctx) entry point",
+              fix: "Define `function render(t, ctx) { var f = ctx.frame; ... }` setting inline styles from t",
+              confidence: "medium",
+              preview: { before: "(no render function)", after: "function render(t, ctx) { ... }" },
+            })
           }
         }
 
         // --- medium/low-confidence: named for approval, never auto-applied ---
         const context = [
           ...errors,
-          ...checkComposition(code)
+          ...checkComposition(serializeBundle(bundle))
             .filter((c) => c.level === "warn")
             .map((c) => c.message),
         ].join("\n")
-        if (/overflow|off-canvas/i.test(context)) {
+        if (/overflow|off-canvas|outside the .* canvas/i.test(context)) {
           suggested.push({
             issue: "Layout overflow",
-            fix: "Scale the element down or pull its translate range inside 1920x1080",
+            fix: "Scale the element down or pull its range inside 1920x1080",
             confidence: "medium",
-            preview: { before: "translate peak past canvas bounds", after: "range clamped inside the safe margin" },
+            preview: { before: "element outside canvas bounds", after: "range inside the safe margin" },
           })
         }
         if (/z-index|zIndex/i.test(context)) {
           suggested.push({
             issue: "z-index conflict",
-            fix: "Separate layers: background=1, content=10, overlays=20, UI=30",
+            fix: "Separate layers: background=1, content=10, overlays=20, UI=40",
             confidence: "medium",
             preview: { before: "shared zIndex", after: "distinct zIndex per layer" },
           })
         }
-        if (/spring|settle|landing/i.test(context) && /\bspring\(/.test(code) === false) {
+        if (/spring|settle|landing/i.test(context) && /\bspring\(/.test(combinedSource(bundle)) === false) {
           suggested.push({
             issue: "Nothing settles",
-            fix: "Arrive with spring() or an overshoot preset (load_motion_preset settle)",
+            fix: "Arrive with ctx.spring() or an overshoot preset (load_motion_preset settle)",
             confidence: "low",
             preview: { before: "ease to a stop", after: "spring landing with overshoot" },
           })
         }
 
-        const checks = checkComposition(code)
+        const checks = checkComposition(serializeBundle(bundle))
         const remaining = checks.filter((c) => c.level === "error").map((c) => c.message)
         if (remaining.length > 0) {
           return {
@@ -954,8 +998,8 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
             note: "No mechanical fix matched — fix manually and call write_composition again.",
           }
         }
-        const n = store.write(code, { bumpVersion: true })
-        return { ok: true, version: n, applied, suggested }
+        const n = store.write(serializeBundle(bundle), { bumpVersion: true })
+        return { ok: true, version: n, parts: partSummary(bundle), applied, suggested }
       },
     }),
 
@@ -1086,7 +1130,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
             ? {
                 examples,
                 examplesNote:
-                  "Load the FIRST example skill before writing code — it is a complete working cut. Imitate its structure/timing/easing, then convert to player scope (Fonts.*, scale/translate/rotate shorthands, clamps, default export).",
+                  "Load the FIRST example skill before writing code — it is a complete working cut. Imitate its structure/timing/easing, then convert to bundle scope (html markup, scoped CSS, render(t, ctx) with ctx.* helpers, Google Fonts by family name).",
               }
             : {}),
         }
@@ -1133,7 +1177,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       execute: async () => {
         const { code, version } = store.current()
         if (!code) return { error: "Nothing to analyze yet." }
-        return { version, ...designAnalyze(code) }
+        return { version, ...designAnalyze(analysisSource(code)) }
       },
     }),
 
@@ -1145,7 +1189,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       execute: async () => {
         const { code, version } = store.current()
         if (!code) return { error: "Nothing to profile yet." }
-        return { version, ...performanceProfile(code) }
+        return { version, ...performanceProfile(analysisSource(code)) }
       },
     }),
 
@@ -1157,7 +1201,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       execute: async () => {
         const { code, version } = store.current()
         if (!code) return { error: "Nothing to audit yet." }
-        return { version, ...accessibilityAudit(code) }
+        return { version, ...accessibilityAudit(analysisSource(code)) }
       },
     }),
 
@@ -1181,8 +1225,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       }),
       execute: async ({ product, brand, headline, mood, seconds }) => {
         const golden = goldenStarter({ product, brand, headline, mood, seconds })
-        const repaired = autoRepairInline(golden.code)
-        const checks = checkComposition(repaired.code)
+        const repaired = autoRepairBundle(parseBundle(golden.code).bundle!)
+        const code = serializeBundle(repaired.bundle)
+        const checks = checkComposition(code)
         const errors = checks.filter((c) => c.level === "error")
         if (errors.length > 0) {
           return {
@@ -1192,11 +1237,13 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
           }
         }
         store.setPlan(golden.plan)
-        const n = store.write(repaired.code, { bumpVersion: true })
+        const n = store.write(code, { bumpVersion: true })
         return {
           ok: true,
           version: n,
           plan: golden.plan,
+          parts: partSummary(repaired.bundle),
+          snippet: jsSnippet(repaired.bundle, 12),
           warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
           ...(repaired.applied.length > 0 ? { autoRepaired: repaired.applied } : {}),
           next: "Call preview_composition, then read_render_report, then ONE sentence. Do not rewrite what quick_start published — refine it with edit_file.",
@@ -1331,7 +1378,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     subtitle_generate: tool({
       description:
-        "Turn frame cues into caption windows for @remotion/captions. " +
+        "Turn frame cues into caption windows rendered as positioned divs toggled by t. " +
         "Auto-transcription is not connected — cues come from the script.",
       inputSchema: z.object({
         cues: z.array(z.object({ at: z.number().int().min(0), text: z.string() })).min(1),
@@ -1342,16 +1389,16 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     icon_generate: tool({
       description:
-        "Pick consistent lucide-react icons for a concept, with the exact " +
-        "import snippet. lucide-react is already in scope.",
+        "Pick consistent icons for a concept, with an inline-SVG snippet. " +
+        "No icon package exists in the sandbox — inline <svg> is the only safe icon.",
       inputSchema: z.object({ concept: z.string() }),
       execute: async ({ concept }) => iconGenerate(concept),
     }),
 
     background_generate: tool({
       description:
-        "Procedural animated background snippet (gradient/noise/grid) in brand " +
-        "colors. Frame-driven — never CSS transitions.",
+        "Procedural animated background snippet (gradient/noise/grid CSS) in brand " +
+        "colors. Driven from t in render() — never wall-clock CSS transitions.",
       inputSchema: z.object({
         style: z.string().describe("gradient, noise, or grid"),
         colors: z.array(z.string()).max(4).optional(),
@@ -1507,9 +1554,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
     // --- Phase 4: 3D foundation (§7.1) --------------------------------------
     three_scene_create: tool({
       description:
-        "Real 3D scene via @remotion/three (installed + in scope): declarative " +
-        "ThreeCanvas with a frame-driven camera rig (orbit/dolly/pan/static). " +
-        "Never useFrame — Remotion forbids it (flickers).",
+        "Real 3D scene via pinned Three.js CDN in a bundle <canvas>: init() builds " +
+        "the scene, render(t, ctx) drives a t-computed camera rig (orbit/dolly/pan/static). " +
+        "Never requestAnimationFrame inside the bundle — the driver owns the clock.",
       inputSchema: z.object({
         kind: z.enum(["orbit", "dolly", "pan", "static"]).default("orbit"),
         seconds: z.number().min(2).max(30).default(5),
@@ -1536,9 +1583,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     three_model_animate: tool({
       description:
-        "3D object animation (rotate/float/entrance), useCurrentFrame-driven. " +
+        "3D object animation (rotate/float/entrance), t-driven. " +
         "Includes a torus-knot fallback that renders with no hosted model; " +
-        ".glb models need R2/staticFile hosting first.",
+        ".glb models need an https host with CORS first.",
       inputSchema: z.object({
         model: z.string(),
         animation: z.enum(["rotate", "float", "entrance"]).default("entrance"),
@@ -1551,9 +1598,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
     load_motion_preset: tool({
       description:
         "Load a professional motion preset (timing + easing + transform snippet) for " +
-        "a beat type. Returns ready-to-paste code — copy the numbers instead of " +
-        "inventing curves. REQUIRED before writing any spring() or Easing.bezier(): " +
-        "never hand-roll timing values. " +
+        "a beat type. Returns ready-to-paste code for render(t, ctx) — copy the numbers " +
+        "instead of inventing curves. REQUIRED before writing any ctx.spring() or " +
+        "ctx.Easing.bezier(): never hand-roll timing values. " +
         "Original five: entrance, transition, settle, exit, emphasis. " +
         "Extended beat vocabulary: reveal (clip-path wipe, not a fade), " +
         "anticipation (pre-movement compress), cascade (list stagger), " +
@@ -1667,60 +1714,54 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "Re-validates after; saves only when no new errors appear.",
       inputSchema: z.object({}),
       execute: async () => {
-        const { code } = store.current()
-        if (!code) return { ok: false, error: "No composition to enhance — use write_composition." }
+        const loaded = requireBundle(store)
+        if (!loaded.ok) return { ok: false, error: loaded.error }
+        const bundle = { ...loaded.bundle, meta: { ...loaded.bundle.meta } }
+        const src = combinedSource(bundle)
 
-        let enhanced = code
         const enhancements: string[] = []
 
-        // Tier 1: Add easing to naked interpolate() calls
-        const { upgraded: eased, count: easingCount } = applyNakedEasing(enhanced)
+        // Tier 1: easing on naked ctx.interpolate() calls (clamping is default).
+        const { upgraded: eased, count: easingCount } = applyNakedEasing(bundle.js)
         if (easingCount > 0) {
-          enhanced = ensureEasingImport(eased).code
-          enhancements.push(`Added Easing.bezier(0.16, 1, 0.3, 1) to ${easingCount} linear interpolate() call(s)`)
+          bundle.js = eased
+          enhancements.push(`Added { easing: ctx.Easing.easeOut } to ${easingCount} linear interpolate() call(s)`)
         }
 
-        // Tier 2: Add extrapolateRight: "clamp" to opacity/scale interpolations
-        // that are missing it — the most common cause of blank frames after the
-        // animation ends (Issue 6 fix).
-        const { clamped, clampCount } = applyExtrapolateClamp(enhanced)
-        if (clampCount > 0) {
-          enhanced = clamped
-          enhancements.push(
-            `Added extrapolateRight: "clamp" + extrapolateLeft: "clamp" to ${clampCount} opacity/scale interpolation(s) — prevents values running past [0,1] after animation ends`
-          )
-        }
+        // Tier 2: nothing to clamp — the runtime clamps every interpolate by
+        // default. Report the win instead of rewriting.
+        enhancements.push("Clamping is runtime-default — every interpolate already holds past its window.")
 
-        // Tier 3: Report unstaggered mapped lists
-        const staggerSites = findUnstaggeredMaps(enhanced)
+        // Tier 3: report unstaggered lists (loops building elements, no stagger).
+        const staggerSites = findUnstaggeredMaps(src)
         if (staggerSites > 0) {
           enhancements.push(
-            `${staggerSites} mapped list(s) still need a stagger — offset each item by index * 3 frames: ` +
-            `opacity: spring({ frame: frame - (startFrame + i * 3), fps: 30, config: { damping: 18, mass: 0.5, stiffness: 180 } })`
+            `${staggerSites} list(s) still need a stagger — offset each item in time: ` +
+            `ctx.spring(t - (start + i * 0.12), { damping: 18, mass: 0.5, stiffness: 180 })`
           )
         }
 
-        if (easingCount === 0 && clampCount === 0 && staggerSites === 0) {
+        if (easingCount === 0 && staggerSites === 0) {
           return {
             ok: true,
             version: store.current().version,
-            enhancements: ["Already designed — every interpolation has easing, clamping, and stagger."],
+            enhancements: ["Already designed — every interpolation has easing and stagger."],
           }
         }
 
-        // Only save if something was mechanically changed (easing or clamping)
-        if (easingCount > 0 || clampCount > 0) {
-          const checks = checkComposition(enhanced)
+        if (easingCount > 0) {
+          const code = serializeBundle(bundle)
+          const checks = checkComposition(code)
           const errors = checks.filter((c) => c.level === "error")
           if (errors.length > 0) {
             return {
               ok: false,
-              error: "Auto-enhance would break the code — fix manually instead.",
+              error: "Auto-enhance would break the bundle — fix manually instead.",
               errors: errors.map((e) => e.message),
             }
           }
-          const n = store.write(enhanced, { bumpVersion: true })
-          return { ok: true, version: n, enhancements }
+          const n = store.write(code, { bumpVersion: true })
+          return { ok: true, version: n, parts: partSummary(bundle), enhancements }
         }
 
         // Stagger sites need manual intervention — just report
@@ -1771,25 +1812,31 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
 /**
  * Mechanical repairs applied inline on every write_composition / quick_start,
- * so the model never spends a paced round-trip on what is deterministic:
- * lucide namespace, Easing import, random import, naked linear easing, and a
- * missing frame binding. Same helpers auto_fix_code uses — no drift.
+ * so the model never spends a paced round-trip on what is deterministic.
+ * Operates per bundle part; same helpers auto_fix_code uses — no drift.
  */
-export function autoRepairInline(code: string): { code: string; applied: string[] } {
-  let next = code
+export function autoRepairBundle(bundle: WebBundle): { bundle: WebBundle; applied: string[] } {
+  const next: WebBundle = { ...bundle, meta: { ...bundle.meta } }
   const applied: string[] = []
 
-  const lucide = applyLucideNamespace(next)
-  if (lucide.names.length > 0) {
-    next = lucide.code
-    applied.push(`lucide namespace (${lucide.names.join(", ")})`)
+  // Page-default font stacks → Unbounded, in every part.
+  {
+    const fontRe = /font-family\s*:\s*['"]?(system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica|Inter|Roboto)['"]?/gi
+    const matches = [...next.css.matchAll(fontRe), ...next.js.matchAll(fontRe), ...next.html.matchAll(fontRe)]
+    if (matches.length > 0) {
+      next.css = next.css.replace(fontRe, "font-family: 'Unbounded', sans-serif")
+      next.js = next.js.replace(fontRe, "font-family: 'Unbounded', sans-serif")
+      next.html = next.html.replace(fontRe, "font-family: 'Unbounded', sans-serif")
+      if (!next.meta.fonts?.includes("Unbounded")) {
+        next.meta.fonts = [...(next.meta.fonts ?? []), "Unbounded"]
+      }
+      applied.push(`page-default font → 'Unbounded' (${matches.length}x)`)
+    }
   }
 
-  // Non-deterministic Math.random() outside comments/strings → seeded random().
-  // Same comment/string-aware scan auto_fix_code uses; without it the write
-  // would be refused and cost the turn an extra paced round-trip.
+  // Non-deterministic Math.random() outside comments/strings → ctx.rand(t).
   {
-    const stripped = next
+    const stripped = next.js
       .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
       .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
       .replace(/`(?:\\.|[^`\\])*`/g, (m) => " ".repeat(m.length))
@@ -1801,140 +1848,58 @@ export function autoRepairInline(code: string): { code: string; applied: string[
       let lastIdx = 0
       let match: RegExpExecArray | null
       let count = 0
-      while ((match = randomRe.exec(next)) !== null) {
+      while ((match = randomRe.exec(next.js)) !== null) {
         const atPos = stripped.slice(match.index, match.index + match[0].length)
         if (!/^\s+$/.test(atPos)) {
-          rebuilt += next.slice(lastIdx, match.index) + "random(null)"
+          rebuilt += next.js.slice(lastIdx, match.index) + "ctx.rand(t.toFixed(3))()"
           lastIdx = match.index + match[0].length
           count++
         }
       }
       if (count > 0) {
-        next = rebuilt + next.slice(lastIdx)
-        applied.push(`Math.random → random(null) (${count}x)`)
+        next.js = rebuilt + next.js.slice(lastIdx)
+        applied.push(`Math.random → ctx.rand(t) (${count}x)`)
       }
     }
   }
 
-  // Page-default fontFamily → Fonts.*. Mechanical and always right: a literal
-  // "Arial"/"system-ui" stack is never a deliberate motion choice.
-  {
-    const fontRe = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica|Inter|Roboto)["']/gi
-    const matches = [...next.matchAll(fontRe)]
-    if (matches.length > 0) {
-      const face = DISPLAY_FACES[0]
-      next = next.replace(fontRe, `fontFamily: Fonts.${face}.family`)
-      applied.push(`page-default font → Fonts.${face}.family (${matches.length}x)`)
-    }
-  }
-
-  const naked = applyNakedEasing(next)
+  const naked = applyNakedEasing(next.js)
   if (naked.count > 0) {
-    next = naked.upgraded
-    applied.push(`${naked.count}x linear interpolate → Easing.bezier + clamp`)
+    next.js = naked.upgraded
+    applied.push(`${naked.count}x linear interpolate → ctx.Easing.easeOut`)
   }
 
-  // Misspelled extrapolate keys are silently ignored by Remotion (the call
-  // then runs past its range). Mechanical fix, always right: "extraplate" is
-  // never a legitimate identifier.
+  // Missing f binding for ctx.interpolate(f, ...).
   {
-    const matches = [...next.matchAll(/\bextraplate(\w*)/g)]
-    if (matches.length > 0) {
-      next = next.replace(/\bextraplate(\w*)/g, "extrapolate$1")
-      applied.push(`extraplate → extrapolate typo (${matches.length}x)`)
-    }
-  }
-
-  // Unclosed JSX opening tag: `}}` then a bare-text line then a closing tag,
-  // with no `>` — the text lands inside the opening tag and the browser
-  // compiler fails ("Expected either /> or >"). Same matcher the validator
-  // uses, so repair and refusal can never disagree. String literals are
-  // spaces in the masked copy, so a literal `}}` match is always real code
-  // and the same replace applies cleanly to `next`.
-  {
-    const re = /\}\}[ \t]*\n[ \t]*[A-Za-z][^<>{}\n]{0,80}\n[ \t]*<\//g
-    let count = 0
-    next = next.replace(re, (m) => {
-      count++
-      return m.replace("}}", "}}>")
-    })
-    if (count > 0) applied.push(`unclosed JSX tag → }}> (${count}x)`)
-  }
-
-  // One-sided clamps keep drifting on the open side (rotation that never
-  // stops, opacity climbing past 1). Backfill the missing side inside flat
-  // option bags. Only touches bags that already clamp one side, so calls
-  // with deliberate unclamped physics are never rewritten.
-  {
-    let count = 0
-    next = next.replace(/\{([^{}]*)\}/g, (bag) => {
-      const hasLeft = /\bextrapolateLeft\s*:/.test(bag)
-      const hasRight = /\bextrapolateRight\s*:/.test(bag)
-      if (hasLeft === hasRight || !/\bclamp\b/.test(bag)) return bag
-      count++
-      const missing = hasLeft ? `extrapolateRight: "clamp"` : `extrapolateLeft: "clamp"`
-      return bag.replace(/\s*\}$/, `, ${missing} }`)
-    })
-    if (count > 0) applied.push(`one-sided clamp → both sides (${count}x)`)
-  }
-
-  // Unused named remotion imports (Sequence/staticFile imported "just in
-  // case") are dead weight the validator warns about. Strip names never
-  // referenced outside their own import line. Conservative: remotion package
-  // only, whole-word match, never touches namespace or default imports.
-  {
-    const importRe = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/g
-    let m: RegExpExecArray | null
-    let stripped = 0
-    while ((m = importRe.exec(next)) !== null) {
-      const names = m[1]!.split(",").map((s) => s.trim()).filter(Boolean)
-      const body = next.slice(0, m.index) + next.slice(m.index + m[0].length)
-      const keep = names.filter((n) => {
-        const id = n.split(/\s+as\s+/)[0]!.trim()
-        return id !== "" && new RegExp(`\\b${id}\\b`).test(body)
-      })
-      if (keep.length !== names.length && keep.length > 0) {
-        next = body.slice(0, m.index) + `import { ${keep.join(", ")} } from "remotion"` + body.slice(m.index)
-        stripped += names.length - keep.length
-        importRe.lastIndex = 0
+    const needsF =
+      /ctx\.interpolate\(\s*f\b/.test(next.js) &&
+      !/ctx\.frame/.test(next.js) &&
+      !/(?:const|let|var)\s+f\b/.test(next.js)
+    if (needsF) {
+      const m = /function\s+render\s*\([^)]*\)\s*\{/.exec(next.js)
+      if (m) {
+        const at = m.index + m[0].length
+        next.js = next.js.slice(0, at) + "\n  var f = ctx.frame;" + next.js.slice(at)
+        applied.push("frame binding (var f = ctx.frame)")
       }
     }
-    if (stripped > 0) applied.push(`unused remotion imports stripped (${stripped}x)`)
-  }
-  const easing = ensureEasingImport(next)
-  if (easing.added) {
-    next = easing.code
-    applied.push("Easing import")
-  }
-  const rnd = ensureRandomImport(next)
-  if (rnd.added) {
-    next = rnd.code
-    applied.push("random import")
   }
 
-  const needsFrame =
-    /interpolate\(\s*frame\b/.test(next) &&
-    !/useCurrentFrame\(\)/.test(next) &&
-    !/(?:const|let|var)\s+frame\b/.test(next)
-  if (needsFrame) {
-    const bodyOpen = next.search(/(?:function\s+\w+[^{]*|=>\s*)\{/)
-    if (bodyOpen !== -1) {
-      const insertAt = next.indexOf("{", bodyOpen) + 1
-      next = next.slice(0, insertAt) + "\n  const frame = useCurrentFrame();" + next.slice(insertAt)
-      const m = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/.exec(next)
-      if (m && !/useCurrentFrame/.test(m[1] ?? "")) {
-        next = next.replace(m[0], `import {${m[1]!.replace(/\s+$/, "")}, useCurrentFrame } from "remotion"`)
-      }
-      applied.push("frame binding")
-    }
-  }
+  return { bundle: next, applied }
+}
 
-  return { code: next, applied }
+/** Legacy alias — repairs a serialized bundle string. */
+export function autoRepairInline(code: string): { code: string; applied: string[] } {
+  const p = parseBundle(code)
+  if (!p.ok || !p.bundle) return { code, applied: [] }
+  const r = autoRepairBundle(p.bundle)
+  return { code: serializeBundle(r.bundle), applied: r.applied }
 }
 
 /**
  * Shared edit engine behind edit_file (unique-match, partial apply) and
- * bulk_edit (all-occurrences per op, atomic batch).
+ * bulk_edit (all-occurrences per op, atomic batch). Each op names the bundle
+ * part it edits; matching is literal within that part.
  *
  * edit_file tolerates a failed op and saves the rest — one note touches
  * one thing. bulk_edit is atomic: if ANY op fails or the result has
@@ -1942,51 +1907,63 @@ export function autoRepairInline(code: string): { code: string; applied: string[
  */
 async function applyEditOps(
   store: CompositionStore,
-  ops: Array<{ find: string; replace: string; all?: boolean }>,
+  ops: Array<{ part: BundlePart; find: string; replace: string; all?: boolean }>,
   opts: { allowPartial: boolean }
 ): Promise<unknown> {
-  let code = store.current().code
-  if (!code) {
-    return { ok: false, error: "There is no composition yet — use write_composition." }
+  const loaded = requireBundle(store)
+  if (!loaded.ok) {
+    return { ok: false, error: loaded.error }
+  }
+  const parts: Record<BundlePart, string> = {
+    html: loaded.bundle.html,
+    css: loaded.bundle.css,
+    js: loaded.bundle.js,
   }
 
-  const applied: Array<{ find: string; count: number }> = []
-  const failed: Array<{ find: string; reason: string; suggestion?: Array<{ line: number; text: string }> }> = []
+  const applied: Array<{ part: BundlePart; find: string; count: number }> = []
+  const failed: Array<{ part?: BundlePart; find: string; reason: string; suggestion?: Array<{ line: number; text: string }> }> = []
 
   for (const op of ops) {
+    if (op.part !== "html" && op.part !== "css" && op.part !== "js") {
+      failed.push({ find: String(op.find ?? "").slice(0, 80), reason: "`part` must be html, css, or js." })
+      continue
+    }
     if (op.find === "") {
-      failed.push({ find: "<empty>", reason: "`find` cannot be empty." })
+      failed.push({ part: op.part, find: "<empty>", reason: "`find` cannot be empty." })
       continue
     }
     if (op.replace === op.find) {
       // A no-op edit changes nothing but burns a turn: refuse it with the
-      // reason instead of "applying" it. Observed live as three identical
-      // fontWeight ops reported applied while the user watched nothing move.
+      // reason instead of "applying" it.
       failed.push({
+        part: op.part,
         find: op.find.slice(0, 80),
         reason: "No-op: `find` and `replace` are identical — nothing would change. Send only ops that change text.",
       })
       continue
     }
-    const occurrences = code.split(op.find).length - 1
+    const text = parts[op.part]
+    const occurrences = text.split(op.find).length - 1
     if (occurrences === 0) {
       failed.push({
+        part: op.part,
         find: op.find.slice(0, 80),
-        reason: "No exact match. Copy the text from read_file, whitespace included.",
-        suggestion: suggestCloseMatch(code, op.find),
+        reason: `No exact match in the ${op.part} part. Copy the text from read_file, whitespace included.`,
+        suggestion: suggestCloseMatch(text, op.find),
       })
       continue
     }
     if (occurrences > 1 && !op.all) {
       failed.push({
+        part: op.part,
         find: op.find.slice(0, 80),
-        reason: `Matches ${occurrences} times — include more surrounding lines to make it unique, or use bulk_edit with all:true.`,
-        suggestion: suggestCloseMatch(code, op.find).slice(0, 1),
+        reason: `Matches ${occurrences} times in ${op.part} — include more surrounding lines to make it unique, or use bulk_edit with all:true.`,
+        suggestion: suggestCloseMatch(text, op.find).slice(0, 1),
       })
       continue
     }
-    code = op.all ? code.split(op.find).join(op.replace) : code.replace(op.find, op.replace)
-    applied.push({ find: op.find.slice(0, 60), count: occurrences > 1 && op.all ? occurrences : 1 })
+    parts[op.part] = op.all ? text.split(op.find).join(op.replace) : text.replace(op.find, op.replace)
+    applied.push({ part: op.part, find: op.find.slice(0, 60), count: occurrences > 1 && op.all ? occurrences : 1 })
   }
 
   if (applied.length === 0) {
@@ -1994,8 +1971,6 @@ async function applyEditOps(
   }
 
   // bulk_edit is atomic: a failed op poisons the batch, so nothing saves.
-  // Each failed op carries the closest real lines (suggestion) — retry the
-  // batch from those instead of re-guessing.
   if (!opts.allowPartial && failed.length > 0) {
     return {
       ok: false,
@@ -2006,6 +1981,7 @@ async function applyEditOps(
     }
   }
 
+  const code = serializeBundle({ ...loaded.bundle, ...parts })
   const checks = checkComposition(code)
   const errors = checks.filter((c) => c.level === "error")
   if (errors.length > 0) {
@@ -2084,17 +2060,13 @@ export function currentBrowserFailure(
  * into one precise tool call instead of a full rewrite.
  */
 export function browserFixHint(message: string): string {
-  if (/"[^"]+" is not available/.test(message)) {
-    return "A name the player scope cannot provide. Call auto_fix_code with this message — it converts lucide named imports to the Lucide namespace automatically; otherwise declare the name or import it from remotion."
-  }
-  if (/\(line (\d+)\)/.test(message)) {
-    const line = /\(line (\d+)\)/.exec(message)?.[1]
-    return `Compile error at line ${line}. Call read_file, look at that line, and fix it with edit_file — do not rewrite the whole composition.`
+  if (/must define function render/i.test(message)) {
+    return "The js part has no render(t, ctx). Call read_file with part js, add `function render(t, ctx) { var f = ctx.frame; ... }` with edit_file, then re-preview."
   }
   if (/runtime:/i.test(message)) {
-    return "It compiled but threw while rendering a frame. The message names the failing access — guard it (optional chaining / default) with edit_file, then re-preview."
+    return "It evaluated but threw while rendering a frame. The message names the failing access — guard it (optional chaining / default, check ctx.el ids exist in the html part) with edit_file on part js, then re-preview."
   }
-  return "Fix the named issue with edit_file, then preview_composition again (new version), then read_render_report."
+  return "Fix the named issue with edit_file (naming the right part: html, css, or js), then preview_composition again (new version), then read_render_report."
 }
 
 /** Closest real lines for a `find` that matched nothing, so a retry is precise. */
@@ -2132,141 +2104,22 @@ function escapeRegExp(s: string): string {
 }
 
 /**
- * Named lucide imports compile but throw "<name> is not available" at mount —
- * the player scope only registers the Lucide namespace. Mechanical to repair:
- * one namespace import plus prefixed JSX usages.
- *
- * Fixed (Issue 8): correctly handles `import { Zap as Lightning }` aliases.
- * The JSX tag uses the local alias name, so we must map alias → original and
- * replace `<Lightning />` with `<Lucide.Zap />`, not `<Lucide.Lightning />`.
- */
-export function applyLucideNamespace(code: string): { code: string; names: string[] } {
-  // Collect { original, local } pairs from every lucide-react named import.
-  // e.g. `import { Zap, ArrowRight as Arrow }` → [{original: "Zap", local: "Zap"}, {original: "ArrowRight", local: "Arrow"}]
-  // NOTE: the specifier list is [^{}]* — never [\s\S]*?. The lazy-dot version
-  // spanned `}` boundaries, so a file with `from "remotion"` above the lucide
-  // line matched from the FIRST import and mangled both lines (real model
-  // output always has several imports, so this broke nearly every repair).
-  const pairs: Array<{ original: string; local: string }> = []
-  const importRe = /import\s*\{([^{}]*)\}\s*from\s*["']lucide-react["']/g
-  let m: RegExpExecArray | null
-  while ((m = importRe.exec(code)) !== null) {
-    for (const raw of (m[1] ?? "").split(",")) {
-      const parts = raw.trim().split(/\s+as\s+/)
-      const original = parts[0]?.trim()
-      const local = parts[1]?.trim() ?? original
-      if (original && local) pairs.push({ original, local })
-    }
-  }
-  if (pairs.length === 0) return { code, names: [] }
-
-  // Replace all lucide-react named imports with the namespace import.
-  let next = code.replace(importRe, `import * as Lucide from "lucide-react"`)
-  // Deduplicate if there were multiple named-import lines.
-  next = next.replace(
-    /(import \* as Lucide from "lucide-react";?\s*){2,}/g,
-    `import * as Lucide from "lucide-react";\n`
-  )
-
-  // Replace JSX tags: use the LOCAL alias name in the regex (that's what's in the JSX),
-  // but output <Lucide.ORIGINAL /> (the actual icon name in the Lucide namespace).
-  for (const { original, local } of pairs) {
-    next = next.replace(
-      new RegExp(`<(/?)${escapeRegExp(local)}(?=[\\s/>])`, "g"),
-      `<$1Lucide.${original}`
-    )
-  }
-
-  return { code: next, names: pairs.map((p) => p.local) }
-}
-
-/** random() needs its import, or the Math.random repair trades one mount error for another. */
-export function ensureRandomImport(code: string): { code: string; added: boolean } {
-  if (!/\brandom\s*\(/.test(code)) return { code, added: false }
-  if (/import\s*\{[^}]*\brandom\b[^}]*\}\s*from\s*["']remotion["']/.test(code)) {
-    return { code, added: false }
-  }
-  const m = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/.exec(code)
-  if (m) {
-    return {
-      code: code.replace(m[0], `import {${m[1]!.replace(/\s+$/, "")}, random } from "remotion"`),
-      added: true,
-    }
-  }
-  return { code: `import { random } from "remotion";\n${code}`, added: true }
-}
-
-/**
- * Agent upgrade: high-confidence easing repair shared by auto_fix_code and
- * auto_enhance_motion. Only touches interpolate() calls with exactly two
- * array args and NO options object (they end in `])`) — anything else is
- * left for the model.
+ * High-confidence easing repair shared by auto_fix_code and
+ * auto_enhance_motion. Only touches ctx.interpolate() calls with exactly
+ * two array args and NO options object (they end in `])`) — anything else
+ * is left for the model. The runtime clamps by default, so only easing
+ * is added.
  */
 function applyNakedEasing(code: string): { upgraded: string; count: number } {
   let count = 0
-  // Any option-less interpolate — frame-driven or progress-derived — gets
-  // easing plus both clamps. (interpolateColors never matches: it has no
-  // paren directly after "interpolate".)
   const upgraded = code.replace(
-    /interpolate\(\s*[\w$.]+\s*,\s*\[[^\]]*\]\s*,\s*\[[^\]]*\]\)/g,
+    /ctx\.interpolate\(\s*[\w$.]+\s*,\s*\[[^\]]*\]\s*,\s*\[[^\]]*\]\)/g,
     (m) => {
       count += 1
-      return `${m.slice(0, -1)}, { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" })`
+      return `${m.slice(0, -1)}, { easing: ctx.Easing.easeOut })`
     }
   )
   return { upgraded, count }
-}
-
-/**
- * Adds extrapolateRight: "clamp" + extrapolateLeft: "clamp" to interpolate()
- * calls whose output range is [0, 1] or [0, n] (opacity, scale, clip-path
- * progress) but which already have an options object without clamping.
- *
- * This is the fix for Issue 6: the most common blank-frame bug is an opacity
- * or scale that runs past 1.0 or below 0.0 after the animation ends because
- * there is no extrapolation clamp. validate_composition previously missed this.
- */
-function applyExtrapolateClamp(code: string): { clamped: string; clampCount: number } {
-  let clampCount = 0
-  // Match interpolate() calls that:
-  // 1. Have an options object ({ ... }) as the 4th argument
-  // 2. Do NOT already contain extrapolateRight
-  // 3. Have an output range that looks like [0, 1] or [0, n] (opacity/scale/progress)
-  const clamped = code.replace(
-    /interpolate\(\s*frame\s*,\s*\[[^\]]*\]\s*,\s*\[([^\]]*)\]\s*,\s*\{([^}]*)\}\s*\)/g,
-    (m, outputRange: string, options: string) => {
-      // Skip if already clamped
-      if (/extrapolateRight/.test(options)) return m
-      // Only clamp output ranges that look like [0, n] — opacity, scale, progress
-      const nums = outputRange.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
-      if (nums.length < 2) return m
-      const [first, last] = [nums[0]!, nums[nums.length - 1]!]
-      // [0, 1], [0, 1.x], [0, x] where x <= 2 — animation progress values
-      if (first !== 0 || last > 2 || last <= 0) return m
-      clampCount++
-      return m.replace(
-        /,\s*\{([^}]*)\}\s*\)$/,
-        `, { $1, extrapolateLeft: "clamp", extrapolateRight: "clamp" })`
-      )
-    }
-  )
-  return { clamped, clampCount }
-}
-
-/** Easing references need their import, or the repair trades an error for a warning. */
-function ensureEasingImport(code: string): { code: string; added: boolean } {
-  if (!/\bEasing\b/.test(code)) return { code, added: false }
-  if (/import\s*\{[^}]*\bEasing\b[^}]*\}\s*from\s*["']remotion["']/.test(code)) {
-    return { code, added: false }
-  }
-  const m = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/.exec(code)
-  if (m) {
-    return {
-      code: code.replace(m[0], `import {${m[1].replace(/\s+$/, "")}, Easing } from "remotion"`),
-      added: true,
-    }
-  }
-  return { code: `import { Easing } from "remotion";\n${code}`, added: true }
 }
 
 /** Mapped lists with no stagger/delay/index-offset still need the human touch. */
@@ -2369,17 +2222,17 @@ async function batchExecute(
     case "design_analyze": {
       const { code, version } = store.current()
       if (!code) throw new Error("Nothing to analyze yet.")
-      return { version, ...designAnalyze(code) }
+      return { version, ...designAnalyze(analysisSource(code)) }
     }
     case "performance_profile": {
       const { code, version } = store.current()
       if (!code) throw new Error("Nothing to profile yet.")
-      return { version, ...performanceProfile(code) }
+      return { version, ...performanceProfile(analysisSource(code)) }
     }
     case "accessibility_audit": {
       const { code, version } = store.current()
       if (!code) throw new Error("Nothing to audit yet.")
-      return { version, ...accessibilityAudit(code) }
+      return { version, ...accessibilityAudit(analysisSource(code)) }
     }
     case "validate_composition": {
       // NEVER cached: the source changed since the last call by definition.

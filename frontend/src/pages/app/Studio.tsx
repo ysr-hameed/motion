@@ -10,7 +10,6 @@ import { fetchComposition, publishStarter, type MotionPlan } from "~/lib/composi
 import { DEMO_CODE, DEMO_PLAN } from "~/lib/demo";
 import { openExport } from "~/lib/exportPresets";
 import { motionApi } from "~/lib/stack";
-import { warmCompileChunk } from "~/components/Stage";
 import { useMotionToken } from "./data";
 
 /**
@@ -55,6 +54,8 @@ export default function Studio() {
   }, [sessionId, token]);
 
   const [code, setCode] = useState("");
+  const codeRef = useRef("");
+  codeRef.current = code;
   const [plan, setPlan] = useState<MotionPlan | null>(null);
   const [version, setVersion] = useState(0);
   const [reloadKey, setReloadKey] = useState("0");
@@ -63,12 +64,10 @@ export default function Studio() {
   // Small screens show one side at a time; desktop keeps both side by side.
   const [mobileView, setMobileView] = useState<"preview" | "direct">("preview");
 
-  // Warm the preview chunk on mount: a tab left open across a deploy fails
-  // here (with a reload prompt) instead of after minutes of agent work.
-  useEffect(() => {
-    if (DEMO) return;
-    warmCompileChunk(() => setChunkStale(true));
-  }, []);
+  // The web player has no lazy compile chunk to go stale (the bundle
+  // builds synchronously into a sandboxed iframe), so there is nothing to
+  // warm up. chunkStale stays for the deploy notice below.
+  void setChunkStale;
 
   const [booted, setBooted] = useState(DEMO);
   const reload = useCallback(
@@ -350,7 +349,7 @@ export default function Studio() {
         </aside>
       </div>
 
-      <ExportDialog totalFrames={duration} sessionId={sessionId} />
+      <ExportDialog totalFrames={duration} sessionId={sessionId} getCode={() => codeRef.current} />
     </div>
   );
 }

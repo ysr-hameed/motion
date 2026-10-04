@@ -2,7 +2,7 @@
  * Phase 3 request optimization (IMPLEMENTATION_PLAN.md §5): predictive cache.
  *
  * Policy:
- * - skills (Remotion docs): 1h, shared — content is static per deploy.
+ * - skills (web-motion docs): 1h, shared — content is static per deploy.
  * - asset/font/intent results: deterministic pure functions, cached by query.
  * - validation: NEVER cached (always fresh — the source just changed).
  * - DO isolates are long-lived, so this Map survives between turns in the
