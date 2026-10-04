@@ -88,8 +88,14 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "memory produces plausible code that does not render. Load a skill BEFORE " +
         "writing the code it covers, not when something is already broken. Design " +
         "skills (taste, not API): creative-direction, kinetic-typography, " +
-        "cinematic-motion, layout-composition — load creative-direction once per " +
-        "new full-path cut, the others when the beat needs them. API skills: " +
+        "cinematic-motion, layout-composition, charts-data-viz, spring-physics, " +
+        "messaging-chat-ui, social-media-formats — load creative-direction once per " +
+        "new full-path cut, the others when the beat needs them (see its §5 routing " +
+        "table). Example skills (complete working cuts to imitate, never copy " +
+        "verbatim): example-typewriter-highlight, example-word-carousel, " +
+        "example-text-rotation, example-histogram, example-gold-price-chart, " +
+        "example-progress-bar, example-animated-shapes, example-falling-spheres, " +
+        "example-lottie. API skills: " +
         "timing, sequencing, compositions. Then as needed: animations, " +
         "transitions, effects, shapes, audio, images, video, fonts, text, parameters, " +
         "multi-scene-video, spring, interpolate, easing.",
@@ -187,7 +193,10 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "the complete scene here: every import, every component, every beat, the " +
         "default export. Do NOT dribble it out in chunks — a scene written in " +
         "fragments comes out thin, because each piece is written without the whole " +
-        "in view. Use edit_file for small changes to a composition that already exists.",
+        "in view. Use edit_file for small changes to a composition that already exists. " +
+        "This tool is the ONLY place composition code may ever appear — never write " +
+        "TSX, imports, or code fences in chat text. If you catch yourself typing code " +
+        "outside this call, stop and put it here instead.",
       inputSchema: z.object({
         code: z
           .string()
@@ -891,6 +900,20 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         const intent = intentDeepAnalyze(brief)
         const fonts = suggestFonts(intent.tone)
         const b = brief.toLowerCase()
+        // Example-skill routing (creative-direction §5): point the turn at the
+        // complete working cut closest to this brief so timing/easing/layout
+        // are imitated, never invented. The turn still converts to player
+        // scope (Fonts.*, shorthands, clamps, default export).
+        const examples: string[] = []
+        if (/typewriter|cursor|quote|code reveal/i.test(b)) examples.push("example-typewriter-highlight")
+        if (/carousel|rotating word|alternating/i.test(b)) examples.push("example-word-carousel", "example-text-rotation")
+        if (/chart|graph|histogram|statistic|metric|dashboard/i.test(b)) examples.push("example-histogram", "example-gold-price-chart")
+        if (/progress|loading|countdown|meter|0.*100/i.test(b)) examples.push("example-progress-bar")
+        if (/chat|message|whatsapp|imessage|conversation|testimonial/i.test(b)) examples.push("messaging-chat-ui")
+        if (/shape|abstract|bumper/i.test(b)) examples.push("example-animated-shapes")
+        if (/3d|three|sphere|spatial/i.test(b)) examples.push("example-falling-spheres")
+        if (/lottie/i.test(b)) examples.push("example-lottie")
+        if (/promo|ad\b|teaser|launch|social|hook/i.test(b)) examples.push("social-media-formats")
         const beats: Array<{ beat: string; preset: string; easing: string; duration: number }> = [
           { beat: "anticipation", ...pickPreset("anticipation") },
           { beat: "entrance", ...pickPreset("entrance") },
@@ -914,6 +937,13 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
           beats,
           layout: "One focal element upper-third or center; supporting copy in ONE flex column beneath it; decor at zIndex 1; 96px safe margins; load_skill(\"layout-composition\") for placement rules.",
           aliveness: "Anticipation → overshoot spring → secondary motion → idle breathing. Load_skill(\"cinematic-motion\") for the snippets; load_skill(\"kinetic-typography\") when the beat is type-led.",
+          ...(examples.length > 0
+            ? {
+                examples,
+                examplesNote:
+                  "Load the FIRST example skill before writing code — it is a complete working cut. Imitate its structure/timing/easing, then convert to player scope (Fonts.*, scale/translate/rotate shorthands, clamps, default export).",
+              }
+            : {}),
         }
       },
     }),

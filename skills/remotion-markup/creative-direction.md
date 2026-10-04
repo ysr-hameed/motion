@@ -43,3 +43,33 @@ One focal element owns the frame (upper-third or center). Supporting copy
 sits in ONE flex column beneath it — never scattered absolutes. Decorative
 layers (gradient, grain, grid) stay at zIndex 1 with no text. See
 `layout-composition` for the placement rules the validator enforces.
+
+## 5. Brief to skill routing (decide before writing)
+
+Match the brief to knowledge BEFORE code — loading the wrong skill costs a
+paced call, writing from memory costs the cut:
+
+| Brief mentions | Load these first |
+|---|---|
+| numbers, chart, graph, stats, dashboard, progress | `charts-data-viz` + `example-histogram` or `example-gold-price-chart` |
+| typewriter, cursor, quote, code reveal | `example-typewriter-highlight` |
+| rotating words, carousel, alternating claims | `example-word-carousel` or `example-text-rotation` |
+| chat, DMs, comments, conversation, testimonials | `messaging-chat-ui` |
+| promo, ad, teaser, launch, social, hook | `social-media-formats` |
+| 3D, spheres, depth scene, product drop | `3d` + `example-falling-spheres` |
+| bounce, overshoot, settle, organic, elastic | `spring-physics` |
+| scenes, acts, chapters, multi-part story | `sequencing` + `transitions` |
+| shapes, abstract, bumper, background play | `example-animated-shapes` |
+| Lottie file or vector-character motion | `example-lottie` |
+
+Example skills are complete working cuts: imitate structure/timing/easing,
+then convert to player scope (Fonts.*, shorthands, clamps, default export).
+
+## 6. Motion or not? (validate the brief first)
+
+If the request is not visual — a question, an essay, a calculation, a
+translation — say so in one sentence and ask what to animate instead. Never
+burn paced tool calls writing code for a brief with no picture. Ambiguous but
+visual briefs get a reasonable choice, never an interrogation: ask one
+question only when the subject itself is unclear, never about colour, pacing,
+or mood.

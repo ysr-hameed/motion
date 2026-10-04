@@ -88,5 +88,31 @@ export function predictTools(brief: string): Array<{ tool: string; args: Record<
   if (/transition|entrance|easing|spring|bounce|reveal/i.test(b)) {
     ops.push({ tool: "load_skill", args: { id: "transitions" } })
   }
+  // Template-port routing (creative-direction §5): name the exact guidance +
+  // example skills each brief needs so the turn loads them instead of writing
+  // curves and layouts from memory.
+  if (/chart|graph|histogram|statistic|metric|dashboard|progress|countdown|meter/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "charts-data-viz" } })
+  }
+  if (/spring|bounce|overshoot|settle|elastic|organic/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "spring-physics" } })
+  }
+  if (/chat|message|whatsapp|imessage|dm\b|comment|conversation|testimonial/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "messaging-chat-ui" } })
+  }
+  if (/promo|ad\b|ads\b|teaser|launch|social|tiktok|reel|hook|sale/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "social-media-formats" } })
+  }
+  if (/typewriter|cursor|quote|code reveal/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "example-typewriter-highlight" } })
+  } else if (/carousel|rotating word|alternating/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "example-word-carousel" } })
+  } else if (/lottie/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "example-lottie" } })
+  } else if (/3d|three|sphere|spatial/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "example-falling-spheres" } })
+  } else if (/shape|abstract|bumper/i.test(b)) {
+    ops.push({ tool: "load_skill", args: { id: "example-animated-shapes" } })
+  }
   return ops
 }

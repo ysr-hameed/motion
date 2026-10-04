@@ -277,6 +277,12 @@ NEVER render <Composition> inside the component — it throws and blanks the pla
 Fonts is a global — NEVER import it. Write: fontFamily: Fonts.anton.family
 Icons: \`import * as Lucide from "lucide-react"\` + \`<Lucide.Zap/>\`.
 NEVER \`import { Zap } from "lucide-react"\` — throws in the player.
+Constants first: ALL tunable values (COLORS, TEXT, TIMING, LAYOUT) as
+UPPER_SNAKE_CASE consts inside the component body, AFTER hooks — users
+customize without reading logic.
+Reserved names: NEVER declare variables named spring, interpolate,
+useCurrentFrame, useVideoConfig, AbsoluteFill, or Sequence — they shadow
+imports. The single frame binding is always \`const frame = useCurrentFrame();\`.
 Use CSS shorthand transforms: scale / translate / rotate — NOT transform: \`translateY(...)\`
 Animate translate/scale/opacity + letterSpacing only — never fontSize.
 scale interpolations: add output: "perceptual-scale".
@@ -316,6 +322,8 @@ Refine AFTER verified preview with edit_file. NEVER rewrite a verified cut.
 NEW BRIEF — FULL PATH (only when no template fits):
 1. creative_direct(brief) — intent+palette+fonts+beat→preset map in ONE call.
    Then layout_plan(...) when 2+ elements share the frame.
+   Load the FIRST example skill it names before writing — imitate its
+   structure/timing/easing, converted to player scope.
    NEVER write spring()/Easing.bezier() values from memory — copy from presets.
    load_skill("creative-direction") once; "kinetic-typography" when type-led;
    "cinematic-motion" for aliveness; "layout-composition" for 3+ elements.
@@ -378,8 +386,13 @@ Z-index: background=1, content=10, overlays=20, UI/30. DOM order usually paints 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BEHAVIOUR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Say nothing between tool calls. Never narrate the request.
+CODE LIVES IN TOOLS, NEVER IN CHAT. write_composition / edit_file / bulk_edit
+are the only places TSX may appear. Never output imports, components, code
+fences, or diffs as chat text — a cut pasted into chat cannot preview, cannot
+validate, and reads as broken. If a code block starts forming in your reply,
+stop it and issue the tool call instead.
 Never claim a write succeeded unless the tool result says ok:true.
 preview_composition ok:true = PUBLISHED, not rendered. Only read_render_report
 status "verified" means the cut runs in the browser.
@@ -479,6 +492,37 @@ function lastReadStatus(
     }
   }
   return null
+}
+
+/**
+ * Template-port sanitize (mechanism, not words): did the last step dump
+ * composition code as chat text instead of calling a code tool?
+ *
+ * The template never has this failure mode — streamed text IS its product —
+ * but here text code cannot preview or validate. When detected (and no code
+ * tool ran yet this turn), prepareStep forces write_composition so the model
+ * puts the code where it belongs instead of ending on a code block.
+ * Defensive by design: any doubt returns false and the turn flows as before.
+ */
+function chatCodeDumped(steps: readonly unknown[]): boolean {
+  try {
+    const last = steps[steps.length - 1] as { content?: unknown } | undefined
+    const content = last?.content
+    if (!Array.isArray(content)) return false
+    for (const part of content as Array<{ type?: unknown; text?: unknown }>) {
+      if (part?.type !== "text" || typeof part.text !== "string") continue
+      const t = part.text
+      if (/```(?:tsx|ts|jsx|js)?\s*\n?\s*import[\s\S]{0,400}remotion/i.test(t)) return true
+      if (
+        /export\s+(const|default)\b/i.test(t) &&
+        /AbsoluteFill|useCurrentFrame|interpolate\(|spring\(/i.test(t)
+      )
+        return true
+    }
+  } catch {
+    return false
+  }
+  return false
 }
 
 export class Chat extends AIChatAgent<Env, ChatState> {
@@ -872,6 +916,18 @@ export class Chat extends AIChatAgent<Env, ChatState> {
        */
       prepareStep: ({ steps }) => {
         const calls = steps.flatMap((s) => s.toolCalls.map((c) => c.toolName))
+        // Code dumped as chat text is not a cut — force it into the one tool
+        // that can hold it. The model already composed the code, so re-issuing
+        // it as write_composition costs one step instead of a lost turn.
+        if (
+          chatCodeDumped(steps) &&
+          !calls.includes("write_composition") &&
+          !calls.includes("quick_start") &&
+          !calls.includes("edit_file") &&
+          !calls.includes("bulk_edit")
+        ) {
+          return { toolChoice: { type: "tool", toolName: "write_composition" } }
+        }
         if (!calls.includes("preview_composition")) return { toolChoice: "auto" }
         const read = lastReadStatus(steps)
         if (read === null) {

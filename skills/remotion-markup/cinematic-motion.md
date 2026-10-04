@@ -24,6 +24,31 @@ Damping guide: 10-14 playful, 15-20 confident (default), 24-30 prestige.
 Let the spring overshoot — clamping arrival at exactly 1.0 on the exact end
 frame is what makes motion feel dead.
 
+## Spring preset table — copy, never invent
+
+| Feel | damping | stiffness | mass | Use |
+|---|---|---|---|---|
+| Snappy | 20 | 200 | 1 | UI elements, minimal cuts |
+| Confident (default) | 18 | 120 | 0.8 | Hero entrances |
+| Bouncy / playful | 8-12 | 100 | 1 | Candy, party, kids briefs |
+| Smooth, no bounce | 200 | 100 | 1 | Subtle reveals, prestige fades |
+| Heavy / slow | 15 | 80 | 2 | Large objects, logos with weight |
+| Tight settle | 25-40 | 140 | 0.9 | Luxury, editorial landings |
+
+See `spring-physics` for delayed starts, overshoot landings, spring+interpolate
+combos, and chained springs.
+
+## Chained beats — overlap, never butt-joint
+
+```tsx
+const P2_START = 25; // next beat starts 5f before this one ends at 30
+const phase1 = spring({ frame, fps, config: { damping: 15, stiffness: 120 } });
+const phase2 = spring({ frame: frame - P2_START, fps, config: { damping: 12, stiffness: 100 } });
+```
+
+Series equivalent: `<Series.Sequence offset={-15}>`. A cut where beats touch
+end-to-start reads as slides; 10-15f of overlap reads as film.
+
 ## Secondary motion (follow-through)
 
 The quiet element answers the hero late and small: same easing, 60%
