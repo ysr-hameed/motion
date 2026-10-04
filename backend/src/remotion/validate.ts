@@ -23,6 +23,35 @@ export interface Check {
   message: string
 }
 
+/**
+ * Basic-motion gate — blocking at WRITE, advisory in taxonomy.
+ *
+ * Linear-only timing and stagger-less maps are never a finished cut: the
+ * write is refused with the fix instead of stored, so the model adds easing
+ * and cascade rather than shipping a slide deck. Deliberately narrow so
+ * recovery scenarios still verify: repaired S6-style code (eased, no map)
+ * passes, opacity-only stays advisory (minimal luxe, progress truthfulness),
+ * and no-spring stays advisory (a smooth eased reveal is valid taste).
+ */
+export function basicMotionBlocks(checks: Array<{ level: string; message: string }>): string[] {
+  const blocks: string[] = []
+  for (const c of checks) {
+    if (c.level !== "warn") continue
+    if (/linear motion reads as robotic/i.test(c.message)) {
+      blocks.push(
+        "BASIC MOTION — refused: every interpolation uses default linear timing. " +
+          "Give each move Easing.bezier(0.16, 1, 0.3, 1) or land it with spring() (see spring-physics).",
+      )
+    } else if (/maps over items with no stagger/i.test(c.message)) {
+      blocks.push(
+        "BASIC MOTION — refused: a list maps over items with identical timing. " +
+          "Offset each item's start frame (e.g. 12 + i * 6) so the list cascades instead of flashing on.",
+      )
+    }
+  }
+  return [...new Set(blocks)]
+}
+
 const REMOTION_CORE = new Set([
   "AbsoluteFill",
   "Sequence",
@@ -110,7 +139,7 @@ function stripNoise(src: string): string {
   // JSX text nodes between tags: `>Motion that lands<` and `>Hello {name}<`
   // are rendered copy, not identifiers. Expressions stay (they hold real
   // code); only the literal text around them is blanked.
-  return noComments.replace(/>([^<>]+)</g, (m, inner: string) => {
+  const noJsxText = noComments.replace(/>([^<>]+)</g, (m, inner: string) => {
     const kept = inner.replace(/\{[^{}]*\}/g, (e: string) => "\0".repeat(e.length))
     let out = ""
     for (let i = 0; i < inner.length; i++) {
@@ -119,6 +148,17 @@ function stripNoise(src: string): string {
     }
     return `>${out}<`
   })
+  // Text nodes after a style-object close (`}}`) rather than after `>`:
+  // generated cuts put copy on its own line under `style={{ ... }}`,
+  // which the pass above never sees (no `>` precedes it). Only blank runs
+  // without code markers (parens, `=`, `;`) so real code after `}}` —
+  // `return (…)`, assignments — is never eaten. Observed live: kicker
+  // `A MOTION CUT` flagged as undefined identifiers, rejecting golden
+  // starters that render fine.
+  return noJsxText.replace(
+    /(\}\}[ \t]*\r?\n)([ \t]*[^<>{}()=;]+?)([ \t]*\r?\n[ \t]*<)/g,
+    (_m, pre: string, inner: string, post: string) => pre + blank(inner) + post,
+  )
 }
 
 /**
@@ -869,7 +909,7 @@ export function checkComposition(code: string): Check[] {
     const interpolates = (src.match(/interpolate\(/g) ?? []).length
     const easings = (src.match(/Easing\./g) ?? []).length
     const springs = (src.match(/\bspring\(/g) ?? []).length
-    const hasTransform = /translate[XY]?|scale|rotate|skew/i.test(src)
+    const hasTransform = /translate|scale|rotate|skew|clipPath/i.test(src)
     const hasOpacity = /opacity/i.test(src)
     const hasMap = /\.map\(/.test(src)
     // Stagger patterns: explicit delay/stagger variable (any case), or an

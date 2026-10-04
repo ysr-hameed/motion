@@ -3,7 +3,7 @@ import { z } from "zod"
 import { findSkill, SKILL_IDS } from "./skills.generated"
 import type { Chat } from "../chat"
 import type { CompositionStore } from "./store"
-import { checkComposition, constraintSolve, dependencyResolve, preValidatePlan } from "./validate"
+import { basicMotionBlocks, checkComposition, constraintSolve, dependencyResolve, preValidatePlan } from "./validate"
 import { optimizeAsset, suggestAssets, suggestFonts } from "./assets"
 import {
   accessibilityAudit,
@@ -232,6 +232,20 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
             errors: errors.map((e) => e.message),
             warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
             ...(repaired.applied.length > 0 ? { autoRepaired: repaired.applied } : {}),
+          }
+        }
+        // Basic-motion gate: correct code that reads as a slide deck is
+        // refused with the fix, not stored. Taste is blocking at write;
+        // recovery scenarios (eased, no map) still pass by design.
+        const basicBlocks = basicMotionBlocks(checks)
+        if (basicBlocks.length > 0) {
+          return {
+            ok: false,
+            rejected: true,
+            errors: basicBlocks,
+            warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
+            ...(repaired.applied.length > 0 ? { autoRepaired: repaired.applied } : {}),
+            note: "Nothing was saved — add the named motion craft and call write_composition again. Do not paste code into chat.",
           }
         }
         const n = store.write(repaired.code, { bumpVersion: true })
@@ -592,6 +606,20 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
                   `an unexplained dip reads as an error.`
               )
             }
+          }
+        }
+
+        // Long cuts that never breathe: the plan runs 120f+ with no
+        // frame-driven drift anywhere — after the landings the frame reads as
+        // paused footage instead of a living hold.
+        {
+          const beats = plan?.beats ?? []
+          const total = beats.length > 0 ? Math.max(...beats.map((b) => b.to)) : 0
+          if (total >= 120 && !/Math\.(sin|cos)\s*\(/.test(code)) {
+            findings.push(
+              `The cut runs ${total} frames with no idle drift — after the landings the frame freezes. ` +
+                `Add 2-4px of deterministic Math.sin(frame) breathing so the hold stays alive.`
+            )
           }
         }
 

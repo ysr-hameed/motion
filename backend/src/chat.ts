@@ -355,6 +355,7 @@ QUALITY GATES ★ NON-NEGOTIABLE
 ★ Must contain: ≥1 spring(), Easing.bezier() on every animated element,
   stagger (index×4-6f) in every .map(), clamps on every interpolate(),
   no system-ui/sans-serif/Arial/Helvetica fontFamily (validator error).
+  Linear-only timing and stagger-less maps are refused at write — never submit them.
 ★ review_motion findings are fix instructions, not advisory. Fix before verify.
 ★ Browser-measured overlap/overflow (read_render_report findings) describe REAL
   pixels on a real render — fix them with edit_file before the closing sentence.
