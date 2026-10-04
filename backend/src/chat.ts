@@ -294,6 +294,9 @@ WORKFLOW — every tool call costs ~12s. 12 steps total. Be economical.
 NEW BRIEF — FAST PATH (default, 3 calls):
 1. quick_start(product, headline) — plans+writes+validates the golden file.
    One golden starter for every brief — no template menu.
+   SKIP quick_start when the brief names a specific mechanic (typewriter,
+   countdown, waveform, ticker, lower-third, kinetic mask): the product
+   golden is the wrong shape and you will rewrite it anyway — go FULL PATH.
    SKIP prefetch_tools, intent_deep_analyze, layout_plan, load_motion_preset, plan_motion.
 2. preview_composition() — only after quick_start ok:true
 3. read_render_report() — waits for browser compile+mount
@@ -362,6 +365,14 @@ preview_composition ok:true = PUBLISHED, not rendered. Only read_render_report
 status "verified" means the cut runs in the browser.
 Change only what the request touches. "Faster" = retiming, not restyling.
 If a tool errors, fix the named thing and call once more. Do not repeat a failing call.
+read_file BEFORE every edit_file/bulk_edit — find strings are copied, never
+guessed. After 2 failed edits on one target, stop and read_file again.
+Never write diagnostic/probe/throwaway code to "inspect" the runtime (a
+throw that dumps globals, a mystery import to see what loads). Scope
+questions are answered by load_skill docs, not by experiments in the cut.
+Fonts come ONLY from the Fonts.* registry (script faces: dancingScript,
+caveat, pacifico, greatVibes, satisfy, shadowsIntoLight). Never import a
+font, never call loadFont, never invent a loader.
 A rejected write_composition means nothing was saved — fix errors and rewrite.
 Ask one question only when the subject is unclear. Never ask about colour/pacing/mood.
 

@@ -747,22 +747,103 @@ function CanvasView({ output }: { output: AnyRec }) {
   );
 }
 
+function AnyList({ items }: { items: unknown[] }) {
+  const rows = items.slice(0, 6);
+  return (
+    <div className="space-y-1">
+      {rows.map((raw, i) => {
+        if (typeof raw === "string") {
+          return <p key={i} className="truncate text-[10.5px] text-muted" title={raw}>· {raw.slice(0, 120)}</p>;
+        }
+        if (raw && typeof raw === "object") {
+          const r = raw as AnyRec;
+          // execute_batch result rows
+          if (r.tool !== undefined && (r.ok !== undefined || r.result !== undefined || r.error !== undefined)) {
+            const ok = r.ok === true;
+            const detail = r.ok === true
+              ? summarizeResult(r.result as AnyRec)
+              : str(r.error).slice(0, 80);
+            return (
+              <div key={i} className="flex min-w-0 items-center gap-1.5 text-[10.5px]">
+                {ok
+                  ? <Check size={11} className="shrink-0 text-ok" aria-hidden />
+                  : <XCircle size={11} className="shrink-0 text-bad" aria-hidden />}
+                <span className="shrink-0 font-semibold text-paper">{str(r.tool).replace(/_/g, " ")}</span>
+                {detail ? <span className="min-w-0 flex-1 truncate text-dim" title={detail}>{detail}</span> : null}
+              </div>
+            );
+          }
+          // dependency_resolve rows
+          if (r.source !== undefined && r.status !== undefined) {
+            const ok = r.status === "ok";
+            return (
+              <div key={i} className="flex min-w-0 items-center gap-1.5 text-[10.5px]">
+                {ok
+                  ? <Check size={11} className="shrink-0 text-ok" aria-hidden />
+                  : <AlertTriangle size={11} className="shrink-0 text-tungsten" aria-hidden />}
+                <span className="shrink-0 font-mono text-muted">{str(r.source)}</span>
+                <span className="min-w-0 flex-1 truncate text-dim" title={str(r.hint)}>{str(r.hint).slice(0, 100)}</span>
+              </div>
+            );
+          }
+          // generic object: first two scalar fields
+          const fields = Object.entries(r).filter(([, v]) => ["string", "number", "boolean"].includes(typeof v)).slice(0, 2);
+          return (
+            <p key={i} className="truncate text-[10.5px] text-muted">
+              · {fields.map(([k, v]) => `${k}: ${String(v).slice(0, 60)}`).join("  ")}
+            </p>
+          );
+        }
+        return null;
+      })}
+      {items.length > 6 ? <p className="text-[10px] text-dim">+{items.length - 6} more</p> : null}
+    </div>
+  );
+}
+
+function summarizeResult(result: AnyRec | unknown): string {
+  if (!result || typeof result !== "object") return "";
+  const r = result as AnyRec;
+  if (typeof r.note === "string") return r.note.slice(0, 90);
+  if (typeof r.message === "string") return r.message.slice(0, 90);
+  if (Array.isArray(r.beats)) return `${r.beats.length} beats`;
+  if (Array.isArray(r.findings)) return `${r.findings.length} findings`;
+  if (typeof r.version === "number") return "saved";
+  if (r.ok === true) return "done";
+  return "";
+}
+
 function KeyGrid({ output, title }: { output: AnyRec; title: string }) {
   const entries = Object.entries(output)
     .filter(([k, v]) => !/^(ok|version|plan|code|next|beats|findings|errors|warnings)$/.test(k) && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
     .slice(0, 6);
-  if (entries.length === 0) return null;
+  const lists = Object.entries(output)
+    .filter(([, v]) => Array.isArray(v) && (v as unknown[]).length > 0)
+    .slice(0, 3);
+  if (entries.length === 0 && lists.length === 0) return null;
   return (
     <Card>
       <Title icon={<Sparkles size={11} />} text={title} />
-      <dl className="mt-1 space-y-1 border-t border-line/60 px-2.5 py-2">
-        {entries.map(([k, v]) => (
-          <div key={k} className="flex min-w-0 items-baseline gap-2 text-[10.5px]">
-            <dt className="shrink-0 font-bold uppercase tracking-wider text-dim" style={{ fontSize: 9 }}>{k.replace(/([A-Z])/g, " $1").trim()}</dt>
-            <dd className="min-w-0 flex-1 truncate text-muted" title={String(v)}>{String(v).slice(0, 120)}</dd>
+      <div className="mt-1 space-y-1.5 border-t border-line/60 px-2.5 py-2">
+        {lists.map(([k, v]) => (
+          <div key={k}>
+            <p className="mb-0.5 text-[9px] font-bold uppercase tracking-widest text-dim">
+              {k.replace(/([A-Z])/g, " $1").trim()} · {(v as unknown[]).length}
+            </p>
+            <AnyList items={v as unknown[]} />
           </div>
         ))}
-      </dl>
+        {entries.length > 0 ? (
+          <dl className="space-y-1">
+            {entries.map(([k, v]) => (
+              <div key={k} className="flex min-w-0 items-baseline gap-2 text-[10.5px]">
+                <dt className="shrink-0 font-bold uppercase tracking-wider text-dim" style={{ fontSize: 9 }}>{k.replace(/([A-Z])/g, " $1").trim()}</dt>
+                <dd className="min-w-0 flex-1 truncate text-muted" title={String(v)}>{String(v).slice(0, 120)}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+      </div>
     </Card>
   );
 }
@@ -885,7 +966,7 @@ export function ToolVisual({ tool, input, output }: { tool: string; input: AnyRe
         <div className="ml-6 mt-1.5 flex min-w-0 items-center gap-2 overflow-hidden rounded-xl border border-line/70 bg-ink/60 px-2.5 py-2">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-tungsten/15 text-[11px] font-bold text-tungsten" aria-hidden>⊞</span>
           <p className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-paper">{str(input.id, str((output as AnyRec).id, "skill"))}</p>
-          <span className="shrink-0 text-[10px] tabular-nums text-dim">{Math.round(str(output.content).length / 1000)}k refs</span>
+          <span className="shrink-0 text-[10px] tabular-nums text-dim">{Math.round(str(output.content).length / 1000)}k doc</span>
         </div>
       );
     case "get_canvas":

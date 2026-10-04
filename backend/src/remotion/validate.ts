@@ -713,6 +713,33 @@ export function checkComposition(code: string): Check[] {
     }
   }
 
+  // Bare CSS keywords as style values (`display: flex`, `position: absolute`)
+  // are the commonest runtime ReferenceError in generated cuts: they read as
+  // identifiers, not strings. display:/position: values are literals in
+  // practice — a variable named `flex` is never what the model meant.
+  {
+    // Quoted values never match (the char after `:` is `"`), so any match
+    // here is a genuinely bare identifier.
+    for (const m of src.matchAll(/\bdisplay\s*:\s*(flex|block|inline|grid|contents|none)\b/g)) {
+      out.push({
+        level: "error",
+        message:
+          `display: ${m[1]} (line ${lineOf(src, m.index ?? 0)}) is a bare identifier — ` +
+          `at runtime it throws "${m[1]} is not defined". Quote it: display: "${m[1]}".`,
+      })
+      break
+    }
+    for (const m of src.matchAll(/\bposition\s*:\s*(absolute|relative|fixed|sticky)\b/g)) {
+      out.push({
+        level: "error",
+        message:
+          `position: ${m[1]} (line ${lineOf(src, m.index ?? 0)}) is a bare identifier — ` +
+          `at runtime it throws "${m[1]} is not defined". Quote it: position: "${m[1]}".`,
+      })
+      break
+    }
+  }
+
   // <Video> or <Audio> without crossOrigin="anonymous" when src is an http URL
   // causes canvas tainting that breaks any effect that reads pixel data.
   {

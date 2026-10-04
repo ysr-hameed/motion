@@ -68,6 +68,12 @@ const LOADERS: Record<string, () => Promise<{ fontFamily: string; url: string }>
   spaceMono: () => import("@remotion/google-fonts/SpaceMono").then((m) => m.getInfo()),
   bungee: () => import("@remotion/google-fonts/Bungee").then((m) => m.getInfo()),
   righteous: () => import("@remotion/google-fonts/Righteous").then((m) => m.getInfo()),
+  dancingScript: () => import("@remotion/google-fonts/DancingScript").then((m) => m.getInfo()),
+  caveat: () => import("@remotion/google-fonts/Caveat").then((m) => m.getInfo()),
+  pacifico: () => import("@remotion/google-fonts/Pacifico").then((m) => m.getInfo()),
+  greatVibes: () => import("@remotion/google-fonts/GreatVibes").then((m) => m.getInfo()),
+  satisfy: () => import("@remotion/google-fonts/Satisfy").then((m) => m.getInfo()),
+  shadowsIntoLight: () => import("@remotion/google-fonts/ShadowsIntoLight").then((m) => m.getInfo()),
 }
 
 /** Static metadata — no network, no import. Drives the prompt catalogue. */
@@ -95,6 +101,12 @@ const CATALOGUE: Record<string, { role: Face["role"]; note: string }> = {
   spaceMono: { role: "mono", note: "Distinctive mono. Timestamps and telemetry." },
   bungee: { role: "character", note: "Piled block letters. Loud, playful, street." },
   righteous: { role: "character", note: "Rounded geometric. Friendly and retro." },
+  dancingScript: { role: "display", note: "Casual bouncing script. Handwritten headlines, signatures." },
+  caveat: { role: "display", note: "Marker-hand script. Playful annotations, informal titles." },
+  pacifico: { role: "display", note: "Bold retro script. Fun logos, cheerful headlines." },
+  greatVibes: { role: "display", note: "Elegant formal script. Weddings, luxury, invitations." },
+  satisfy: { role: "display", note: "Smooth connected script. Warm, friendly headlines." },
+  shadowsIntoLight: { role: "display", note: "Hand-lettered print. Quirky labels, personal touch." },
 }
 
 const resolved = new Map<string, Face>()
@@ -135,6 +147,12 @@ const FAMILY_TO_KEY: Record<string, string> = {
   "space mono": "spaceMono",
   bungee: "bungee",
   righteous: "righteous",
+  "dancing script": "dancingScript",
+  caveat: "caveat",
+  pacifico: "pacifico",
+  "great vibes": "greatVibes",
+  satisfy: "satisfy",
+  "shadows into light": "shadowsIntoLight",
 }
 
 function makeFace(name: string, role: Face["role"], note: string): Face {
@@ -166,6 +184,12 @@ const FAMILY_NAMES: Record<string, string> = {
   spaceMono: "Space Mono",
   bungee: "Bungee",
   righteous: "Righteous",
+  dancingScript: "Dancing Script",
+  caveat: "Caveat",
+  pacifico: "Pacifico",
+  greatVibes: "Great Vibes",
+  satisfy: "Satisfy",
+  shadowsIntoLight: "Shadows Into Light",
 }
 
 /** `Fonts.anton.family` and friends, populated as faces load. */

@@ -86,7 +86,7 @@ function goldenProductReveal(product: string, headline: string): GoldenStarter {
     '          textAlign: "center",',
     "        }}",
     "      >",
-    "        <div style={{ display: flex, alignItems: center, justifyContent: center, gap: 14 }}>",
+    '        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14 }}>',
     '          <Lucide.Zap size={40} color={ACCENT} />',
     `          <div style={{ fontSize: 84, lineHeight: 1, fontWeight: 800, color: INK }}>${product}</div>`,
     "        </div>",

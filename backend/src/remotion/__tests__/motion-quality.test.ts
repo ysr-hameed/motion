@@ -285,6 +285,15 @@ describe("Golden Starter + Inline Repair (fast path)", () => {
     }
   })
 
+  it("flags bare CSS keywords that would throw at runtime", () => {
+    const bad = wrap(`<div style={{ display: flex, position: absolute }} />`)
+    const msgs = errors(bad).map((e) => e.message)
+    assert.ok(msgs.some((m) => /display: "flex"/.test(m)), `bare display not flagged: ${msgs.join(" | ")}`)
+    assert.ok(msgs.some((m) => /position: "absolute"/.test(m)), `bare position not flagged: ${msgs.join(" | ")}`)
+    const good = wrap(`<div style={{ display: "flex", position: "absolute" }} />`)
+    assert.equal(errors(good).filter((e) => /bare identifier/.test(e.message)).length, 0, "quoted values flagged")
+  })
+
   it("ignores JSX copy and comments in scope checks", () => {
     const code = [
       `import { AbsoluteFill, useCurrentFrame } from "remotion";`,

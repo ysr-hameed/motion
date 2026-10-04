@@ -5,72 +5,46 @@ metadata:
   tags: fonts, google-fonts, typography, text
 ---
 
-# Using fonts in Remotion
+# Using fonts in THIS studio (read before any other font doc)
 
-## Google Fonts with @remotion/google-fonts
+Compositions here run in a browser player scope, not a bundler. That changes
+exactly one thing versus standard Remotion docs: **you never import or load
+a font yourself.** There is no `loadFont`, no `GoogleFonts` global, and no
+`@remotion/google-fonts/<Face>` submodule import — all three throw at mount.
 
-The recommended way to use Google Fonts. It's type-safe and automatically blocks rendering until the font is ready.
+## The only pattern that works
 
-### Prerequisites
-
-First, the @remotion/google-fonts package needs to be installed.
-If it is not installed, use the following command:
-
-```bash
-npx remotion add @remotion/google-fonts # If project uses npm
-bunx remotion add @remotion/google-fonts # If project uses bun
-yarn remotion add @remotion/google-fonts # If project uses yarn
-pnpm exec remotion add @remotion/google-fonts # If project uses pnpm
-```
+`Fonts` is already a global. Reference a face and the studio fetches,
+injects, and waits for it before the first frame:
 
 ```tsx
-import { loadFont } from "@remotion/google-fonts/Lobster";
-
-const { fontFamily } = loadFont();
-
-export const MyComposition = () => {
-  return (
-    <div style={{ fontFamily }}>
-      Hello World
-    </div>
-  );
-};
+// No import. Ever.
+<div style={{ fontFamily: Fonts.dancingScript.family }}>
+  Handwritten headline
+</div>
 ```
 
-Preferrably, specify only needed weights and subsets to reduce file size:
+Available keys (full notes in the `typography` skill):
 
-```tsx
-import { loadFont } from "@remotion/google-fonts/Roboto";
+- display: anton, bebasNeue, archivoBlack, syne, unbounded, bricolage,
+  fraunces, instrumentSerif, bodoni
+- script/cursive: dancingScript, caveat, pacifico, greatVibes, satisfy,
+  shadowsIntoLight
+- editorial: newsreader, crimson, spectral
+- geometric/neutral: spaceGrotesk, chivo, archivo, manrope, outfit,
+  epilogue, publicSans, karla
+- mono: spaceMono
+- character: bungee, righteous
 
-const { fontFamily } = loadFont("normal", {
-  weights: ["400", "700"],
-  subsets: ["latin"],
-});
-```
+If a key you want is missing, the composition still renders in a fallback
+face — say so in the closing sentence instead of inventing a loader.
 
-## Using in components
+## Rules
 
-Call `loadFont()` at the top level of your component or in a separate file that's imported early:
-
-```tsx
-import { loadFont } from "@remotion/google-fonts/Montserrat";
-
-const { fontFamily } = loadFont("normal", {
-  weights: ["400", "700"],
-  subsets: ["latin"],
-});
-
-export const Title: React.FC<{ text: string }> = ({ text }) => {
-  return (
-    <h1
-      style={{
-        fontFamily,
-        fontSize: 80,
-        fontWeight: "bold",
-      }}
-    >
-      {text}
-    </h1>
-  );
-};
-```
+- One display (or script) face + one text face per composition.
+- Never `system-ui`, `sans-serif`, Arial, or Helvetica (validator error).
+- Never `import { loadFont } from "@remotion/google-fonts/..."` — submodule
+  imports are stripped and unresolvable here; the validator rejects them.
+- Never call `loadFont()` — it is not in scope and throws at mount.
+- A literal stack like `fontFamily: '"Caveat", cursive'` also resolves: the
+  studio matches known family names and loads them on demand.

@@ -460,20 +460,13 @@ function Bubble({ message, isLast, busy }: { message: UIMessage; isLast: boolean
   const parts = message.parts as unknown as Part[]
   const isUser = message.role === "user"
 
-  // Render parts in stream order: consecutive reasoning merges into one
-  // Thought, consecutive tool calls group into one activity card, and text
-  // lands where it happened.
+  // Render parts in stream order, with ONE Thought per message: every
+  // reasoning part in the turn accumulates into a single card placed where
+  // the first reasoning appeared. Consecutive tool calls group into one
+  // activity card, and text lands where it happened.
   const nodes: React.ReactNode[] = []
   let thought = ""
-  let thoughtStreaming = false
   let toolRun: React.ReactNode[] = []
-  const flushThought = (nextIsMore: boolean) => {
-    if (thought.trim()) {
-      nodes.push(<Thought key={`th${nodes.length}`} text={thought} streaming={thoughtStreaming && nextIsMore} />)
-      thought = ""
-      thoughtStreaming = false
-    }
-  }
   const flushTools = () => {
     if (toolRun.length > 0) {
       nodes.push(
@@ -485,17 +478,10 @@ function Bubble({ message, isLast, busy }: { message: UIMessage; isLast: boolean
     }
   }
   parts.forEach((p, i) => {
-    const isLastPart = i === parts.length - 1
     if (p.type === "reasoning") {
-      if (typeof p.text === "string") {
-        thought += p.text
-        // Thought is streaming if: this is the last part and the turn is still busy
-        thoughtStreaming = isLastPart && busy
-      }
+      if (typeof p.text === "string") thought += p.text
       return
     }
-    // Flush thought — it's complete if followed by a non-reasoning part
-    flushThought(false)
     if (typeof p.type === "string" && p.type.startsWith("tool-")) {
       toolRun.push(<ToolCall key={`tl${i}`} part={p} />)
     } else if (p.type === "text" && typeof p.text === "string" && p.text) {
@@ -511,9 +497,11 @@ function Bubble({ message, isLast, busy }: { message: UIMessage; isLast: boolean
       )
     }
   })
-  // If the turn ends on a reasoning block it's still streaming
-  flushThought(busy && isLast)
   flushTools()
+  if (thought.trim()) {
+    // Streaming while the turn is still busy on the last message.
+    nodes.unshift(<Thought key="thought" text={thought} streaming={busy && isLast} />)
+  }
 
   return (
     <div className={isUser ? "flex justify-end" : ""}>

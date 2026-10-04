@@ -37,7 +37,8 @@ are what a page uses when nobody chose.
 
 Available faces by role:
 
-- display (statement titles): anton, bebasNeue, archivoBlack, syne, unbounded, bricolage, fraunces, instrumentSerif, bodoni, newsreader
+- display (statement titles): anton, bebasNeue, archivoBlack, syne, unbounded, bricolage, fraunces, instrumentSerif, bodoni
+- script (cursive, handwritten — weddings, signatures, playful titles): dancingScript, caveat, pacifico, greatVibes, satisfy, shadowsIntoLight
 - editorial (longform, quotes): use a display face for the pull line and karla for the attribution
 - geometric (tech with a voice): unbounded, syne, bricolage, spaceGrotesk
 - neutral (labels, UI overlays): karla, archivo, manrope, outfit, chivo
@@ -54,6 +55,8 @@ are invisible. Pick the display face from the brief's mood:
 - tech, futuristic: unbounded, bricolage, spaceGrotesk
 - retail, sport, posters: bebasNeue
 - prestige, serif: newsreader, instrumentSerif
+- romantic, handwritten, signature: dancingScript, greatVibes
+- playful, informal, marker: caveat, pacifico, satisfy, shadowsIntoLight
 
 The model-side validator rejects sizes outside 18-320px and warns on page-default
 stacks. It also enforces the 96px safe margin.
