@@ -80,6 +80,10 @@ function pickPreset(beat: string): { preset: string; easing: string; duration: n
  * carry an id it could get wrong was a reliable source of mistakes.
  */
 export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
+  // Template parity (previouslyUsedSkills): a skill loaded twice in one turn
+  // costs a second paced model call AND duplicates ~3k tokens of context.
+  // The second load short-circuits with a pointer instead.
+  const loadedThisTurn = new Set<string>()
   return {
     load_skill: tool({
       description:
@@ -103,6 +107,15 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         id: z.enum(SKILL_IDS as [string, ...string[]]).describe("The skill id to load."),
       }),
       execute: async ({ id }) => {
+        const key = id.trim().toLowerCase()
+        if (loadedThisTurn.has(key)) {
+          return {
+            id,
+            alreadyLoaded: true,
+            note: "Already loaded this turn — the content is in context above. Use it, do not reload it.",
+          }
+        }
+        loadedThisTurn.add(key)
         const skill = findSkill(id)
         if (!skill) {
           return { error: `Unknown skill "${id}". Available: ${SKILL_IDS.join(", ")}` }

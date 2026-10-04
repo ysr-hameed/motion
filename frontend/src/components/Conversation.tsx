@@ -415,44 +415,101 @@ function Attachments({ parts }: { parts: Part[] }) {
 
 /**
  * One thought — a run of consecutive reasoning parts rendered as a single
- * collapsible. Auto-opens while streaming so the user sees the chain of
- * thought in real time; collapses to a summary once the thought is complete
- * (next tool call or text part landed after it).
+ * unit. While streaming it is a FIXED-HEIGHT single line (tail text only),
+ * so the box never resizes and nothing above or below it shakes. Once done
+ * it collapses to a closed disclosure — the full text is one tap away but
+ * never pushes the conversation around.
  */
 function Thought({ text, streaming }: { text: string; streaming?: boolean }) {
   const trimmed = text.trim()
   if (!trimmed) return null
-  // Fixed-height live tail: the box never resizes while streaming, so the
-  // chat below it stops jumping. Only the text inside moves.
-  const preview = streaming ? trimmed.slice(-320) : ""
+  if (streaming) {
+    const preview = trimmed.slice(-160).replace(/\s+/g, " ")
+    return (
+      <div
+        className="my-2 flex h-7 items-center gap-2 overflow-hidden rounded-full border border-line/80 bg-ink/50 px-3"
+        aria-live="off"
+      >
+        <span className="live-dot h-1.5 w-1.5 shrink-0 rounded-full bg-tungsten" aria-hidden />
+        <span className="shrink-0 text-[11px] font-semibold text-dim">thinking</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-muted/70 italic">
+          {preview}
+          <span className="animate-pulse text-tungsten">▌</span>
+        </span>
+      </div>
+    )
+  }
   return (
-    <details
-      className="group my-2.5 overflow-hidden rounded-2xl border border-line/80 bg-ink/50"
-      open={streaming}
-    >
+    <details className="group my-2 overflow-hidden rounded-2xl border border-line/80 bg-ink/50">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[11px] text-dim transition-colors hover:text-muted">
         <ChevronRight size={12} aria-hidden className="transition-transform group-open:rotate-90" />
-        <span className="">thinking</span>
-        {streaming && (
-          <span className="ml-auto flex items-center gap-1.5  text-[10px] text-tungsten">
-            <span className="live-dot h-1 w-1 rounded-full bg-tungsten" aria-hidden />
-            reasoning
+        <span>thinking</span>
+      </summary>
+      <p className="max-h-56 overflow-y-auto px-2.5 pb-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap text-muted scroll-thin">
+        {trimmed}
+      </p>
+    </details>
+  )
+}
+
+/**
+ * A run of consecutive tool calls collapsed into ONE quiet status row.
+ * The user asked for less noise: they see what is happening right now (or
+ * what finished), not a wall of per-tool internals. Failures stay visible —
+ * a red row with the error — and every row expands to the full per-tool log
+ * on tap for anyone who wants the detail.
+ */
+function ToolGroup({ parts }: { parts: Part[] }) {
+  const failed = parts.some((p) => String(p.state ?? "") === "output-error")
+  const [open, setOpen] = useState(failed)
+  const running = parts.find((p) => {
+    const s = String(p.state ?? "")
+    return s !== "output-available" && s !== "output-error"
+  })
+  const lastDone = [...parts].reverse().find((p) => String(p.state ?? "pending").startsWith("output-"))
+  const label = running ? toolName(running) : lastDone ? toolName(lastDone) : "working"
+  const hint = running ? toolInput(running) : ""
+  const result = !running && lastDone ? toolOutput(lastDone) : null
+
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex h-6 w-full items-center gap-2 text-left text-[11px] leading-5"
+      >
+        <span
+          className={[
+            "h-1.5 w-1.5 shrink-0 rounded-full",
+            failed ? "bg-bad" : running ? "live-dot bg-tungsten" : "bg-ok",
+          ].join(" ")}
+          aria-hidden="true"
+        />
+        <span className={`truncate font-medium ${failed ? "text-bad" : running ? "text-paper" : "text-dim"}`}>
+          {label}
+          {running ? "…" : ""}
+        </span>
+        {hint ? <span className="hidden truncate font-normal text-dim sm:inline" title={hint}>{hint}</span> : null}
+        {result && result.kind === "err" ? (
+          <span className="ml-auto max-w-[50%] shrink-0 truncate rounded-full bg-bad/15 px-2 py-px text-[10px] text-bad" title={result.text}>
+            {result.text}
+          </span>
+        ) : (
+          <span className="ml-auto shrink-0 text-[10px] tabular-nums text-dim">
+            {parts.length} step{parts.length > 1 ? "s" : ""}
           </span>
         )}
-      </summary>
-      {streaming ? (
-        <div className="h-24 overflow-hidden px-2.5 pb-2.5" aria-live="off">
-          <p className="text-[11px] leading-relaxed whitespace-pre-wrap text-muted/70 italic">
-            {preview}
-            <span className="animate-pulse text-tungsten">▌</span>
-          </p>
+        <ChevronDown size={11} aria-hidden className={`shrink-0 text-dim transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <div className="mt-0.5 rounded-xl border border-line/60 bg-ink/40 px-2 py-0.5">
+          {parts.map((p, i) => (
+            <ToolCall key={i} part={p} />
+          ))}
         </div>
-      ) : (
-        <p className="max-h-56 overflow-y-auto px-2.5 pb-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap text-muted scroll-thin">
-          {trimmed}
-        </p>
-      )}
-    </details>
+      ) : null}
+    </div>
   )
 }
 
@@ -461,19 +518,15 @@ function Bubble({ message, isLast, busy }: { message: UIMessage; isLast: boolean
   const isUser = message.role === "user"
 
   // Render parts in stream order, with ONE Thought per message: every
-  // reasoning part in the turn accumulates into a single card placed where
-  // the first reasoning appeared. Consecutive tool calls group into one
-  // activity card, and text lands where it happened.
+  // reasoning part in the turn accumulates into a single pill placed where
+  // the first reasoning appeared. Consecutive tool calls collapse into one
+  // quiet ToolGroup row, and text lands where it happened.
   const nodes: React.ReactNode[] = []
   let thought = ""
-  let toolRun: React.ReactNode[] = []
+  let toolRun: Part[] = []
   const flushTools = () => {
     if (toolRun.length > 0) {
-      nodes.push(
-        <div key={`tr${nodes.length}`} className="my-2.5 rounded-2xl border border-line/80 bg-ink/50 px-3 py-1">
-          {toolRun}
-        </div>
-      )
+      nodes.push(<ToolGroup key={`tr${nodes.length}`} parts={toolRun} />)
       toolRun = []
     }
   }
@@ -483,7 +536,7 @@ function Bubble({ message, isLast, busy }: { message: UIMessage; isLast: boolean
       return
     }
     if (typeof p.type === "string" && p.type.startsWith("tool-")) {
-      toolRun.push(<ToolCall key={`tl${i}`} part={p} />)
+      toolRun.push(p)
     } else if (p.type === "text" && typeof p.text === "string" && p.text) {
       flushTools()
       nodes.push(
@@ -716,6 +769,9 @@ export function Conversation({ chat, sessionId }: Props) {
   // Now: follow only while stuck to the bottom; otherwise show a
   // "jump to latest" pill instead of stealing the scroll.
   const stickToBottom = useRef(true)
+  // Per-token scrollTo fights the user's own scrolling and reads as
+  // shaking — follow at most twice a second while stuck to the bottom.
+  const lastFollow = useRef(0)
 
   const busy = status === "submitted" || status === "streaming"
 
@@ -726,10 +782,12 @@ export function Conversation({ chat, sessionId }: Props) {
   }
 
   useEffect(() => {
-    if (stickToBottom.current) {
+    const now = Date.now()
+    if (stickToBottom.current && now - lastFollow.current > 500) {
+      lastFollow.current = now
       scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
     }
-    lastActivity.current = Date.now()
+    lastActivity.current = now
   }, [messages])
 
   useEffect(() => {
@@ -908,7 +966,7 @@ export function Conversation({ chat, sessionId }: Props) {
         </span>
       </header>
 
-      <div ref={scroller} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5 scroll-thin">
+      <div ref={scroller} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4 md:px-4 scroll-thin">
         {messages.length === 0 && <EmptyBrief />}
         {messages.map((m, i) => (
           <Bubble key={m.id} message={m} isLast={i === messages.length - 1} busy={busy} />
@@ -1094,10 +1152,9 @@ function EmptyBrief() {
 }
 
 /**
- * Live working indicator. Shows:
- * - which tool is currently running (last in-flight tool call)
- * - elapsed seconds (counts up every second; reveals pacing at a glance)
- * - total tool calls so far this turn
+ * Live working indicator. Shows elapsed seconds (counts up every second;
+ * reveals pacing at a glance) plus total tool calls so far this turn.
+ * The WHAT is already on the ToolGroup row — this stays quiet on purpose.
  *
  * Because the 5 rpm gateway limit means ~12s between calls, the elapsed
  * counter makes waiting feel intentional rather than broken.
@@ -1110,21 +1167,15 @@ function Working({ messages, startedAt }: { messages: UIMessage[]; startedAt: nu
     return () => clearInterval(t)
   }, [startedAt])
 
-  // Find the last pending tool call across all messages
-  const currentTool = useMemo(() => {
-    let last: string | null = null
+  // Total tool calls across all messages this turn.
+  const steps = useMemo(() => {
+    let n = 0
     for (const m of messages) {
       for (const p of (m.parts ?? []) as Part[]) {
-        const t = String(p.type ?? "")
-        if (t.startsWith("tool-")) {
-          const state = String(p.state ?? "")
-          if (state !== "output-available" && state !== "output-error") {
-            last = toolName(p)
-          }
-        }
+        if (String(p.type ?? "").startsWith("tool-")) n += 1
       }
     }
-    return last
+    return n
   }, [messages])
 
   const mins = Math.floor(elapsed / 60)
@@ -1135,7 +1186,7 @@ function Working({ messages, startedAt }: { messages: UIMessage[]; startedAt: nu
     <div className="flex items-center gap-2.5 rounded-2xl border border-tungsten/30 bg-tungsten/[0.07] px-4 py-2.5">
       <span className="live-dot h-2 w-2 shrink-0 rounded-full bg-tungsten" aria-hidden="true" />
       <span className="truncate text-xs font-semibold text-paper">
-        {currentTool ? `Running ${currentTool}…` : "Directing…"}
+        Directing{steps > 0 ? ` · ${steps} step${steps > 1 ? "s" : ""}` : ""}…
       </span>
       <span className="ml-auto shrink-0  text-[11px] tabular-nums text-tungsten">{timeStr}</span>
     </div>
