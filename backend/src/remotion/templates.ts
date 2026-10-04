@@ -347,7 +347,7 @@ function buildSplit(t: Tokens, hero: string, headline: string, total: number): G
     "          zIndex: 6,",
     "        }}",
     "      >",
-    `        <div style={{ width: 480, height: 480, borderRadius: "50%", border: "3px solid " + ACCENT + "55", rotate: spin + "deg" }} />`,
+    `        <div style={{ width: 480, height: 480, borderRadius: "50%", border: "3px dashed " + ACCENT + "66", rotate: spin + "deg" }} />`,
     "        <div",
     "          style={{",
     '            position: "absolute",',

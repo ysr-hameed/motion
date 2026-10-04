@@ -24,7 +24,7 @@ export interface IntentSpec {
 
 const GOALS: Array<[RegExp, string]> = [
   [/product|launch|reveal|showcase/i, "Product showcase"],
-  [/ad\b|advert|promo|sale|offer/i, "Social media ad"],
+  [/ad\b|advert|promo|\bsale\b|offer/i, "Social media ad"],
   [/logo/i, "Logo reveal"],
   [/explain|how it works|intro to/i, "Explainer intro"],
   [/tutorial|lesson|course|walkthrough/i, "Tutorial intro"],
@@ -37,7 +37,7 @@ const GOALS: Array<[RegExp, string]> = [
 const TONES: Array<[RegExp, string]> = [
   [/playful|fun|quirky|friendly/i, "playful"],
   [/elegant|luxury|premium|editorial/i, "elegant"],
-  [/bold|loud|sport|sale/i, "bold"],
+  [/bold|loud|sport|\bsale\b/i, "bold"],
   [/tech|saas|developer|data/i, "tech"],
   [/energetic|hype|hype|exciting|punch/i, "energetic"],
 ]

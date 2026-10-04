@@ -65,7 +65,7 @@ export function predictTools(brief: string): Array<{ tool: string; args: Record<
     ? "playful"
     : /elegant|luxury|premium|editorial/i.test(b)
       ? "elegant"
-      : /bold|loud|sport|sale/i.test(b)
+      : /bold|loud|sport|\bsale\b/i.test(b)
         ? "bold"
         : /tech|saas|developer|data/i.test(b)
           ? "tech"
@@ -100,7 +100,7 @@ export function predictTools(brief: string): Array<{ tool: string; args: Record<
   if (/chat|message|whatsapp|imessage|dm\b|comment|conversation|testimonial/i.test(b)) {
     ops.push({ tool: "load_skill", args: { id: "messaging-chat-ui" } })
   }
-  if (/promo|ad\b|ads\b|teaser|launch|social|tiktok|reel|hook|sale/i.test(b)) {
+  if (/promo|ad\b|ads\b|teaser|launch|social|tiktok|reel|hook|\bsale\b/i.test(b)) {
     ops.push({ tool: "load_skill", args: { id: "social-media-formats" } })
   }
   if (/typewriter|cursor|quote|code reveal/i.test(b)) {
