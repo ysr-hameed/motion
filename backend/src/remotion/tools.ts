@@ -2136,8 +2136,11 @@ export function ensureRandomImport(code: string): { code: string; added: boolean
  */
 function applyNakedEasing(code: string): { upgraded: string; count: number } {
   let count = 0
+  // Any option-less interpolate — frame-driven or progress-derived — gets
+  // easing plus both clamps. (interpolateColors never matches: it has no
+  // paren directly after "interpolate".)
   const upgraded = code.replace(
-    /interpolate\(\s*frame\s*,\s*\[[^\]]*\]\s*,\s*\[[^\]]*\]\)/g,
+    /interpolate\(\s*[\w$.]+\s*,\s*\[[^\]]*\]\s*,\s*\[[^\]]*\]\)/g,
     (m) => {
       count += 1
       return `${m.slice(0, -1)}, { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" })`

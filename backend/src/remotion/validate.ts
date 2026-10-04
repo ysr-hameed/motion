@@ -689,24 +689,19 @@ export function checkComposition(code: string): Check[] {
 
   // --- new hard errors from analysis: blank-frame bugs ---------------------
 
-  // interpolate() on opacity/scale without extrapolateRight: "clamp"
-  // causes values to run past their range (opacity goes negative, scale
-  // grows unbounded) after the animation window ends — blank or broken frame.
+  // Every interpolate(…) needs BOTH clamp sides — frame-driven or
+  // progress-derived alike. A call open on the right keeps drifting past its
+  // end value (rotation that never stops, opacity climbing past 1); open on
+  // the left leaks pre-window values into the opening frame. Observed live:
+  // an advanced cut mapping spring-fed progress through seven option-less
+  // interpolates — every one of them visually masked, every one of them
+  // wrong. (interpolateColors is a different function and never matches.)
   {
-    const interpMatches = [...src.matchAll(/interpolate\(\s*frame\s*,\s*\[[^\]]*\]\s*,\s*\[([^\]]*)\]/g)]
+    const interpMatches = [...src.matchAll(/interpolate\(\s*([\w$.]+)\s*,\s*\[[^\]]*\]\s*,\s*\[([^\]]*)\]/g)]
     for (const m of interpMatches) {
-      const outputs = (m[1] ?? "").split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
-      if (outputs.length < 2) continue
-      const min = Math.min(...outputs)
-      const max = Math.max(...outputs)
-      // Only flag when the range is bounded [0,1] or [0,n≤2] — the patterns
-      // that go invisible/garbled when they extrapolate past the boundary.
-      const isBoundedRange = min >= 0 && max <= 2
-      if (!isBoundedRange) continue
       // The context around this call — look for opacity or scale to be sure.
       const ctx = src.slice(Math.max(0, (m.index ?? 0) - 300), (m.index ?? 0) + 200)
       const isOpacityOrScale = /opacity|scale/i.test(ctx)
-      if (!isOpacityOrScale) continue
       // Check if this specific call has an options object with extrapolate.
       // Take the slice just past the output array to the end of the options
       // object. NOTE: never split on ")" — an Easing.bezier(0.16, 1, 0.3, 1)
@@ -718,17 +713,22 @@ export function checkComposition(code: string): Check[] {
       const opts = optsEnd === -1 ? afterOutputs.split(")")[0] ?? "" : afterOutputs.slice(0, optsEnd)
       const hasLeft = /extrapolateLeft\s*:\s*["']clamp["']/.test(opts)
       const hasRight = /extrapolateRight\s*:\s*["']clamp["']/.test(opts)
-      // Both sides are required: a call clamped only on the left keeps
-      // drifting past its end value (rotation that never stops, opacity that
-      // climbs past 1). Observed live on four calls of an advanced cut.
       if (!hasLeft || !hasRight) {
         const near = lineOf(src, m.index ?? 0)
+        const input = m[1] ?? "frame"
+        const outputs = (m[2] ?? "").split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
+        // "After frame N" only makes sense for frame-driven calls; derived
+        // progress has no frame to name.
+        const tail =
+          outputs.length > 0 && isOpacityOrScale && input === "frame"
+            ? ` After frame ${outputs[outputs.length - 1]} the value continues past ${Math.max(...outputs)} — element becomes invisible or oversized.`
+            : ` Past its window the value keeps drifting instead of holding.`
         out.push({
           level: "error",
           message:
-            `interpolate() on opacity/scale at line ${near} is missing a clamp side${!hasLeft && !hasRight ? "s" : !hasLeft ? " (no extrapolateLeft)" : " (no extrapolateRight)"}. ` +
-            `After frame ${outputs[outputs.length - 1]} the value continues past ${max} — ` +
-            `element becomes invisible or oversized. Add BOTH extrapolateLeft: "clamp" and extrapolateRight: "clamp" as the fourth argument.`,
+            `interpolate() at line ${near} is missing a clamp side${!hasLeft && !hasRight ? "s" : !hasLeft ? " (no extrapolateLeft)" : " (no extrapolateRight)"}.` +
+            tail +
+            ` Add BOTH extrapolateLeft: "clamp" and extrapolateRight: "clamp" as the fourth argument.`,
         })
         break // one instance is enough to require a fix; avoid spam
       }
