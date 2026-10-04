@@ -200,23 +200,108 @@ for (const [key, meta] of Object.entries(CATALOGUE)) {
   FONTS[key] = makeFace(FAMILY_NAMES[key] ?? key, meta.role, meta.note)
 }
 
+/**
+ * Any Google Fonts family, no registry ceiling.
+ *
+ * A `Fonts.<key>.family` reference where <key> is not curated is treated as
+ * a CamelCase Google Fonts family name: playfairDisplay → "Playfair Display",
+ * lobsterTwo → "Lobster Two". The face loads straight from the Google Fonts
+ * CSS API — no bundler import, no pre-built chunk — so the agent can reach
+ * for any of the 1,500+ families and it renders in preview and in any
+ * Chromium-based export. A name that does not exist simply never resolves,
+ * and the composition falls back instead of failing to mount.
+ */
+function guessFamily(key: string): string | null {
+  if (!/^[A-Za-z][A-Za-z0-9]{0,39}$/.test(key)) return null
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/(?=[A-Z])|[\s_-]+/)
+    .filter(Boolean)
+  if (words.length === 0) return null
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
+}
+
+/** Stylesheet URL for any family. Charset is whitelisted above — safe to embed. */
+function cssUrl(family: string): string {
+  return `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, "+")}:wght@400;700;900&display=swap`
+}
+
+function fontsApi(): FontFaceSet | null {
+  if (!hasDocument()) return null
+  const doc = document as Document & { fonts?: FontFaceSet }
+  return doc.fonts ?? null
+}
+
+/**
+ * Fetches an uncatalogued family from the Google Fonts CSS API and registers
+ * it. Returns true when the face verified loaded (document.fonts.check),
+ * false for names Google does not serve. Never throws.
+ */
+async function loadDynamicFont(key: string): Promise<boolean> {
+  const family = guessFamily(key)
+  if (!family || !/^[A-Za-z0-9 ]{1,40}$/.test(family)) return false
+  try {
+    const face: Face = {
+      family,
+      role: "display",
+      note: "Custom Google Font — any family works via Fonts.<CamelCase>.family.",
+      href: cssUrl(family),
+    }
+    inject(face)
+    const api = fontsApi()
+    if (!api) return false
+    await Promise.all([
+      api.load(`400 24px "${family}"`).catch(() => undefined),
+      api.load(`700 24px "${family}"`).catch(() => undefined),
+    ])
+    let ok = false
+    try {
+      ok = api.check(`400 24px "${family}"`) || api.check(`700 24px "${family}"`)
+    } catch {
+      ok = false
+    }
+    if (ok) {
+      FONTS[key] = face
+      resolved.set(family, face)
+    }
+    return ok
+  } catch {
+    return false
+  }
+}
+
 /** Loads the faces a source cites and registers them under `FONTS`. */
 export async function loadFontsFor(source: string): Promise<string[]> {
   const keys = new Set<string>()
   for (const m of source.matchAll(/Fonts\.(\w+)\.family/g)) {
-    if (CATALOGUE[m[1]!]) keys.add(m[1]!)
+    keys.add(m[1]!)
   }
   if (keys.size === 0) return []
   const wanted = [...keys]
+  // Pre-populate synchronously so `Fonts.<anything>.family` never throws at
+  // evaluation time — the async load below swaps in the real stylesheet.
+  for (const key of wanted) {
+    if (!FONTS[key]) {
+      FONTS[key] = makeFace(
+        CATALOGUE[key] ? (FAMILY_NAMES[key] ?? key) : (guessFamily(key) ?? key),
+        CATALOGUE[key]?.role ?? "display",
+        CATALOGUE[key]?.note ?? "Custom Google Font — any family works."
+      )
+    }
+  }
   await Promise.all(
     wanted.map(async (key) => {
-      try {
-        const info = await LOADERS[key]!()
-        FONTS[key] = { family: info.fontFamily, role: CATALOGUE[key]!.role, note: CATALOGUE[key]!.note, href: info.url }
-        resolved.set(info.fontFamily, FONTS[key]!)
-      } catch {
-        // Leave the placeholder. The composition still renders, in a
-        // fallback face, rather than failing to mount at all.
+      if (CATALOGUE[key]) {
+        try {
+          const info = await LOADERS[key]!()
+          FONTS[key] = { family: info.fontFamily, role: CATALOGUE[key]!.role, note: CATALOGUE[key]!.note, href: info.url }
+          resolved.set(info.fontFamily, FONTS[key]!)
+        } catch {
+          // Leave the placeholder. The composition still renders, in a
+          // fallback face, rather than failing to mount at all.
+        }
+      } else {
+        await loadDynamicFont(key)
       }
     })
   )
@@ -247,21 +332,23 @@ function inject(f: Face): void {
  * Makes sure every face a composition referenced is loaded before the
  * first frame is captured.
  *
- * A cut that uses two faces costs two requests rather than twenty-three.
- * Unknown family names are ignored — they may be system fonts, and waiting
- * on a stylesheet that was never linked would hang the render.
+ * A cut that uses two faces costs two requests. Curated faces load from the
+ * pre-built registry; anything else — a `Fonts.<CamelCase>` key or a
+ * literal family name — is fetched from the Google Fonts CSS API on demand
+ * and verified with document.fonts.check. Names Google does not serve fall
+ * back instead of hanging the render.
  */
 export async function ensureFontsLoaded(source: string): Promise<void> {
   await loadFontsFor(source)
 
   const families = new Set<string>()
   for (const m of source.matchAll(/Fonts\.(\w+)\.family/g)) {
-    if (CATALOGUE[m[1]!]) families.add(FONTS[m[1]!]!.family)
+    families.add(FONTS[m[1]!]!.family)
   }
-  // Literal stacks — `fontFamily: '"Unbounded", system-ui, sans-serif'`.
-  // These never mention the registry, so the old code skipped them and
-  // the composition silently rendered in a fallback face. Each known
-  // family is loaded on demand exactly like a registry reference.
+  // Literal stacks — `fontFamily: '"Unbounded", system-ui, sans-serif'` or
+  // a bare `"Playfair Display"`. Known families load from the catalogue;
+  // anything else is tried against the Google Fonts CSS API, so a literal
+  // family name the agent invented still resolves instead of falling back.
   for (const m of source.matchAll(/fontFamily:\s*["'`]([^"'`]+)["'`]/g)) {
     for (const raw of m[1]!.split(",")) {
       const name = raw.trim().replace(/^['"]+|['"]+$/g, "")
@@ -291,6 +378,17 @@ export async function ensureFontsLoaded(source: string): Promise<void> {
           // Leave it out — the composition renders in a fallback face
           // rather than failing to mount at all.
         }
+      } else if (/^[A-Za-z0-9 \-']{1,40}$/.test(name)) {
+        // Unknown literal family — straight to the CSS API.
+        const face: Face = {
+          family: name,
+          role: "display",
+          note: "Custom Google Font — any family works.",
+          href: cssUrl(name),
+        }
+        inject(face)
+        resolved.set(name, face)
+        families.add(name)
       }
     }
   }

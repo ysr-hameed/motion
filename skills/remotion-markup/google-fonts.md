@@ -24,7 +24,7 @@ injects, and waits for it before the first frame:
 </div>
 ```
 
-Available keys (full notes in the `typography` skill):
+Curated keys (full notes in the `typography` skill):
 
 - display: anton, bebasNeue, archivoBlack, syne, unbounded, bricolage,
   fraunces, instrumentSerif, bodoni
@@ -36,13 +36,28 @@ Available keys (full notes in the `typography` skill):
 - mono: spaceMono
 - character: bungee, righteous
 
-If a key you want is missing, the composition still renders in a fallback
-face — say so in the closing sentence instead of inventing a loader.
+## Any other Google Fonts family
+
+The curated list is a shortcut, not a ceiling. ANY of the 1,500+ Google
+Fonts families works the same way — CamelCase the family name into a key:
+
+```tsx
+// Playfair Display, Lobster Two, Alfa Slab One — all fine, no import.
+<div style={{ fontFamily: Fonts.playfairDisplay.family }}>…</div>
+<div style={{ fontFamily: Fonts.lobsterTwo.family }}>…</div>
+```
+
+A literal family name works too: `fontFamily: "Playfair Display"`. The
+studio fetches the stylesheet and waits for the face before the first
+frame, in preview and in export. If Google does not serve the name, the
+text falls back instead of failing — say so in the closing sentence.
 
 ## Rules
 
 - One display (or script) face + one text face per composition.
 - Never `system-ui`, `sans-serif`, Arial, or Helvetica (validator error).
+- Never Inter or Roboto unless the user explicitly names them (validator
+  error) — a creative brief deserves a deliberate face.
 - Never `import { loadFont } from "@remotion/google-fonts/..."` — submodule
   imports are stripped and unresolvable here; the validator rejects them.
 - Never call `loadFont()` — it is not in scope and throws at mount.

@@ -305,6 +305,26 @@ export function checkComposition(code: string): Check[] {
         message: `fontFamily "${stack}" (line ${lineOf(src, m.index ?? 0)}) is a browser page default — it is never a deliberate choice in a motion composition and reads as unfinished. Replace it with Fonts.<name>.family (e.g. Fonts.unbounded.family for modern, Fonts.bricolage.family for playful). Run load_skill("typography") for the full catalogue.`,
       })
     }
+    // Inter and Roboto are the "nobody chose" defaults of generated UI — the
+    // brief asks for creative type, so reaching for them unasked reads as
+    // unfinished. Name them only when the user explicitly asks for them.
+    if (/^(Inter|Roboto)(\s*,|$)/i.test(stack)) {
+      out.push({
+        level: "error",
+        message: `fontFamily "${stack}" (line ${lineOf(src, m.index ?? 0)}) defaults to Inter/Roboto — pick a deliberate Google Fonts face instead (Fonts.<CamelCase>.family, any family works). Use Inter or Roboto only when the user explicitly names them.`,
+      })
+    }
+  }
+
+  // The dynamic loader serves ANY Google Fonts family, including the default
+  // faces — so the Fonts.* path gets the same no-Inter/Roboto rule, not a
+  // silent pass. (These are unquoted references, checked outside the string loop.)
+  for (const m of src.matchAll(/fontFamily:\s*Fonts\.(inter|roboto)\.family\b/gi)) {
+    out.push({
+      level: "error",
+      message: `Fonts.${m[1]} (line ${lineOf(src, m.index ?? 0)}) is a default face — pick a deliberate Google Fonts family instead (any Fonts.<CamelCase>.family works). Use Inter or Roboto only when the user explicitly names them.`,
+    })
+    break
   }
 
   // Absolute positions near the frame edge get cropped by most encoders.

@@ -676,7 +676,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         // Bug fix (Issue 8): previous code used a single .exec() + replace on m[0],
         // so only the first occurrence was fixed.
         {
-          const fontRe = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica)["']/gi
+          const fontRe = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica|Inter|Roboto)["']/gi
           const matches = [...code.matchAll(fontRe)]
           if (matches.length > 0) {
             const face = DISPLAY_FACES[0]
@@ -1629,7 +1629,7 @@ export function autoRepairInline(code: string): { code: string; applied: string[
   // Page-default fontFamily → Fonts.*. Mechanical and always right: a literal
   // "Arial"/"system-ui" stack is never a deliberate motion choice.
   {
-    const fontRe = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica)["']/gi
+    const fontRe = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica|Inter|Roboto)["']/gi
     const matches = [...next.matchAll(fontRe)]
     if (matches.length > 0) {
       const face = DISPLAY_FACES[0]

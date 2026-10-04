@@ -342,12 +342,19 @@ caption ${TYPE_SCALE.caption[0]}-${TYPE_SCALE.caption[1]}px, kicker ${TYPE_SCALE
 Nothing under ${MIN_FONT}px or over ${MAX_FONT}px. Display lineHeight 0.95-1.05, body 1.3-1.5.
 Keep elements ≥${SAFE_MARGIN}px from frame edge.
 
-FONT PAIRING: modern→unbounded+manrope, bold→anton+archivo, playful→bricolage+karla,
-editorial→syne+newsreader, elegant→instrumentSerif+newsreader, fashion→fraunces+karla,
-futuristic→spaceGrotesk+spaceMono, poster→bebasNeue+outfit.
+FONTS — ANY Google Fonts family works, not just the curated list. Write
+Fonts.<CamelCaseOfFamilyName>.family (Fonts.playfairDisplay.family,
+Fonts.lobsterTwo.family) or a literal "Playfair Display" — the studio
+fetches and waits for it automatically. Curated starting points:
 display: ${DISPLAY_FACES.join(", ")}
 text/UI: ${TEXT_FACES.join(", ")}
-One display + one text face per composition. Never two display faces.
+Pairings: modern→unbounded+manrope, bold→anton+archivo, playful→bricolage+karla,
+editorial→syne+newsreader, elegant→instrumentSerif+newsreader, fashion→fraunces+karla,
+futuristic→spaceGrotesk+spaceMono, poster→bebasNeue+outfit, romantic→dancingScript or
+greatVibes, marker→caveat or pacifico.
+One display (or script) + one text face per composition. Never two display faces.
+NEVER Inter or Roboto unless the user explicitly names them — pick something
+with character. Never system-ui/sans-serif/Arial/Helvetica (validator error).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ASSETS & Z-INDEX
