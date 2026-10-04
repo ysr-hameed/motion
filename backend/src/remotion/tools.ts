@@ -1690,6 +1690,17 @@ export function autoRepairInline(code: string): { code: string; applied: string[
     next = naked.upgraded
     applied.push(`${naked.count}x linear interpolate → Easing.bezier + clamp`)
   }
+
+  // Misspelled extrapolate keys are silently ignored by Remotion (the call
+  // then runs past its range). Mechanical fix, always right: "extraplate" is
+  // never a legitimate identifier.
+  {
+    const matches = [...next.matchAll(/\bextraplate(\w*)/g)]
+    if (matches.length > 0) {
+      next = next.replace(/\bextraplate(\w*)/g, "extrapolate$1")
+      applied.push(`extraplate → extrapolate typo (${matches.length}x)`)
+    }
+  }
   const easing = ensureEasingImport(next)
   if (easing.added) {
     next = easing.code

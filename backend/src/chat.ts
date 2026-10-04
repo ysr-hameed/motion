@@ -525,6 +525,47 @@ function chatCodeDumped(steps: readonly unknown[]): boolean {
   return false
 }
 
+/**
+ * Pending render reports since the last code change. Each read already waits
+ * ~24s for the browser; looping preview→read→preview→read on an unchanged
+ * cut burns paced model calls (~12s each) for nothing — observed live as
+ * three identical pending rounds before the turn closed. After two, the turn
+ * must end with the honest unconfirmed sentence instead of a third loop.
+ * Defensive: any doubt returns 0 and the turn flows as before.
+ */
+function pendingReadsSinceChange(
+  steps: readonly {
+    toolCalls?: readonly { toolName?: string }[]
+    toolResults?: readonly { toolName?: string; output?: unknown }[]
+  }[],
+): number {
+  try {
+    let pending = 0
+    for (const step of steps) {
+      for (const call of step.toolCalls ?? []) {
+        if (
+          call?.toolName === "write_composition" ||
+          call?.toolName === "edit_file" ||
+          call?.toolName === "bulk_edit" ||
+          call?.toolName === "quick_start"
+        ) {
+          pending = 0
+        }
+      }
+      for (const r of step.toolResults ?? []) {
+        if (r?.toolName === "read_render_report") {
+          const status = (r.output as { status?: unknown } | null)?.status
+          if (status === "pending") pending += 1
+          else pending = 0
+        }
+      }
+    }
+    return pending
+  } catch {
+    return 0
+  }
+}
+
 export class Chat extends AIChatAgent<Env, ChatState> {
   maxPersistedMessages = 500
   initialState: ChatState = {}
@@ -934,6 +975,9 @@ export class Chat extends AIChatAgent<Env, ChatState> {
           return { toolChoice: { type: "tool", toolName: "read_render_report" } }
         }
         if (read === "verified") return { toolChoice: "none" }
+        if (read === "pending" && pendingReadsSinceChange(steps) >= 2) {
+          return { toolChoice: "none" }
+        }
         return { toolChoice: "auto" }
       },
       // A rate limit answers "Retry after 40s"; the paced fetch already waits

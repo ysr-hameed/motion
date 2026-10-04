@@ -675,6 +675,24 @@ export function checkComposition(code: string): Check[] {
     }
   }
 
+  // Misspelled extrapolate keys (extraplateRight, or bare `extrapolate:` with
+  // no side) are silently ignored by Remotion — the call then extrapolates
+  // past its range. Found live in a model-generated cut (extraplateRight on a
+  // container opacity); the clamp check above passed because the sibling key
+  // was spelled right.
+  {
+    for (const m of src.matchAll(/\bextraplate\w*|(?<![\w$])extrapolate\s*:/gi)) {
+      const near = lineOf(src, m.index ?? 0)
+      out.push({
+        level: "error",
+        message:
+          `Unknown interpolate() option "${m[0]}" at line ${near} — Remotion ignores it, ` +
+          `so this call extrapolates past its range. Use extrapolateLeft: "clamp" and extrapolateRight: "clamp".`,
+      })
+      break // one instance is enough; avoid spam
+    }
+  }
+
   // spring() without both frame and fps produces NaN — blank frame.
   // The only safe form is spring({ frame: ..., fps: ..., config: ... }).
   {
