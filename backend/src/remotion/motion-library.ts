@@ -340,6 +340,43 @@ export function presetSnippet(id: MotionPresetId, startFrame: number): string {
   return lines.join("\n")
 }
 
+/**
+ * Keyframe sequence: the motion-graphic workhorse. A single A→B
+ * interpolate reads as a slide; three or more stops with explicit easings
+ * read as choreography (anticipation → action → overshoot → settle).
+ * Emits a ready-to-paste multi-stop interpolate: copy it, never hand-roll
+ * timing values.
+ *
+ * Example: keyframeSnippet("scale", [15, 30, 60], [0.94, 1.08, 1])
+ * gives compress → overshoot → land across frames 15→60.
+ */
+export function keyframeSnippet(
+  prop: string,
+  frames: number[],
+  values: number[],
+  easings?: string[]
+): string {
+  const n = Math.min(frames.length, values.length)
+  const f = frames.slice(0, n)
+  const v = values.slice(0, n)
+  // Per-segment easings: interpolate() takes an array of n-1 easings, one
+  // per segment. Anticipation compresses in, action eases out, settle lands.
+  const segs: string[] = []
+  for (let i = 0; i < n - 1; i++) {
+    segs.push(easings?.[i] ?? (i === 0 ? "Easing.bezier(0.4, 0, 1, 1)" : "Easing.bezier(0.16, 1, 0.3, 1)"))
+  }
+  const lines = [
+    `// keyframes: ${prop} across ${n} stops (frames ${f[0]}→${f[n - 1]})`,
+    `const ${prop}Keys = interpolate(frame, [${f.join(", ")}], [${v.join(", ")}], {`,
+    `  easing: [${segs.join(", ")}],`,
+    `  extrapolateLeft: "clamp",`,
+    `  extrapolateRight: "clamp",`,
+    ...(prop === "scale" ? [`  output: "perceptual-scale",`] : []),
+    `});`,
+  ]
+  return lines.join("\n")
+}
+
 export interface SpringConfig {
   damping: number
   mass: number
@@ -396,17 +433,35 @@ export const MotionPatterns = {
 
 export type MotionPatternId = keyof typeof MotionPatterns
 
-export type TextAnimationStyle = "charByChar" | "wordByWord" | "maskReveal"
+export type TextAnimationStyle = "charByChar" | "wordByWord" | "maskReveal" | "counter"
 
 /**
  * Ready-to-paste text animation for a headline. Staggers are baked in
  * (2f per character, 5f per word) so the model does not hand-roll timing.
+ * "counter" is the Stargazer mechanic: an odometer that eases 0→N with a
+ * spring overshoot on arrival — stats, milestones, subscriber counts.
  */
 export function textAnimationSnippet(
   style: TextAnimationStyle,
   text: string,
   startFrame: number
 ): string {
+  if (style === "counter") {
+    const target = Math.max(1, Math.round(Number(text.replace(/[^0-9.]/g, "")) || 1000))
+    const end = startFrame + 60
+    return [
+      `// counter: 0 → ${target.toLocaleString("en-US")} over frames ${startFrame}→${end} (Stargazer mechanic)`,
+      `const countRaw = interpolate(frame, [${startFrame}, ${end}], [0, ${target}], {`,
+      `  easing: Easing.bezier(0.16, 1, 0.3, 1),`,
+      `  extrapolateLeft: "clamp",`,
+      `  extrapolateRight: "clamp",`,
+      `});`,
+      `const countSettle = spring({ frame: frame - ${end}, fps: 30, config: { damping: 12, mass: 1, stiffness: 120 } });`,
+      `const countShown = Math.round(countRaw * (frame < ${end} ? 1 : Math.min(1.04, 1 + countSettle * 0.04)));`,
+      `// Render: <span>{countShown.toLocaleString("en-US")}</span> — tabular-nums via fontVariantNumeric: "tabular-nums" so digits don't jitter.`,
+      `// Pair with a scale punch on arrival: scale: String(1 + Math.max(0, countSettle) * 0.08) for the 10 frames after ${end}.`,
+    ].join("\n")
+  }
   const safe = text.replace(/`/g, "'").slice(0, 120)
   const literal = JSON.stringify(safe)
   if (style === "wordByWord") {

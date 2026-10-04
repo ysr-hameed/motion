@@ -4,6 +4,7 @@ import type { PlayerRef } from "@remotion/player"
 import type { CompileError } from "~/remotion-code/compile"
 import { agentUrl, CANVAS, type MotionPlan } from "~/lib/composition"
 import { measureStage } from "~/lib/layout-audit"
+import { FONTS } from "~/remotion-code/fonts"
 
 const { width, height, fps } = CANVAS
 
@@ -39,6 +40,38 @@ export function warmCompileChunk(onStale: () => void): void {
       if (isChunkLoadError(err)) onStale()
     },
   )
+}
+
+/**
+ * Font load truth for the cited families: loaded vs silent fallback.
+ * Family names come from the same FONTS registry the loader populates —
+ * no guessing — and document.fonts.check is the verdict. Reported on the
+ * layout audit so the agent stops claiming a font change worked from an
+ * edit alone.
+ */
+function fontStatuses(code: string): Array<{ family: string; ok: boolean }> {
+  try {
+    const keys = new Set<string>()
+    for (const m of code.matchAll(/Fonts\.(\w+)\.family/g)) keys.add(m[1]!)
+    if (keys.size === 0) return []
+    const doc = document as Document & { fonts?: FontFaceSet }
+    const api = doc.fonts
+    if (!api || typeof api.check !== "function") return []
+    const out: Array<{ family: string; ok: boolean }> = []
+    for (const key of [...keys].slice(0, 8)) {
+      const family = FONTS[key]?.family ?? key
+      let ok = false
+      try {
+        ok = api.check(`700 32px "${family}"`) || api.check(`400 32px "${family}"`)
+      } catch {
+        ok = false
+      }
+      out.push({ family, ok })
+    }
+    return out
+  } catch {
+    return []
+  }
 }
 
 interface Props {
@@ -215,7 +248,10 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
   // pause), measure what is actually on screen and report findings. Measuring
   // never disturbs playback — it only reads the mounted DOM. The report
   // posts even with zero findings: that empty layout report is the
-  // mount-proof the agent's read_render_report waits for.
+  // mount-proof the agent's read_render_report waits for. Font truth rides
+  // along: every Fonts.* family the code cited is checked against
+  // document.fonts, so a silently-fallen-back face shows up as ok:false
+  // instead of the agent claiming a font change worked from an edit alone.
   useEffect(() => {
     if (state.kind !== "ready") return undefined
     const t = setTimeout(() => {
@@ -227,6 +263,7 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
           phase: "layout",
           frame,
           findings: report?.findings ?? [],
+          fonts: fontStatuses(code),
           message: `rendered ${version === 0 ? "" : `v${version} `}at frame ${frame} — ${width}x${height}@${fps}`,
         })
       } catch {

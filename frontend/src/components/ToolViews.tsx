@@ -23,8 +23,11 @@ const num = (v: unknown, fb = 0) => (typeof v === "number" && Number.isFinite(v)
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 
 function Card({ children, tone = "" }: { children: React.ReactNode; tone?: string }) {
+  // Flush-left: the old ml-6 pushed every tool visual 24px right inside an
+  // already-narrow panel, so content read cramped. Hierarchy comes from the
+  // status rail + title row, not indentation.
   return (
-    <div className={`ml-6 mt-1.5 min-w-0 overflow-hidden rounded-xl border border-line/70 bg-ink/60 ${tone}`}>
+    <div className={`mt-1.5 min-w-0 overflow-hidden rounded-xl border border-line/70 bg-ink/60 ${tone}`}>
       {children}
     </div>
   );
@@ -182,18 +185,42 @@ function DiffView({ input, output }: { input: AnyRec; output: AnyRec }) {
           const find = str(op.find);
           const replace = str(op.replace);
           const missed = failedFinds.has(find.slice(0, 80));
+          // Show the first DIFFERING line, not the first line: ops whose
+          // head lines match (indentation-only context) used to render
+          // identical red/green rows, reading as "both show the same code".
+          const findLines = find.split("\n");
+          const replaceLines = replace.split("\n");
+          let diffAt = 0;
+          while (
+            diffAt < Math.min(findLines.length, replaceLines.length) &&
+            findLines[diffAt] === replaceLines[diffAt]
+          ) {
+            diffAt++;
+          }
+          const noChange = find === replace;
+          const beforeLine = findLines[Math.min(diffAt, findLines.length - 1)] ?? "";
+          const afterLine = replaceLines[Math.min(diffAt, replaceLines.length - 1)] ?? "";
+          const lineNo = diffAt + 1;
           return (
             <div key={i} className="overflow-hidden rounded-lg border border-line/60">
-              <div className={`flex items-center gap-1 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider ${missed ? "bg-bad/10 text-bad" : "bg-white/[0.03] text-dim"}`}>
-                {missed ? <XCircle size={10} aria-hidden /> : <Check size={10} aria-hidden className="text-ok" />}
-                op {i + 1}{op.all ? " · all occurrences" : ""}
+              <div className={`flex items-center gap-1 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider ${missed || noChange ? "bg-bad/10 text-bad" : "bg-white/[0.03] text-dim"}`}>
+                {missed || noChange ? <XCircle size={10} aria-hidden /> : <Check size={10} aria-hidden className="text-ok" />}
+                op {i + 1}{op.all ? " · all occurrences" : ""}{noChange ? " · no change" : ` · line ${lineNo}`}
               </div>
-              <pre className="scroll-thin overflow-x-auto bg-bad/[0.07] px-2 py-1 font-mono text-[10px] leading-relaxed text-bad/90">
-                <code>- {find.split("\n")[0]?.slice(0, 90)}{find.includes("\n") ? " ⏎" : ""}</code>
-              </pre>
-              <pre className="scroll-thin overflow-x-auto bg-ok/[0.07] px-2 py-1 font-mono text-[10px] leading-relaxed text-ok/90">
-                <code>+ {replace ? `${replace.split("\n")[0]?.slice(0, 90)}${replace.includes("\n") ? " ⏎" : ""}` : "(deleted)"}</code>
-              </pre>
+              {noChange ? (
+                <pre className="scroll-thin overflow-x-auto bg-bad/[0.07] px-2 py-1 font-mono text-[10px] leading-relaxed text-bad/90">
+                  <code>= identical — this op changes nothing and was refused</code>
+                </pre>
+              ) : (
+                <>
+                  <pre className="scroll-thin overflow-x-auto bg-bad/[0.07] px-2 py-1 font-mono text-[10px] leading-relaxed text-bad/90">
+                    <code>- {beforeLine.slice(0, 90)}{findLines.length > 1 ? ` ⏎ L${lineNo}` : ""}</code>
+                  </pre>
+                  <pre className="scroll-thin overflow-x-auto bg-ok/[0.07] px-2 py-1 font-mono text-[10px] leading-relaxed text-ok/90">
+                    <code>+ {replace ? `${afterLine.slice(0, 90)}${replaceLines.length > 1 ? ` ⏎ L${lineNo}` : ""}` : "(deleted)"}</code>
+                  </pre>
+                </>
+              )}
             </div>
           );
         })}

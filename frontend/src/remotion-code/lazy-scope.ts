@@ -123,13 +123,32 @@ export const OPTIONAL: Optional[] = [
     apply: (m) => m,
   },
   {
-    match: /from\s*["']@remotion\/captions["']|createTikTokStyleCaptions|parseSrt|serializeSrt/,
+    match: /from\s*["']@remotion\/captions["']|<Caption\b|createTikTokStyleCaptions|parseSrt|serializeSrt/,
     load: () => import("@remotion/captions").then((m) => ({ ...m })),
+    // NOTE: Caption itself must be registered — the package was allowed by
+    // the validator and lazy-loaded here, but only the helpers were folded
+    // into scope, so every <Caption> threw ReferenceError at mount.
     apply: (m) => ({
+      Caption: m.Caption,
       createTikTokStyleCaptions: m.createTikTokStyleCaptions,
       parseSrt: m.parseSrt,
       serializeSrt: m.serializeSrt,
     }),
+  },
+  {
+    // Real 3D (the Remotion "3D" template): declarative ThreeCanvas driven
+    // by useCurrentFrame — useFrame() is forbidden in Remotion (flicker).
+    // WebGL pays only when a cut cites it.
+    match: /from\s*["']@remotion\/three["']|<ThreeCanvas\b/,
+    load: () => import("@remotion/three").then((m) => ({ ...m })),
+    apply: (m) => ({ ThreeCanvas: m.ThreeCanvas }),
+  },
+  {
+    // Audiogram / music-visualization templates: FFT + waveform helpers.
+    // Pure functions/hooks — no heavy chunk, but lazy like the rest.
+    match: /from\s*["']@remotion\/media-utils["']|visualizeAudio|useAudioData|createSmoothSvgPath|getAudioData/,
+    load: () => import("@remotion/media-utils").then((m) => ({ ...m })),
+    apply: (m) => ({ ...m }),
   },
 ]
 

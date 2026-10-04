@@ -40,26 +40,34 @@ export interface CompiledComposition {
  * and multi-line specifier lists.
  */
 export function stripImports(source: string): string {
-  // Not line-anchored: a model can put `import {X} from "y"; const C = …`
-  // on one line, and an anchored pattern would leave the import in and
-  // the file would not parse. The lookbehind stops `myimport` matching.
-  // A dynamic `import("x")` has no `from` clause, so it is left alone.
-  const WORD = "(?<![$\\w.])"
+  // `import`/`export...from` match ONLY at statement starts (line start or
+  // after `;`/`}`): the old lookbehind let the bare-import pattern match the
+  // tail of a string literal — `"t":"import"` + its closing quote — eating
+  // one `"` out of code data and breaking every terminal cut at the LINES
+  // array with `Unexpected token, expected ","`. Statement-anchoring kills
+  // the whole class: string content can never start a statement. A model
+  // can still put `import {X} from "y"; const C = …` on one line (the `;`
+  // boundary covers it); `myimport`/`obj.import` never match; a dynamic
+  // `import("x")` has no `from` clause and no quote right after `import `,
+  // so it is left alone. Boundary chars are restored via $1 so line numbers
+  // (and braces) survive the strip.
+  const START = "(^|[;}\\n])[ \\t]*"
+  const flags = "gm"
   return source
     // import ... from "x"  (specifier list may span lines)
     .replace(
-      new RegExp(`${WORD}import\\s+(?:type\\s+)?[\\s\\S]*?\\s+from\\s*["'][^"']+["'];?`, "g"),
-      ""
+      new RegExp(`${START}import\\s+(?:type\\s+)?[\\s\\S]*?\\s+from\\s*["'][^"']+["'];?`, flags),
+      "$1"
     )
     // bare `import "x"` (side-effect only)
-    .replace(new RegExp(`${WORD}import\\s*["'][^"']+["'];?`, "g"), "")
+    .replace(new RegExp(`${START}import\\s*["'][^"']+["'];?`, flags), "$1")
     // export ... from "x"  (re-export — nothing to keep)
     .replace(
       new RegExp(
-        `${WORD}export\\s+(?:type\\s+)?(?:\\*|\\{[\\s\\S]*?\\})\\s+from\\s*["'][^"']+["'];?`,
-        "g"
+        `${START}export\\s+(?:type\\s+)?(?:\\*|\\{[\\s\\S]*?\\})\\s+from\\s*["'][^"']+["'];?`,
+        flags
       ),
-      ""
+      "$1"
     )
 }
 

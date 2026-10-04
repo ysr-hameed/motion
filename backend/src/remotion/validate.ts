@@ -90,6 +90,10 @@ const PROVIDED_PACKAGES = [
   "@remotion/lottie",
   "@remotion/captions",
   "@remotion/media",
+  "@remotion/media-utils",
+  "@remotion/three",
+  "three",
+  "@react-three/fiber",
   "@remotion/fonts",
   "@remotion/google-fonts",
   "lucide-react",
@@ -128,14 +132,95 @@ const LANGUAGE_GLOBALS = new Set([
  * composition with real copy as "not in the player scope" and rejected
  * files that render fine, including hand-written ones.
  */
+/**
+ * Comments + string literals blanked (length-preserving). Quote-aware: a
+ * quote opens a string only when it is NOT a mid-word apostrophe (`DON'T`,
+ * `it's`) — otherwise the apostrophe opens a phantom string that swallows
+ * real code up to the next quote (observed live: fake unbalanced-bracket +
+ * phantom-identifier errors on starters that parse fine). Anything else
+ * (including `case 'z':`) goes through consumption that stops at the
+ * newline, so a stray quote can never cascade. Backticks keep the legacy
+ * pattern: template literals with ${} nesting are vanishingly rare in cuts.
+ */
+function stripStrings(src: string): string {
+  // Single-pass scanner: comments and strings are recognised together so a
+  // `//` inside a string literal (e.g. a `"// comment"` token in code data)
+  // is never mistaken for a line comment — the old comment-first ordering
+  // ate the rest of such lines and faked bracket imbalances.
+  const isWord = (c: string) => /[\w$]/.test(c)
+  let out = ""
+  let i = 0
+  const n = src.length
+  while (i < n) {
+    const ch = src[i]!
+    const next = i + 1 < n ? src[i + 1]! : ""
+    if (ch === "/" && next === "/") {
+      let k = i
+      while (k < n && src[k] !== "\n") k++
+      out += " ".repeat(k - i)
+      i = k
+      continue
+    }
+    if (ch === "/" && next === "*") {
+      const end = src.indexOf("*/", i + 2)
+      const k = end === -1 ? n : end + 2
+      out += src.slice(i, k).replace(/[^\n]/g, " ")
+      i = k
+      continue
+    }
+    if (ch === "`") {
+      // Legacy: no ${} nesting (vanishingly rare in cuts).
+      const re = /`(?:\\.|[^`\\])*`/g
+      re.lastIndex = i
+      const m = re.exec(src)
+      if (m && m.index === i) {
+        out += m[0].replace(/[^\n]/g, " ")
+        i += m[0].length
+      } else {
+        let k = i + 1
+        while (k < n && src[k] !== "\n" && src[k] !== "`") k++
+        const end = src[k] === "`" ? k + 1 : k
+        out += " ".repeat(end - i)
+        i = end
+      }
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      let j = i - 1
+      while (j >= 0 && (src[j] === " " || src[j] === "\t")) j--
+      const prev = j >= 0 ? src[j]! : ";"
+      if (isWord(prev) && isWord(next)) {
+        out += ch
+        i++
+        continue
+      }
+      let k = i + 1
+      let closed = false
+      while (k < n) {
+        if (src[k] === "\\") {
+          k += 2
+          continue
+        }
+        if (src[k] === "\n" || src[k] === ch) {
+          closed = src[k] === ch
+          break
+        }
+        k++
+      }
+      const end = closed ? k + 1 : k
+      out += " ".repeat(end - i)
+      i = end
+      continue
+    }
+    out += ch
+    i++
+  }
+  return out
+}
+
 function stripNoise(src: string): string {
   const blank = (m: string) => m.replace(/[^\n]/g, " ")
-  const noComments = src
-    .replace(/\/\*[\s\S]*?\*\//g, blank)
-    .replace(/\/\/[^\n]*/g, blank)
-    .replace(/`(?:\\.|[^`\\])*`/g, blank)
-    .replace(/"(?:\\.|[^"\\])*"/g, blank)
-    .replace(/'(?:\\.|[^'\\])*'/g, blank)
+  const noComments = stripStrings(src)
   // JSX text nodes between tags: `>Motion that lands<` and `>Hello {name}<`
   // are rendered copy, not identifiers. Expressions stay (they hold real
   // code); only the literal text around them is blanked.
@@ -224,11 +309,20 @@ function scopeViolations(src: string, imports: Array<{ clause: string; source: s
     "OffthreadVideo", "Shapes", "Paths", "TransitionSeries", "Transition",
     "Overlay", "linearTiming", "springTiming", "useTransitionProgress",
   ])
+  // Components the lazy player scope registers on demand (lazy-scope.ts):
+  // allowed here so the validator and the player agree — otherwise every
+  // <Gif>, <Caption> or <ThreeCanvas> was refused statically while the
+  // player could have mounted it.
+  const LAZY_COMPONENTS = new Set([
+    "Gif", "Lottie", "Caption", "MediaVideo", "MediaAudio", "ThreeCanvas",
+    "Highlight", "Underline", "StrikeThrough", "CrossedOff", "Box", "Bracket", "Circle",
+  ])
   for (const m of clean.matchAll(/(?<![.\w$'"`])([A-Z][A-Za-z0-9_$]{1,})\s*(?=[(<{[\s,;)}])/g)) {
     const name = m[1]!
     if (
       declared.has(name) ||
       REMOTION_CORE.has(name) ||
+      LAZY_COMPONENTS.has(name) ||
       SCOPE_GLOBALS.has(name) ||
       LANGUAGE_GLOBALS.has(name)
     ) continue
@@ -259,18 +353,40 @@ export function checkComposition(code: string): Check[] {
   }
 
   // --- balanced braces ----------------------------------------------------
-  const stripped = src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\/\/[^\n]*/g, "")
-    .replace(/`(?:\\.|[^`\\])*`/g, "``")
-    .replace(/"(?:\\.|[^"\\])*"/g, '""')
-    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+  // Runs on stripStrings (comments + apostrophe-aware string blanking),
+  // NOT full stripNoise: stripNoise blanks multiline `>...<` spans as JSX
+  // text, and real code with nested braces (`spring({ config: {...} })`
+  // inside a `.map`) lives inside such spans — blanking eats the outer
+  // pair and fakes an imbalance. JSX copy almost never holds brackets, so
+  // leaving text in place is the accurate trade. (Naive quote strips are
+  // still banned here: apostrophes in copy opened phantom strings that
+  // swallowed real code.)
+  const stripped = stripStrings(src)
   const open = (stripped.match(/[{[(]/g) ?? []).length
   const close = (stripped.match(/[}\])]/g) ?? []).length
   if (open !== close) {
     out.push({
       level: "error",
       message: `Unbalanced brackets: ${open} opening vs ${close} closing. The file will not parse.`,
+    })
+  }
+
+  // --- unclosed JSX opening tag -------------------------------------------
+  // Braces can balance while the JSX is still broken: `<div style={{...}}`
+  // with no `>` puts the text child INSIDE the opening tag and the browser
+  // compiler fails with "Expected either /> or > at the end of the tag".
+  // Shipped live once via a golden template — never again. Runs on
+  // strings-only stripping: full stripNoise already blanked these text
+  // children, so they would be invisible here.
+  for (const m of stripStrings(src).matchAll(/\}\}[ \t]*\n[ \t]*([A-Za-z][^<>{}\n]{0,80})\n[ \t]*<\//g)) {
+    const text = (m[1] ?? "").trim().slice(0, 60)
+    out.push({
+      level: "error",
+      message:
+        `Unclosed JSX opening tag (line ${lineOf(src, m.index ?? 0)}): ` +
+        `text "${text}" sits inside an opening tag that never got its \`>\` — ` +
+        `the line ending \`}}\` must end \`}}>\` before the text child. ` +
+        `Fix with edit_file: add the missing \`>\`.`,
     })
   }
 
@@ -529,13 +645,19 @@ export function checkComposition(code: string): Check[] {
   // never a design — one of them was meant to move. Advisory, one warning.
   // Layers without an explicit left+top (full-bleed fills, inset layers) are
   // skipped: with no coordinates there is no spot to compare, and counting
-  // them flagged every intentional backdrop as an overlap.
+  // them flagged every intentional backdrop as an overlap. Coordinates are
+  // read only up to the element's OWN opening-tag close: without the bound,
+  // a coord-less layer (emblem ring with right/bottom only) inherited the
+  // next sibling's left/top from the 500-char window and every golden with
+  // decor failed as "sharing the spot" with its own content.
   {
     const posRe = /position:\s*['"]absolute['"]/g
     const seen = new Map<string, number>()
     let m: RegExpExecArray | null
     while ((m = posRe.exec(src)) !== null) {
-      const window = src.slice(m.index, m.index + 500)
+      const raw = src.slice(m.index, m.index + 500)
+      const tagEnd = raw.search(/\n\s*(\/>|>)\s*\n/)
+      const window = tagEnd === -1 ? raw : raw.slice(0, tagEnd)
       const left = /left:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0]
       const top = /top:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0]
       if (!left || !top) continue
@@ -1111,6 +1233,10 @@ export function dependencyResolve(imports: string[]): {
     "@remotion/lottie",
     "@remotion/captions",
     "@remotion/media",
+    "@remotion/media-utils",
+    "@remotion/three",
+    "three",
+    "@react-three/fiber",
     "@remotion/fonts",
     "@remotion/google-fonts",
     "lucide-react",

@@ -280,10 +280,13 @@ export default function NamedCut() {
   it("S7 edit path: retitle without rewrite, still clean", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    await call("S7", "quick_start", { product: "Acme" })
-    const e = await call("S7", "edit_file", { ops: [{ find: "Acme", replace: "Nova" }] })
+    // "Nova" seeds the center-stack golden, which preserves product casing
+    // (the mask variant uppercases by design, so "Acme" would not be found
+    // there — that is a style rule, not an edit-path failure).
+    await call("S7", "quick_start", { product: "Nova" })
+    const e = await call("S7", "edit_file", { ops: [{ find: "Nova", replace: "Acme" }] })
     assert.equal(e.ok, true, `edit failed: ${JSON.stringify(e)}`)
-    assert.ok(store.current().code.includes("Nova"), "edit did not apply")
+    assert.ok(store.current().code.includes("Acme"), "edit did not apply")
     const v = await call("S7", "verify_no_errors")
     assert.equal(v.ok, true)
   })

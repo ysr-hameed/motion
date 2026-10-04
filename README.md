@@ -83,7 +83,7 @@ Full path and refinement:
 | Tool | Purpose |
 |---|---|
 | `creative_direct` | Art direction in one call: intent + palette + fonts + beat→preset map |
-| `load_skill` | One of 35 vendored docs (Remotion API + 4 design skills), on demand |
+| `load_skill` | One of 53 vendored skills (Remotion API + 9 working examples + 4 design skills), on demand |
 | `plan_motion` | Records the beat sheet; the player draws it as a timeline |
 | `read_file` | Current source, verbatim |
 | `write_composition` | The whole file in one call; auto-repairs inline, refuses invalid source |
@@ -107,9 +107,13 @@ returns two or three specific findings rather than a generic list.
 
 ### Skills
 
-35 documents in `skills/remotion-markup/` (31 Remotion API + 4 design skills:
-`creative-direction`, `kinetic-typography`, `cinematic-motion`,
-`layout-composition`), inlined into the Worker by `pnpm run skills:build`.
+52 documents in `skills/remotion-markup/` (38 Remotion API + 9 working
+examples + 4 design skills: `creative-direction`, `kinetic-typography`,
+`cinematic-motion`, `layout-composition`), inlined into the Worker by
+`pnpm run skills:build` (53 entries with the live reference cut). Newest:
+`code-syntax` (Code Hike mechanic, zero dependencies), `shapes-paths`
+(SVG trim reveals + interpolateColors), `noise-grain` (film grain + seeded
+random rules), `captions` (TikTok-pattern subtitles).
 The model sees only the ids (~60 tokens) and pulls the one it needs, so a
 `load_skill` costs 1-3k tokens of context regardless of how many exist.
 

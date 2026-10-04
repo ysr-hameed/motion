@@ -148,7 +148,9 @@ describe("Verification Gate", () => {
   })
 
   it("lets entrance motion through: off-canvas start is advisory, not an error", () => {
-    const code = wrap(`style={{ translateY: interpolate(frame, [0, 60], [2000, 540]) }}`)
+    const code = wrap(
+      `style={{ translateY: interpolate(frame, [0, 60], [2000, 540], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) }}`
+    )
     assert.equal(errors(code).length, 0, "an entrance must not be an error")
   })
 })

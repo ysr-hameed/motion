@@ -8,7 +8,16 @@ import {
   type GenerateTextOnFinishCallback,
   type ToolSet,
 } from "ai"
-import { createPacedFetch } from "./rate-limit"
+import { createPacedFetch, setRequestsPerWindow } from "./rate-limit"
+
+/**
+ * Reads the gateway quota override (GATEWAY_RPM) so a key upgrade takes
+ * effect without a code change. Missing or invalid → the 5 rpm default.
+ */
+function gatewayRpm(env: Env): number {
+  const raw = Number((env as unknown as Record<string, unknown>).GATEWAY_RPM)
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5
+}
 import { queueTurnSync } from "./lib/do-sync"
 import { buildTools, CANVAS } from "./remotion/tools"
 import { goldenStarter } from "./remotion/templates"
@@ -209,21 +218,16 @@ export const DEFAULT_MODEL = "alibaba/qwen3.7-flash"
 /**
  * Ceiling on model round trips per turn.
  *
- * The gateway allows 5 requests a minute for this key, so every step costs
- * ~12s of wall time (see rate-limit.ts). This is not a CPU limit — a Durable
- * Object waits for free — it is a patience limit, so it is set from the
- * workflow rather than guessed: skills, plan, write, validate, preview, review
- * and a closing sentence is eight steps, and a rejected write that has to be
- * re-issued pushes it past ten. Setting this lower silently truncated turns
- * before the agent ever spoke, which read as a crash.
- *
- * Observed live: a healthy full-path turn (batch, creative_direct, 2× skill,
- * plan, write, validate, 2× edit, verify, preview, report) fills 12 steps and
- * dies with no closing sentence. 14 gives the turn room to speak. Runaway
- * protection comes from the loop caps (pending-report ×2, code-dump guard),
- * not from this number, so the headroom is safe.
+ * Pacing is adaptive now (see rate-limit.ts): steps stream back-to-back at
+ * ~1-3s while quota remains and only slow down when the gateway says the
+ * bucket is dry. So this is headroom, not a time budget: skills, plan,
+ * write, validate, preview and a closing sentence is ~7 steps, and a
+ * rejected write that has to be re-issued pushes it past ten. Setting this
+ * lower silently truncated turns before the agent ever spoke, which read as
+ * a crash. 12 keeps the headroom while capping runaway cost; loop caps
+ * (pending-report ×2, code-dump guard) stop runaways instead of this number.
  */
-const MAX_STEPS = 14
+const MAX_STEPS = 12
 
 const FRAME_RANGE = `frames 0 to ${CANVAS.maxFrames - 1}`
 
@@ -304,21 +308,35 @@ OVERLAP: next element starts 10-15f before previous ends. Stagger siblings 4-6f.
 DEPTH: at least one Z-space move. Parallax: bg moves 20% of fg speed.
 CURVES: every interpolate() gets Easing.bezier() or spring() — NEVER linear.
   Ease-out entrances: Easing.bezier(0.16, 1, 0.3, 1). Ease-in exits: (0.4, 0, 1, 1).
+KEYFRAMES-FIRST: this is a motion GRAPHICS generator — every hero move is a
+  3-stop keyframe sequence (anticipation → overshoot → settle), never a
+  single A→B slide. load_motion_preset returns the keyframes snippet per
+  beat: anticipation dip (0.94), overshoot peak (1.06–1.12), spring landing.
+  A cut with only 2-stop moves reads as basic no matter the palette.
 EXTRAPOLATE: every interpolate() on opacity/scale/position MUST have
   extrapolateLeft:"clamp", extrapolateRight:"clamp" — missing clamps cause blank frames.
 NARRATIVE: frame 1 has a focal element. Info arrives in order of importance.
   Final frame resolves — never a hard stop mid-motion.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WORKFLOW — every tool call costs ~12s. 12 steps total. Be economical.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────
+WORKFLOW — be economical. FAST PATH is 3 calls: quick_start → preview → report.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────
+ANOTHER VARIANT ("make this another type", "different style", "try X"):
+quick_start with a DIFFERENT mood word + same product/headline/seconds,
+then preview → report. NEVER the full path — new skills, presets and plans
+for a restyle burn minutes for what one call already does. The starter
+picks palette + fonts + layout FROM THE MOOD, so a new mood IS a new cut.
+Only go full path when the user names a new MECHANIC (typewriter,
+countdown, ticker, chart) the current shape cannot do.
+
 NEW BRIEF — FAST PATH (default, 3 calls):
 1. quick_start(product, headline, mood, seconds) — plans+writes+validates a
    DESIGNED cut in one call: palette + font pair + layout are picked from
    the mood, timing from seconds. Always pass mood (one word) and seconds.
-   SKIP quick_start when the brief names a specific mechanic (typewriter,
-   countdown, waveform, ticker, lower-third, kinetic mask): the starter is
-   the wrong shape and you will rewrite it anyway — go FULL PATH.
+   SKIP quick_start when the brief names a specific mechanic (countdown,
+   waveform, ticker, chart): the starter is the wrong shape and you will
+   rewrite it anyway — go FULL PATH. Lower-thirds, typewriter and kinetic
+   masks HAVE starters (overlay / terminal / mask variants) — use them.
    SKIP prefetch_tools, intent_deep_analyze, layout_plan, load_motion_preset, plan_motion.
 2. preview_composition() — only after quick_start ok:true
 3. read_render_report() — waits for browser compile+mount
@@ -381,8 +399,15 @@ editorial→syne+newsreader, elegant→instrumentSerif+newsreader, fashion→fra
 futuristic→spaceGrotesk+spaceMono, poster→bebasNeue+outfit, romantic→dancingScript or
 greatVibes, marker→caveat or pacifico.
 One display (or script) + one text face per composition. Never two display faces.
-NEVER Inter or Roboto unless the user explicitly names them — pick something
+Never Inter or Roboto unless the user explicitly names them — pick something
 with character. Never system-ui/sans-serif/Arial/Helvetica (validator error).
+USER-NAMED STYLE IS LAW: when the brief names a font or style
+("handwritten", "caveat", "mono", "serif"), call font_resolve FIRST and use
+its snippet EXACTLY — no substitutes, no "similar" faces. Script faces render
+~30% smaller: size heroes at 1.4x. Then PROVE it: read_render_report now
+carries a fonts status per family (loaded vs fallback) — a verified render
+with the family on fallback is NOT done. Never claim a font change worked
+from an edit result alone; only a loaded status counts.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ASSETS & Z-INDEX
@@ -395,6 +420,11 @@ Z-index: background=1, content=10, overlays=20, UI/30. DOM order usually paints 
 BEHAVIOUR
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Say nothing between tool calls. Never narrate the request.
+Never narrate tool calls in chat text: no markdown tables, no per-tool
+recaps ("| edit_file | ok:true |"), no "Verified fix" paragraphs, no
+repeating what a tool just returned. The UI renders the tool log itself —
+anything you restate in chat is noise on top of it. The ONLY words in a
+turn are the single closing sentence after read_render_report.
 CODE LIVES IN TOOLS, NEVER IN CHAT. write_composition / edit_file / bulk_edit
 are the only places TSX may appear. Never output imports, components, code
 fences, or diffs as chat text — a cut pasted into chat cannot preview, cannot
@@ -414,7 +444,14 @@ Fonts come ONLY from the Fonts.* registry (script faces: dancingScript,
 caveat, pacifico, greatVibes, satisfy, shadowsIntoLight). Never import a
 font, never call loadFont, never invent a loader.
 A rejected write_composition means nothing was saved — fix errors and rewrite.
-Ask one question only when the subject is unclear. Never ask about colour/pacing/mood.
+NEVER interrogate the user for product/headline/mood/seconds — infer them
+from the brief and build immediately (defaults: product = the subject or
+SlyxUp, headline = the subject in words, mood = cinematic, seconds = 5).
+Ask at most ONE question per turn and only when the SUBJECT itself is
+unknowable ("make something cool" with zero context). A brief like "motion
+show code: broken JS then fixed" already contains everything: build it.
+Questions cost a full round trip; a wrong guess costs one edit. Always
+guess and build.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CLOSING RULE (non-negotiable)
@@ -422,6 +459,11 @@ CLOSING RULE (non-negotiable)
 After read_render_report, write exactly ONE sentence: which version is live, or the
 exact browser failure and what you changed. Nothing before or after. If pending/failed,
 say so plainly and stop. A turn ending on tool calls reads as a crash.
+SHOW-DON'T-CLAIM: the closing sentence must describe what the TOOLS PROVED,
+never what you intended. If the user asked for X, the sentence names the
+version where read_file/validate/report CONFIRMED X is present — "v11 uses
+caveat (report: loaded)". If no tool confirmed it, say what is still missing
+instead of claiming done.
 
 Available skill ids:
 ${SKILL_IDS.join(", ")}`
@@ -437,27 +479,44 @@ export interface ChatState {
   audit?: RenderReport
 }
 
-/** Default effort: constrained reasoning keeps turns fast and cheap. */
-export const DEFAULT_THINKING: ThinkingLevel = "low"
+/**
+ * Default effort: OFF. Reasoning tokens are the "keeps thinking for 5
+ * minutes" complaint — Ling reasons by default and only stops on
+ * `reasoning_effort: "none"`. Speed is the product here; the agent has
+ * validators, presets and repair loops for correctness, it does not need to
+ * think out loud first. Users who want deeper reasoning pick High.
+ */
+export const DEFAULT_THINKING: ThinkingLevel = "off"
 
 /**
  * Maps the session's thinking level to a gateway reasoning option.
  *
- * Only ever sends values a model is known to accept: "none" is Ling-only
- * (any other value 400s), and low/high go only to models flagged in MODELS.
- * Anything unknown resolves to undefined — the model's own default — so an
- * unsupported preference can never fail a turn.
+ * Only ever sends values a model is known to accept. Crucially, Ling-family
+ * free models reason BY DEFAULT and only accept "none" — any other value
+ * 400s, and undefined leaves reasoning ON (the 5-minute hang). So low/off
+ * both map to "none" on specs without explicit supportsEffort: never leave
+ * a free model on its slow default.
  */
 export function effortFor(
   spec: ModelOption | undefined,
   thinking: ThinkingLevel | undefined
 ): "none" | "low" | "high" | undefined {
   const level = thinking ?? DEFAULT_THINKING
-  if (level === "low") return spec?.supportsEffort?.includes("low") ? "low" : undefined
-  if (level === "high") return spec?.supportsEffort?.includes("high") ? "high" : undefined
+  // High is capped at medium: full reasoning dumps ~10k words and stalls
+  // the turn for minutes while rarely changing the cut — validators,
+  // presets and repair loops carry correctness, not chain-of-thought.
+  // "High" therefore means low effort, deliberately.
+  if (level === "high") return spec?.supportsEffort?.includes("low") ? "low" : "none"
+  if (level === "low") {
+    if (spec?.supportsEffort?.includes("low")) return "low"
+    // Free/text-only models with no declared effort levels: kill reasoning.
+    return "none"
+  }
   // "off" — Ling accepts "none"; flagged models map off to their minimum.
   if (/ling/i.test(spec?.id ?? "")) return "none"
-  return spec?.supportsEffort?.includes("off") ? "none" : undefined
+  if (spec?.supportsEffort?.includes("off")) return "none"
+  // Unknown spec: still prefer no reasoning — fast default beats slow default.
+  return "none"
 }
 
 /** What the browser reported about a published version: the only render truth. */
@@ -473,6 +532,8 @@ export interface RenderReport {
   frame?: number
   /** Layout findings measured on the real render (advisory, not blocking). */
   findings: string[]
+  /** Per-family font load truth: loaded vs silent fallback. */
+  fonts?: Array<{ family: string; ok: boolean }>
   at: number
 }
 
@@ -654,6 +715,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         line?: number
         frame?: number
         findings?: string[]
+        fonts?: Array<{ family?: unknown; ok?: unknown }>
       }
       const prev = this.state?.audit
       const version = Math.max(0, Math.floor(Number(body.version) || 0))
@@ -663,6 +725,18 @@ export class Chat extends AIChatAgent<Env, ChatState> {
           rawMessage && body.line !== undefined ? `${rawMessage} (line ${body.line})` : rawMessage
         const incoming = (body.findings ?? []).slice(0, 12)
         const merged = prev && version === prev.version ? [...prev.findings, ...incoming] : incoming
+        // Font load truth from the browser: which cited families actually
+        // resolved vs silently fell back. Latest report wins per family.
+        const incomingFonts = Array.isArray(body.fonts)
+          ? body.fonts
+            .filter((f) => typeof f?.family === "string" && (f.family as string).length > 0)
+            .slice(0, 12)
+            .map((f) => ({ family: (f.family as string).slice(0, 60), ok: f.ok === true }))
+          : []
+        const prevFonts = prev && version === prev.version ? (prev.fonts ?? []) : []
+        const byFamily = new Map(prevFonts.map((f) => [f.family, f]))
+        for (const f of incomingFonts) byFamily.set(f.family, f)
+        const fonts = [...byFamily.values()].slice(0, 12)
         // A stale compile-only report must never overwrite a newer
         // mount/runtime verdict for the same version.
         const incomingRank = body.ok === false ? 2 : body.phase === "compile" ? 0 : 1
@@ -679,6 +753,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
             ...(message ? { message } : {}),
             ...(typeof body.frame === "number" ? { frame: body.frame } : {}),
             findings: [...new Set(merged)].slice(0, 12),
+            ...(fonts.length > 0 ? { fonts } : {}),
             at: Date.now(),
           },
         })
@@ -735,6 +810,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
           return Response.json({ ok: false, error: "bad model id" }, { status: 400 })
         }
         const { generateText } = await import("ai")
+        setRequestsPerWindow(gatewayRpm(this.env))
         const openai = createOpenAICompatible({
           name: "gateway",
           baseURL: GATEWAY_BASE,
@@ -876,6 +952,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
      * `delta.reasoning` directly, which is exactly what a third-party
      * OpenAI-compatible endpoint needs.
      */
+    setRequestsPerWindow(gatewayRpm(this.env))
     const openai = createOpenAICompatible({
       name: "gateway",
       baseURL: GATEWAY_BASE,
@@ -976,29 +1053,12 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         ) {
           return { toolChoice: { type: "tool", toolName: "write_composition" } }
         }
-        // Full-path discipline: a cut written from scratch gets a design
-        // review before it may preview — that is what catches the
-        // human-judgment class (intentional vs accidental overlap, plan
-        // drift) no static check can decide. Only after a SUCCESSFUL write:
-        // a rejected write means nothing was saved, and reviewing stale code
-        // would burn a paced call. Fast path (quick_start) and follow-up
-        // edits skip this: review there costs a paced call for little
-        // signal, and MAX_STEPS headroom is finite.
-        let lastWriteOk = false
-        for (const s of steps) {
-          for (const r of s.toolResults ?? []) {
-            if (r.toolName === "write_composition") {
-              lastWriteOk = (r.output as { ok?: unknown } | null)?.ok === true
-            }
-          }
-        }
-        if (
-          lastWriteOk &&
-          !calls.includes("review_motion") &&
-          !calls.includes("preview_composition")
-        ) {
-          return { toolChoice: { type: "tool", toolName: "review_motion" } }
-        }
+        // Speed fix: NO forced review_motion. write_composition already
+        // refuses basic motion (linear-only, stagger-less maps) and runs
+        // mechanical repairs inline — forcing a review after every write
+        // cost a full extra model round-trip for little signal. The model
+        // can still call review_motion when a cut feels flat, but the fast
+        // path (quick_start → preview → report) stays at 3 calls.
         if (!calls.includes("preview_composition")) return { toolChoice: "auto" }
         const read = lastReadStatus(steps)
         if (read === null) {

@@ -142,14 +142,25 @@ export function judge(boxes: Box[], frame: number, canvas = { w: CANVAS_W, h: CA
     }
   }
 
-  // 4. Type scale, against the same contract the prompt states.
+  // 4. Type scale, against the same contract the prompt states. fontSize
+  // is the CSS size (what the ceiling governs); the glyph BOX can be far
+  // wider (script faces run wide, tracking spreads caps). Reporting only
+  // the size sent agents shrinking heroes that were fine — so a wide box
+  // at a legal size names its width AND the fixes that keep impact:
+  // shorter copy, tighter tracking, or a narrower face — not just "smaller".
   for (const b of text) {
     const size = b.fontSize
     if (!size) continue
+    const width = b.right - b.left
     if (size < 18) {
       findings.push(`Frame ${frame}: "${b.label}" is ${size}px — unreadable as video (floor is 18).`)
     } else if (size > 320) {
-      findings.push(`Frame ${frame}: "${b.label}" is ${size}px — it fills the frame (ceiling is 320).`)
+      findings.push(`Frame ${frame}: "${b.label}" sets fontSize ${size}px over the 320 ceiling — reduce the px.`)
+    } else if (width > canvas.w * 0.92) {
+      findings.push(
+        `Frame ${frame}: "${b.label}" is only ${size}px but its box is ${width}px wide — it fills the frame. ` +
+          `Do NOT just shrink the px into timidity: shorten the copy, tighten letterSpacing, or pick a narrower face first; shrink px only as a last resort.`
+      )
     }
   }
 

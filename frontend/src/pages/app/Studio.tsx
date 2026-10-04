@@ -181,6 +181,10 @@ export default function Studio() {
           />
           {status}
         </span>
+        <span className={`hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold xl:inline-flex ${busy ? "border-tungsten/50 bg-tungsten/10 text-tungsten" : "border-line text-dim"}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${busy ? "live-dot bg-tungsten" : "bg-ok"}`} aria-hidden />
+          Director · {busy ? "directing your cut…" : "ready for your brief"}
+        </span>
         {projectName ? (
           <span className="hidden max-w-40 truncate rounded-full border border-tungsten/40 bg-tungsten/10 px-2.5 py-0.5 text-[11px] font-semibold text-tungsten sm:inline" title={`Cutting in ${projectName}`}>
             {projectName}

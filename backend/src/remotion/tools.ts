@@ -4,7 +4,7 @@ import { findSkill, SKILL_IDS } from "./skills.generated"
 import type { Chat } from "../chat"
 import type { CompositionStore } from "./store"
 import { basicMotionBlocks, checkComposition, constraintSolve, dependencyResolve, preValidatePlan } from "./validate"
-import { optimizeAsset, suggestAssets, suggestFonts } from "./assets"
+import { optimizeAsset, resolveFont, suggestAssets, suggestFonts } from "./assets"
 import {
   accessibilityAudit,
   brandLearn,
@@ -29,7 +29,7 @@ import {
 import { cdnPublish, exportBundle, exportPreset, EXPORT_PRESETS, thumbnailSpec, watermarkSpec } from "./export"
 import { feedbackRequest, shareCreate, teamInvite } from "./collab"
 import { threeCameraPath, threeModelAnimate, threeSceneCreate } from "./motion3d"
-import { presetForBeat, presetSnippet, textAnimationSnippet } from "./motion-library"
+import { keyframeSnippet, presetForBeat, presetSnippet, textAnimationSnippet } from "./motion-library"
 import { LayoutEngine, buildCompositionHints } from "./layout-engine"
 import type { ElementType, LayoutStrategy } from "./layout-engine"
 import { DISPLAY_FACES } from "./type"
@@ -99,10 +99,15 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "verbatim): example-typewriter-highlight, example-word-carousel, " +
         "example-text-rotation, example-histogram, example-gold-price-chart, " +
         "example-progress-bar, example-animated-shapes, example-falling-spheres, " +
-        "example-lottie. API skills: " +
+        "example-lottie. Prefer an example skill whose mechanic matches the " +
+        "brief (chart example for a chart brief) — a wrong guess costs a full " +
+        "model call plus thousands of context tokens on every later call — " +
+        "but nothing is forbidden: any skill may load when the beat genuinely " +
+        "needs it. API skills: " +
         "timing, sequencing, compositions. Then as needed: animations, " +
         "transitions, effects, shapes, audio, images, video, fonts, text, parameters, " +
-        "multi-scene-video, spring, interpolate, easing.",
+        "multi-scene-video, spring, interpolate, easing, code-syntax, " +
+        "shapes-paths, noise-grain, captions.",
       inputSchema: z.object({
         id: z.enum(SKILL_IDS as [string, ...string[]]).describe("The skill id to load."),
       }),
@@ -120,9 +125,12 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         if (!skill) {
           return { error: `Unknown skill "${id}". Available: ${SKILL_IDS.join(", ")}` }
         }
-        // A big skill still fits comfortably; trim the trailing sections so one
-        // call cannot swamp the context.
-        return { id: skill.id, content: skill.content.slice(0, 24_000) }
+        // Example skills are complete working cuts — the model imitates their
+        // structure, so the first 10k chars carry the signal and the rest is
+        // weight that slows every later model call. API/design skills keep
+        // the full 24k reference.
+        const budget = skill.id.startsWith("example-") ? 10_000 : 24_000
+        return { id: skill.id, content: skill.content.slice(0, budget) }
       },
     }),
 
@@ -405,15 +413,20 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
           const report = agent?.state?.audit
           if (report && report.version >= want) {
             if (report.ok && (report as { phase?: string }).phase !== "compile") {
+              const fonts = (report as { fonts?: Array<{ family: string; ok: boolean }> }).fonts ?? []
+              const fellBack = fonts.filter((f) => !f.ok).map((f) => f.family)
               return {
                 status: "verified",
                 version: report.version,
                 ...(report.message ? { detail: report.message } : {}),
                 findings: report.findings,
+                ...(fonts.length > 0 ? { fonts } : {}),
                 hint:
-                  report.findings.length > 0
-                    ? "Renders. The findings describe real measured pixels — fix them only if cheap, then re-verify."
-                    : "Renders. This report is the only basis for telling the user it works.",
+                  fellBack.length > 0
+                    ? `Renders BUT these families fell back (never loaded — showing fallback type): ${fellBack.join(", ")}. A user-named font on fallback is NOT done: resolve it with font_resolve and re-verify.`
+                    : report.findings.length > 0
+                      ? "Renders. The findings describe real measured pixels — fix them only if cheap, then re-verify."
+                      : "Renders. This report is the only basis for telling the user it works.",
               }
             }
             if (!report.ok) {
@@ -973,12 +986,29 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
     font_suggest: tool({
       description:
         "Recommend a display + text font pairing for a mood, from the Fonts.* " +
-        "registry already in scope. Returns the exact fontFamily snippet to use.",
+        "registry already in scope. Returns the exact fontFamily snippet to use. " +
+        "When the user names a style in words (handwritten, mono, serif), pass " +
+        "it as style — a user-named style ALWAYS overrides the mood pairing, " +
+        "and the result carries the sizing compensation (scripts run small).",
       inputSchema: z.object({
         mood: z.string().default("modern").describe("modern, playful, elegant, bold, or tech."),
         brand: z.string().optional(),
+        style: z.string().optional().describe("User's own style words, e.g. 'handwritten', 'mono code', 'elegant serif'."),
       }),
-      execute: async ({ mood, brand }) => suggestFonts(mood, brand),
+      execute: async ({ mood, brand, style }) => suggestFonts(mood, brand, style),
+    }),
+
+    font_resolve: tool({
+      description:
+        "Ground truth for a font name: normalises 'handwritten', 'Caveat', " +
+        "'playfair display' etc. to the exact Fonts.<key>.family snippet and " +
+        "says whether it is curated or loaded on demand. Call it the moment a " +
+        "brief names a font or style — never guess the key from memory, and " +
+        "never claim a font change worked without a verified render showing it.",
+      inputSchema: z.object({
+        name: z.string().min(1).describe("Font or style name, e.g. 'handwritten', 'caveat', 'Playfair Display'."),
+      }),
+      execute: async ({ name }) => resolveFont(name),
     }),
 
     intent_deep_analyze: tool({
@@ -1019,6 +1049,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         // are imitated, never invented. The turn still converts to player
         // scope (Fonts.*, shorthands, clamps, default export).
         const examples: string[] = []
+        if (/code|coding|terminal|snippet|api|sdk|developer/i.test(b)) examples.push("code-syntax")
         if (/typewriter|cursor|quote|code reveal/i.test(b)) examples.push("example-typewriter-highlight")
         if (/carousel|rotating word|alternating/i.test(b)) examples.push("example-word-carousel", "example-text-rotation")
         if (/chart|graph|histogram|statistic|metric|dashboard/i.test(b)) examples.push("example-histogram", "example-gold-price-chart")
@@ -1136,9 +1167,11 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "Use this FIRST on every new brief — it publishes an art-directed cut immediately " +
         "(palette + font pair + layout picked from the brief's mood), and follow-up " +
         "edits refine it. Pass the brief's product/brand/headline words PLUS its mood " +
-        "and length: mood drives the stage, seconds drives the timing. Skip this when " +
-        "the brief names a specific mechanic (typewriter, countdown, waveform) — those " +
-        "need the full path from scratch.",
+        "and length: mood drives the stage, seconds drives the timing. Code, coding, " +
+        "terminal and typewriter briefs automatically get a syntax-highlighted " +
+        "terminal cut — pass the language or command as the headline. Skip this when " +
+        "the brief names a specific mechanic (countdown, waveform, ticker, chart) — " +
+        "those need the full path from scratch.",
       inputSchema: z.object({
         product: z.string().optional().describe("Product or hero word shown large."),
         brand: z.string().optional().describe("Brand word shown in the hero lockup."),
@@ -1474,8 +1507,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
     // --- Phase 4: 3D foundation (§7.1) --------------------------------------
     three_scene_create: tool({
       description:
-        "R3F camera-rig scaffold (orbit/dolly/pan) driven by the Remotion " +
-        "clock. Foundation only — three/fiber are not installed yet.",
+        "Real 3D scene via @remotion/three (installed + in scope): declarative " +
+        "ThreeCanvas with a frame-driven camera rig (orbit/dolly/pan/static). " +
+        "Never useFrame — Remotion forbids it (flickers).",
       inputSchema: z.object({
         kind: z.enum(["orbit", "dolly", "pan", "static"]).default("orbit"),
         seconds: z.number().min(2).max(30).default(5),
@@ -1502,8 +1536,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     three_model_animate: tool({
       description:
-        "Model animation snippet (rotate/float/entrance) with hosting note. " +
-        "Model loading is not wired — host in R2/staticFile first.",
+        "3D object animation (rotate/float/entrance), useCurrentFrame-driven. " +
+        "Includes a torus-knot fallback that renders with no hosted model; " +
+        ".glb models need R2/staticFile hosting first.",
       inputSchema: z.object({
         model: z.string(),
         animation: z.enum(["rotate", "float", "entrance"]).default("entrance"),
@@ -1524,7 +1559,8 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "anticipation (pre-movement compress), cascade (list stagger), " +
         "text-cascade (per-char spring), counter / counter-motion (opposite movement = depth), " +
         "hold / pause (rest beat), parallax (multi-layer speed), morph / blend (shape/colour transition). " +
-        "Pass text + textStyle for an animated headline snippet on top of the preset.",
+        "Pass text + textStyle for an animated headline snippet on top of the preset " +
+        "(textStyle counter = Stargazer odometer 0→N for stats/milestones).",
       inputSchema: z.object({
         beatType: z
           .enum([
@@ -1540,15 +1576,21 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
           ),
         startFrame: z.number().int().min(0).default(0),
         text: z.string().max(120).optional().describe("Headline to animate, if this beat is type-led."),
-        textStyle: z.enum(["charByChar", "wordByWord", "maskReveal"]).default("charByChar"),
+        textStyle: z.enum(["charByChar", "wordByWord", "maskReveal", "counter"]).default("charByChar"),
       }),
       execute: async ({ beatType, startFrame, text, textStyle }) => {
         const { id, preset } = presetForBeat(beatType)
+        const end = startFrame + preset.duration
+        const mid = Math.round(startFrame + preset.duration * 0.4)
         return {
           id,
           preset,
           snippet: presetSnippet(id, startFrame),
           textSnippet: text ? textAnimationSnippet(textStyle, text, startFrame) : null,
+          // Keyframes-first: every beat ships a 3-stop sequence, not a
+          // single A→B move. Anticipation → action → settle is what makes
+          // motion read as designed rather than slid.
+          keyframes: keyframeSnippet("beat", [startFrame, mid, end], [0, 1.06, 1]),
           timing: { duration: preset.duration, easing: preset.easing, stagger: preset.stagger ?? null },
           note: preset.stagger
             ? `This beat uses a ${preset.stagger}f stagger — offset each item in the mapped list by index * ${preset.stagger}.`
@@ -1803,6 +1845,22 @@ export function autoRepairInline(code: string): { code: string; applied: string[
     }
   }
 
+  // Unclosed JSX opening tag: `}}` then a bare-text line then a closing tag,
+  // with no `>` — the text lands inside the opening tag and the browser
+  // compiler fails ("Expected either /> or >"). Same matcher the validator
+  // uses, so repair and refusal can never disagree. String literals are
+  // spaces in the masked copy, so a literal `}}` match is always real code
+  // and the same replace applies cleanly to `next`.
+  {
+    const re = /\}\}[ \t]*\n[ \t]*[A-Za-z][^<>{}\n]{0,80}\n[ \t]*<\//g
+    let count = 0
+    next = next.replace(re, (m) => {
+      count++
+      return m.replace("}}", "}}>")
+    })
+    if (count > 0) applied.push(`unclosed JSX tag → }}> (${count}x)`)
+  }
+
   // One-sided clamps keep drifting on the open side (rotation that never
   // stops, opacity climbing past 1). Backfill the missing side inside flat
   // option bags. Only touches bags that already clamp one side, so calls
@@ -1898,6 +1956,16 @@ async function applyEditOps(
   for (const op of ops) {
     if (op.find === "") {
       failed.push({ find: "<empty>", reason: "`find` cannot be empty." })
+      continue
+    }
+    if (op.replace === op.find) {
+      // A no-op edit changes nothing but burns a turn: refuse it with the
+      // reason instead of "applying" it. Observed live as three identical
+      // fontWeight ops reported applied while the user watched nothing move.
+      failed.push({
+        find: op.find.slice(0, 80),
+        reason: "No-op: `find` and `replace` are identical — nothing would change. Send only ops that change text.",
+      })
       continue
     }
     const occurrences = code.split(op.find).length - 1
@@ -2230,7 +2298,7 @@ async function batchExecute(
       if (cached) return { ...cached, cached: true }
       const skill = findSkill(id)
       if (!skill) throw new Error(`Unknown skill "${id}". Available: ${SKILL_IDS.join(", ")}`)
-      const out = { id: skill.id, content: skill.content.slice(0, 24_000) }
+      const out = { id: skill.id, content: skill.content.slice(0, skill.id.startsWith("example-") ? 10_000 : 24_000) }
       cacheSet(`skill:${id}`, out, TTL.skill)
       return { ...out, cached: false }
     }
@@ -2271,10 +2339,10 @@ async function batchExecute(
       return { ...out, cached: false }
     }
     case "font_suggest": {
-      const key = `font:${str(args.mood, "modern")}:${str(args.brand)}`
+      const key = `font:${str(args.mood, "modern")}:${str(args.brand)}:${str(args.style)}`
       const cached = cacheGet<unknown>(key)
       if (cached) return { ...(cached as object), cached: true }
-      const out = suggestFonts(str(args.mood, "modern"), str(args.brand) || undefined)
+      const out = suggestFonts(str(args.mood, "modern"), str(args.brand) || undefined, str(args.style) || undefined)
       cacheSet(key, out, TTL.asset)
       return { ...out, cached: false }
     }
@@ -2409,9 +2477,9 @@ async function batchExecute(
       const { id, preset } = presetForBeat(beat)
       const start = num(args.startFrame, 0)
       const text = str(args.text)
-      const textStyle = (["charByChar", "wordByWord", "maskReveal"].includes(str(args.textStyle))
+      const textStyle = (["charByChar", "wordByWord", "maskReveal", "counter"].includes(str(args.textStyle))
         ? args.textStyle
-        : "charByChar") as "charByChar" | "wordByWord" | "maskReveal"
+        : "charByChar") as "charByChar" | "wordByWord" | "maskReveal" | "counter"
       return {
         id,
         preset,

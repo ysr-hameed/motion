@@ -503,7 +503,7 @@ function ToolGroup({ parts }: { parts: Part[] }) {
         <ChevronDown size={11} aria-hidden className={`shrink-0 text-dim transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open ? (
-        <div className="mt-0.5 rounded-xl border border-line/60 bg-ink/40 px-2 py-0.5">
+        <div className="mt-0.5 rounded-xl border border-line/60 bg-ink/40 px-1 py-0.5">
           {parts.map((p, i) => (
             <ToolCall key={i} part={p} />
           ))}
@@ -572,12 +572,12 @@ type UseAgentChatReturn = ReturnType<typeof useAgentChat>
 /**
  * A turn that produces nothing for this long is treated as failed.
  *
- * This has to account for the gateway's 5 requests-per-minute limit. A turn
- * that runs the whole workflow is ~11 model calls, each paced roughly 12s
- * apart, so a healthy turn legitimately runs for minutes — a 45s deadline fired
- * during normal operation in testing, on a turn that then completed correctly.
- * 150s is longer than any legitimate gap between two message parts while still
- * bounding a genuinely dead turn.
+ * Pacing is adaptive now (bursts while quota remains, slows only when the
+ * gateway says the bucket is dry), so a healthy turn streams parts every
+ * few seconds — a 45s deadline fired during normal operation in testing,
+ * on a turn that then completed correctly. 150s is longer than any
+ * legitimate gap between two message parts while still bounding a
+ * genuinely dead turn.
  */
 const STALL_MS = 150_000
 
@@ -588,9 +588,9 @@ interface Props {
 }
 
 const THINKING_HINT: Record<ThinkingLevel, string> = {
-  off: "No chain of thought — fastest, cheapest",
-  low: "Brief reasoning — the default balance",
-  high: "Full reasoning — slower, sharper",
+  off: "No chain of thought — fastest, cheapest, the default",
+  low: "Brief reasoning — slower, more deliberate",
+  high: "Full reasoning — slowest, sharpest",
 }
 
 /**
@@ -802,7 +802,7 @@ export function Conversation({ chat, sessionId }: Props) {
     return () => el.removeEventListener("scroll", onScroll)
   }, [])
 
-  const [thinking, setThinking] = useState<ThinkingLevel>("low")
+  const [thinking, setThinking] = useState<ThinkingLevel>("off")
   const [pickerOpen, setPickerOpen] = useState(false)
   const [live, setLive] = useState<LiveModelStatus[] | null>(null)
   const [liveBusy, setLiveBusy] = useState(false)
@@ -1155,9 +1155,6 @@ function EmptyBrief() {
  * Live working indicator. Shows elapsed seconds (counts up every second;
  * reveals pacing at a glance) plus total tool calls so far this turn.
  * The WHAT is already on the ToolGroup row — this stays quiet on purpose.
- *
- * Because the 5 rpm gateway limit means ~12s between calls, the elapsed
- * counter makes waiting feel intentional rather than broken.
  */
 function Working({ messages, startedAt }: { messages: UIMessage[]; startedAt: number }) {
   const [elapsed, setElapsed] = useState(0)
