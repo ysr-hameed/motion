@@ -646,7 +646,9 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         return Response.json({
           ok: true,
           count: ids.length,
-          status: MODELS.map((m) => ({ id: m.id, live: set.has(m.id) })),
+          // "auto" is a local routing sentinel, not a gateway id — it is
+          // always available, so it never appears as a red dot.
+          status: MODELS.filter((m) => m.id !== "auto").map((m) => ({ id: m.id, live: set.has(m.id) })),
           ...(full ? { catalog: data.data ?? [] } : {}),
         })
       } catch (err) {
