@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, lazy, Suspense } from "react"
+import { Maximize, Minimize, Pause, Play, Repeat, RotateCcw } from "lucide-react"
 import type { PlayerRef } from "@remotion/player"
 import type { CompileError } from "~/remotion-code/compile"
 import { agentUrl, CANVAS, type MotionPlan } from "~/lib/composition"
 import { measureStage } from "~/lib/layout-audit"
-import { timecode } from "~/lib/timecode"
 
 const { width, height, fps } = CANVAS
 
@@ -102,7 +102,32 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
   const [player, setPlayer] = useState<PlayerRef | null>(null)
   const [frame, setFrame] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const [loop, setLoop] = useState(false)
+  const [speed, setSpeed] = useState<number>(1)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const sectionRef = useRef<HTMLElement>(null)
   const { ref: fitRef, size: fitSize } = useFitSize(width / height)
+
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(document.fullscreenElement != null)
+    document.addEventListener("fullscreenchange", onFs)
+    return () => document.removeEventListener("fullscreenchange", onFs)
+  }, [])
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined)
+    } else {
+      void sectionRef.current?.requestFullscreen().catch(() => undefined)
+    }
+  }
+
+  const cycleSpeed = () => {
+    setSpeed((s) => {
+      const i = SPEEDS.indexOf(s as (typeof SPEEDS)[number])
+      return SPEEDS[(i + 1) % SPEEDS.length]!
+    })
+  }
   // Render reports already posted this session (version + kind). The agent's
   // read_render_report is the only render claim it may make, so every
   // terminal state reports exactly once — success, compile failure, and
@@ -246,10 +271,10 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
   }, [player, version])
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-2" aria-label="Stage">
+    <section ref={sectionRef} className="flex min-h-0 flex-1 flex-col gap-2" aria-label="Stage">
       <div
         ref={fitRef}
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg border border-line bg-black"
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black"
       >
         {state.kind === "empty" && (
           <EmptyStage />
@@ -261,18 +286,18 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
 
         {state.kind === "error" && (
           <div className="max-w-md px-6 text-center">
-            <p className="eyebrow mb-2 text-bad">will not render</p>
-            <p className="font-mono text-xs leading-relaxed text-muted">{state.message}</p>
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-bad">will not render</p>
+            <p className="font-mono text-xs leading-relaxed text-[#c9c2b4]">{state.message}</p>
             {state.line !== undefined && (
-              <p className="mt-2 font-mono text-[10px] text-dim">line {state.line}</p>
+              <p className="mt-2 font-mono text-[10px] text-[#8a8474]">line {state.line}</p>
             )}
           </div>
         )}
 
         {state.kind === "stale" && (
           <div className="max-w-md px-6 text-center">
-            <p className="eyebrow mb-2 text-tungsten">app updated</p>
-            <p className="text-sm leading-relaxed text-muted">
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-tungsten-bright">app updated</p>
+            <p className="text-sm leading-relaxed text-[#c9c2b4]">
               This tab is running an older version of the studio whose preview
               files are gone. Reload to pick up the latest version — your chat
               and cut are saved.
@@ -280,7 +305,7 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="mt-4 rounded-md bg-tungsten px-4 py-2 text-sm font-semibold text-ink hover:brightness-110"
+              className="mt-4 rounded-lg bg-tungsten px-4 py-2 text-sm font-bold text-white hover:brightness-110"
             >
               Reload Studio
             </button>
@@ -304,6 +329,8 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
             fps={fps}
             compositionWidth={width}
             compositionHeight={height}
+            loop={loop}
+            playbackRate={speed}
             style={{ width: "100%", height: "100%" }}
             controls={false}
             acknowledgeRemotionLicense
@@ -334,21 +361,83 @@ export function Stage({ code, plan, version, reloadKey, sessionId }: Props) {
         duration={duration}
         playing={playing}
         plan={plan}
-        version={version}
+        loop={loop}
+        onToggleLoop={() => setLoop((v) => !v)}
+        speed={speed}
+        onCycleSpeed={cycleSpeed}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
       />
     </section>
   )
 }
 
+const EMPTY_EXAMPLES = [
+  "A 5s product reveal — logo punches in on an overshoot",
+  "Kinetic type masking a headline in, per character",
+  "A lower third wiping in under a talking head",
+]
+
 function EmptyStage() {
+  const pick = (text: string) => {
+    window.dispatchEvent(new CustomEvent("motion:suggest", { detail: text }))
+  }
   return (
-    <div className="px-8 text-center">
-      <p className="eyebrow mb-3">no cut yet</p>
-      <p className="max-w-sm text-sm leading-relaxed text-muted">
-        Describe the clip you want. The agent plans the beats, writes the
-        composition, and it renders here.
+    <div className="max-w-md px-8 text-center">
+      <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-[#a29885]">no cut yet — 60 seconds away</p>
+      <p className="mx-auto max-w-sm text-sm leading-relaxed text-[#c9c2b4]">
+        Describe the clip in <span className="font-bold text-white">Direct</span>.
+        The agent plans the beats, writes the code, and it renders here.
       </p>
+      <div className="mt-4 flex flex-col gap-1.5">
+        {EMPTY_EXAMPLES.map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => pick(s)}
+            className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-left text-xs leading-relaxed text-[#c9c2b4] transition-all hover:border-tungsten hover:text-white"
+          >
+            <span className="mr-1.5 font-bold text-tungsten-bright">try →</span>
+            {s}
+          </button>
+        ))}
+      </div>
+      <p className="mt-3 text-[11px] text-[#8a8474]">tapping fills the Direct draft — press send</p>
     </div>
+  )
+}
+
+/** m:ss for the transport — quiet, no clutter. */
+function fmt(f: number): string {
+  const s = Math.max(0, Math.floor(f / fps))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
+}
+
+const SPEEDS = [1, 1.5, 2, 0.5] as const
+
+function IconBtn({
+  label,
+  onClick,
+  active,
+  children,
+}: {
+  label: string
+  onClick: () => void
+  active?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${
+        active ? "bg-tungsten/25 text-tungsten-bright" : "text-[#b8b0a0] hover:bg-white/10 hover:text-white"
+      }`}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -358,131 +447,116 @@ function Transport({
   duration,
   playing,
   plan,
-  version,
+  loop,
+  onToggleLoop,
+  speed,
+  onCycleSpeed,
+  isFullscreen,
+  onToggleFullscreen,
 }: {
   player: PlayerRef | null
   frame: number
   duration: number
   playing: boolean
   plan: MotionPlan | null
-  version: number
+  loop: boolean
+  onToggleLoop: () => void
+  speed: number
+  onCycleSpeed: () => void
+  isFullscreen: boolean
+  onToggleFullscreen: () => void
 }) {
   const pct = duration > 0 ? (frame / Math.max(1, duration - 1)) * 100 : 0
 
   return (
-    <div className="panel shrink-0 px-3 py-2.5">
-      <div className="flex items-center gap-4">
-        <div className="flex items-baseline gap-2">
-          <span className="tc text-lg text-tungsten tabular-nums">{timecode(frame, fps)}</span>
-          <span className="tc text-xs text-dim">/ {timecode(duration, fps)}</span>
+    <div className="group/bar shrink-0 px-3 pb-3 pt-1.5">
+      {/* seek bar owns its row — nothing to vertically align against */}
+      <div className="relative h-6 select-none">
+        <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/10 transition-all duration-150 group-hover/bar:h-1.5">
+          <div className="absolute inset-0 overflow-hidden rounded-full">
+            {plan?.beats?.map((b, i) => {
+              const left = duration > 0 ? (b.from / duration) * 100 : 0
+              const w = duration > 0 ? ((b.to - b.from) / duration) * 100 : 0
+              return (
+                <div
+                  key={i}
+                  className="absolute top-0 h-full bg-tungsten/25"
+                  style={{ left: `${Math.min(100, left)}%`, width: `${Math.max(0.5, Math.min(100 - left, w))}%` }}
+                  title={b.what}
+                />
+              )
+            })}
+            <div
+              className="absolute left-0 top-0 h-full rounded-full bg-tungsten"
+              style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+            />
+          </div>
         </div>
-
-        <div className="flex items-center gap-1">
-          <TransportButton
-            label="Rewind to start"
-            onClick={() => player?.seekTo(0)}
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-              <path d="M3 2v8M10 2.5v7L5 6z" fill="currentColor" stroke="currentColor" strokeWidth="1.2" />
-            </svg>
-          </TransportButton>
-          <button
-            type="button"
-            onClick={() => (playing ? player?.pause() : player?.play())}
-            aria-label={playing ? "Pause" : "Play"}
-            className="flex h-8 w-8 items-center justify-center rounded border border-line bg-panel-2 text-paper transition-colors hover:border-tungsten hover:text-tungsten"
-          >
-            {playing ? (
-              <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
-                <path d="M2 1h2.5v9H2zM6.5 1H9v9H6.5z" fill="currentColor" />
-              </svg>
-            ) : (
-              <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden="true">
-                <path d="M2.5 1l7 4.5-7 4.5z" fill="currentColor" />
-              </svg>
-            )}
-          </button>
-        </div>
-
-        <div className="ml-auto flex items-center gap-3 text-[10px] text-dim">
-          <span className="font-mono">{width}×{height}</span>
-          <span className="font-mono">{fps}p</span>
-          <span className="font-mono">
-            {version > 0 ? `v${version}` : "draft"}
-          </span>
-          {playing && (
-            <span className="flex items-center gap-1.5 text-tungsten">
-              <span className="live-dot h-1.5 w-1.5 rounded-full bg-tungsten" />
-              playing
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Scrubber with the playhead, plus the plan's beats as real blocks. */}
-      <div className="relative mt-2.5 h-8 select-none">
-        <div className="absolute inset-x-0 top-0 h-3 overflow-hidden rounded-xs border border-line-soft bg-panel-2">
-          {plan?.beats?.map((b, i) => {
-            const left = duration > 0 ? (b.from / duration) * 100 : 0
-            const w = duration > 0 ? ((b.to - b.from) / duration) * 100 : 0
-            return (
-              <div
-                key={i}
-                className="absolute top-0 h-full border-l border-tungsten/60 bg-tungsten/12"
-                style={{ left: `${Math.min(100, left)}%`, width: `${Math.max(0.4, Math.min(100 - left, w))}%` }}
-                title={b.what}
-              />
-            )
-          })}
-        </div>
-
-        <div className="absolute inset-x-0 top-0 h-3">
-          <div className="playhead" style={{ left: `${pct}%` }} />
-        </div>
-
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-tungsten opacity-0 shadow-[0_0_10px_rgb(217_72_0/0.8)] transition-opacity group-hover/bar:opacity-100"
+          style={{ left: `${Math.min(100, Math.max(0, pct))}%` }}
+        />
         <input
           type="range"
           min={0}
           max={Math.max(1, duration - 1)}
           value={frame}
           onChange={(e) => player?.seekTo(Number(e.target.value))}
-          aria-label="Scrub timeline"
-          className="absolute inset-x-0 top-3 h-5 w-full cursor-pointer appearance-none bg-transparent
-                     [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-2
-                     [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-xs
-                     [&::-webkit-slider-thumb]:bg-paper
-                     [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:w-2
-                     [&::-moz-range-thumb]:rounded-xs [&::-moz-range-thumb]:border-0
-                     [&::-moz-range-thumb]:bg-paper"
+          aria-label="Seek"
+          className="absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0"
         />
       </div>
 
-      {plan && (
-        <p className="mt-1 truncate text-[11px] text-muted" title={plan.intent}>
-          <span className="text-paper">{plan.title}</span> — {plan.intent}
-        </p>
-      )}
-    </div>
-  )
-}
+      {/* buttons row: uniform height, everything centered */}
+      <div className="mt-0.5 flex h-9 items-center gap-1">
+        <button
+          type="button"
+          onClick={() => (playing ? player?.pause() : player?.play())}
+          aria-label={playing ? "Pause" : "Play"}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-all hover:scale-105 hover:bg-tungsten hover:text-white"
+        >
+        {playing ? (
+          <Pause size={14} fill="currentColor" aria-hidden />
+        ) : (
+          <Play size={14} fill="currentColor" className="translate-x-[1px]" aria-hidden />
+        )}
+        </button>
 
-function TransportButton({
-  label,
-  onClick,
-  children,
-}: {
-  label: string
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      className="flex h-8 w-8 items-center justify-center rounded border border-line bg-panel-2 text-paper transition-colors hover:border-tungsten hover:text-tungsten"
-    >
-      {children}
-    </button>
+      <IconBtn label="Restart" onClick={() => player?.seekTo(0)}>
+        <RotateCcw size={14} aria-hidden />
+      </IconBtn>
+
+        <span className="tc ml-1 hidden shrink-0 text-[11px] text-dim min-[420px]:inline">
+          {fmt(frame)} / {fmt(duration)}
+        </span>
+
+        <span className="flex-1" />
+
+        <button
+          type="button"
+          onClick={onCycleSpeed}
+          title="Playback speed"
+          aria-label={`Playback speed ${speed}x — change`}
+          className={`tc inline-flex h-8 shrink-0 items-center justify-center rounded-full px-2.5 text-[11px] transition-colors ${
+            speed !== 1 ? "bg-tungsten/25 text-tungsten-bright" : "text-[#b8b0a0] hover:bg-white/10 hover:text-white"
+          }`}
+        >
+          {speed}×
+        </button>
+
+      <IconBtn label={loop ? "Loop on — turn off" : "Loop off — turn on"} onClick={onToggleLoop} active={loop}>
+        <Repeat size={14} aria-hidden />
+      </IconBtn>
+
+      <IconBtn label={isFullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={onToggleFullscreen}>
+        {isFullscreen ? (
+          <Minimize size={14} aria-hidden />
+        ) : (
+          <Maximize size={14} aria-hidden />
+        )}
+      </IconBtn>
+      </div>
+    </div>
   )
 }

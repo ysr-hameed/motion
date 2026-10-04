@@ -23,7 +23,7 @@ export default function Changelog() {
         {ENTRIES.map(([version, date, items]) => (
           <section key={version} className="mt-8 rounded-md border border-line bg-panel p-5">
             <p className="flex items-baseline gap-3">
-              <span className="font-mono font-semibold text-tungsten">v{version}</span>
+              <span className=" font-semibold text-tungsten">v{version}</span>
               <span className="text-xs text-dim">{date}</span>
             </p>
             <ul className="mt-3 flex flex-col gap-1.5 text-sm text-muted">

@@ -23,12 +23,11 @@ import Status from "~/pages/Status";
 import Terms from "~/pages/Terms";
 import UseCases from "~/pages/UseCases";
 import Studio from "~/pages/app/Studio";
+import Create from "~/pages/app/Create";
 import Billing from "~/pages/app/Billing";
-import BrandKit from "~/pages/app/BrandKit";
-import Exports from "~/pages/app/Exports";
+import Downloads from "~/pages/app/Downloads";
 import Projects from "~/pages/app/Projects";
 import Settings from "~/pages/app/Settings";
-import Team from "~/pages/app/Team";
 import Templates from "~/pages/app/Templates";
 import ForgotPassword from "~/pages/auth/ForgotPassword";
 import Login from "~/pages/auth/Login";
@@ -71,14 +70,13 @@ function AppRoutes() {
 
       {(
         [
+          ["/create", <Create />],
           ["/studio", <Studio />],
           ["/projects", <Projects />],
           ["/templates", <Templates />],
-          ["/brand-kit", <BrandKit />],
-          ["/exports", <Exports />],
+          ["/downloads", <Downloads />],
           ["/settings", <Settings />],
           ["/billing", <Billing />],
-          ["/team", <Team />],
         ] as const
       ).map(([path, page]) => (
         <Route

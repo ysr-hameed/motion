@@ -236,3 +236,78 @@ export function analyzeCodeOverflow(code: string): Array<{ line: number; peak: n
   }
   return found
 }
+
+/**
+ * Visual composition guidance using design principles.
+ */
+export function buildCompositionHints(
+  elements: Array<{ id: string; type: ElementType; width: number; height: number }>,
+  plannedElements: PlannedElement[],
+  canvasWidth: number,
+  canvasHeight: number
+): {
+  ruleOfThirds: string[]
+  focalPoint: string
+  balance: string
+  readingFlow: string
+} {
+  const thirds = {
+    vertical: [canvasWidth / 3, (2 * canvasWidth) / 3],
+    horizontal: [canvasHeight / 3, (2 * canvasHeight) / 3],
+  }
+
+  const ruleOfThirds: string[] = []
+  const dominantElement = plannedElements.find(el => 
+    el.type === 'text' && el.bounds.height > 100
+  ) || plannedElements[0]
+
+  if (dominantElement) {
+    const centerX = dominantElement.bounds.x + dominantElement.bounds.width / 2
+    const centerY = dominantElement.bounds.y + dominantElement.bounds.height / 2
+    
+    const nearThirdX = Math.abs(centerX - thirds.vertical[0]) < Math.abs(centerX - thirds.vertical[1]) ? thirds.vertical[0] : thirds.vertical[1]
+    const nearThirdY = Math.abs(centerY - thirds.horizontal[0]) < Math.abs(centerY - thirds.horizontal[1]) ? thirds.horizontal[0] : thirds.horizontal[1]
+    
+    if (Math.abs(centerX - nearThirdX) > 100) {
+      ruleOfThirds.push(`Consider moving "${dominantElement.id}" closer to the ${nearThirdX < canvasWidth/2 ? 'left' : 'right'} third line (x=${Math.round(nearThirdX)}) for stronger composition`)
+    }
+    
+    if (Math.abs(centerY - nearThirdY) > 100) {
+      ruleOfThirds.push(`Consider aligning "${dominantElement.id}" with the ${nearThirdY < canvasHeight/2 ? 'upper' : 'lower'} third line (y=${Math.round(nearThirdY)})`)
+    }
+  }
+
+  const focalPoint = dominantElement 
+    ? `"${dominantElement.id}" serves as the focal point - ensure it has strongest visual weight through size, contrast, or position`
+    : "No clear focal point detected - designate one element as the primary focus"
+
+  const balance = (() => {
+    const leftElements = plannedElements.filter(el => el.bounds.x + el.bounds.width/2 < canvasWidth/2)
+    const rightElements = plannedElements.filter(el => el.bounds.x + el.bounds.width/2 >= canvasWidth/2)
+    
+    if (leftElements.length === 0 || rightElements.length === 0) {
+      return "Consider balancing elements across both sides of the frame for visual stability"
+    }
+    return "Visual balance achieved with elements on both sides of the frame"
+  })()
+
+  const readingFlow = (() => {
+    if (plannedElements.length < 2) return "Single element - no reading flow needed"
+    
+    const sorted = [...plannedElements].sort((a, b) => a.bounds.y - b.bounds.y)
+    const isZPattern = sorted.some((el, i) => 
+      i > 0 && el.bounds.x > sorted[i-1].bounds.x + sorted[i-1].bounds.width/2
+    )
+    
+    return isZPattern 
+      ? "Elements follow a Z-pattern reading flow - good for Western audiences"
+      : "Consider arranging elements in a Z-pattern for natural reading flow"
+  })()
+
+  return {
+    ruleOfThirds,
+    focalPoint,
+    balance,
+    readingFlow,
+  }
+}

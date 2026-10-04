@@ -74,7 +74,17 @@ export default function Settings() {
 
   return (
     <Page>
-      <PageHeader title="Settings" />
+      <PageHeader
+        title="Settings"
+        action={me.data?.tier ? <span className="rounded-full border border-tungsten/40 bg-tungsten/10 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-tungsten">{me.data.tier}</span> : null}
+      />
+      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-line text-sm">
+        {[["profile", "Profile"], ["security", "Security"], ["sessions", "Sessions"], ["keys", "API Keys"], ["notifications", "Notifications"], ["danger", "Danger Zone"]].map(([id, label]) => (
+          <a key={id} href={`#settings-${id}`} className={`whitespace-nowrap px-3 py-2 transition-colors hover:text-paper ${id === "danger" ? "text-bad/80 hover:text-bad" : "text-muted"}`}>
+            {label}
+          </a>
+        ))}
+      </div>
       {msg ? <div className="mb-3"><Alert tone="success">{msg}</Alert></div> : null}
       {err ? <div className="mb-3"><Alert>{err}</Alert></div> : null}
       {me.loading ? (
@@ -206,11 +216,11 @@ function NotificationsCard({
       <p className="mb-3 text-xs text-muted">Email preferences stored on your profile.</p>
       {msg ? <div className="mb-3"><Alert tone={msg.includes("saved") ? "success" : "error"}>{msg}</Alert></div> : null}
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={product} onChange={(e) => setProduct(e.target.checked)} className="accent-[#ffb340]" />
+        <input type="checkbox" checked={product} onChange={(e) => setProduct(e.target.checked)} className="accent-[#d94800]" />
         Product updates and new templates
       </label>
       <label className="mt-2 flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={exports} onChange={(e) => setExports(e.target.checked)} className="accent-[#ffb340]" />
+        <input type="checkbox" checked={exports} onChange={(e) => setExports(e.target.checked)} className="accent-[#d94800]" />
         Export and billing receipts
       </label>
       <div className="mt-3"><Button size="sm" variant="secondary" loading={saving} onClick={save}>Save Preferences</Button></div>

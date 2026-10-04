@@ -1,14 +1,14 @@
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { useAgent } from "agents/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, Download, Film } from "lucide-react";
 import { Conversation } from "~/components/Conversation";
 import { ExportDialog } from "~/components/ExportDialog";
-import { Inspector } from "~/components/Inspector";
-import { ProgressView } from "~/components/ProgressView";
 import { Stage } from "~/components/Stage";
-import { Timeline } from "~/components/Timeline";
-import { fetchComposition, type MotionPlan } from "~/lib/composition";
+import { suggest } from "~/components/Timeline";
+import { fetchComposition, publishStarter, type MotionPlan } from "~/lib/composition";
 import { DEMO_CODE, DEMO_PLAN } from "~/lib/demo";
+import { openExport } from "~/lib/exportPresets";
 import { motionApi } from "~/lib/stack";
 import { warmCompileChunk } from "~/components/Stage";
 import { useMotionToken } from "./data";
@@ -16,6 +16,12 @@ import { useMotionToken } from "./data";
 /**
  * Studio — the main workspace (/studio). One Durable Object instance per
  * session, so a reload reattaches to the same transcript and cut.
+ *
+ * Deliberately minimal: a preview and a conversation. The user only ever
+ * asks two questions — "what am I looking at?" and "what do I type next?" —
+ * and both are answered on screen at all times. Everything analytical
+ * (quality bars, ratings, beat inspectors) stays inside the agent loop,
+ * not in the user's face.
  */
 function useSessionId() {
   const [id] = useState(() => {
@@ -54,8 +60,8 @@ export default function Studio() {
   const [reloadKey, setReloadKey] = useState("0");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [chunkStale, setChunkStale] = useState(false);
-  // Small screens show one panel at a time; desktop keeps both side by side.
-  const [tab, setTab] = useState<"preview" | "chat">("preview");
+  // Small screens show one side at a time; desktop keeps both side by side.
+  const [mobileView, setMobileView] = useState<"preview" | "direct">("preview");
 
   // Warm the preview chunk on mount: a tab left open across a deploy fails
   // here (with a reload prompt) instead of after minutes of agent work.
@@ -64,6 +70,7 @@ export default function Studio() {
     warmCompileChunk(() => setChunkStale(true));
   }, []);
 
+  const [booted, setBooted] = useState(DEMO);
   const reload = useCallback(
     async (signal?: AbortSignal) => {
       try {
@@ -73,9 +80,11 @@ export default function Studio() {
         setVersion(next.version);
         setReloadKey(String(next.version));
         setLoadError(null);
+        setBooted(true);
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
         setLoadError(err instanceof Error ? err.message : String(err));
+        setBooted(true);
       }
     },
     [sessionId],
@@ -103,75 +112,183 @@ export default function Studio() {
 
   const last = plan?.beats?.at(-1);
   const duration = last ? Math.max(30, Math.ceil(last.to)) : 150;
+  const hasCut = version > 0 && code.trim().length > 0;
+  const sceneCount = plan?.beats.length ?? 0;
+
+  const status = busy ? "Directing…" : hasCut ? `Cut v${version}` : "New cut";
+  const [projectName, setProjectName] = useState<string | null>(null);
+
+  // Handoff from /create: a pending package fires exactly once, and only
+  // into a provably fresh session — never into ongoing work. Briefs land
+  // in the Direct draft for one last look; instant starters publish right
+  // away since the user already picked them.
+  const consumed = useRef(false);
+  useEffect(() => {
+    if (DEMO || consumed.current || !booted || busy || hasCut) return;
+    if (chat.messages.length > 0) return;
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem("motion.pending");
+    } catch {
+      raw = null;
+    }
+    if (!raw) return;
+    consumed.current = true;
+    try {
+      localStorage.removeItem("motion.pending");
+    } catch {
+      /* ignore */
+    }
+    try {
+      const p = JSON.parse(raw) as {
+        kind?: string;
+        text?: string;
+        project?: string | null;
+        template?: string;
+        headline?: string;
+      };
+      if (p.kind === "brief" && p.text) {
+        if (p.project) setProjectName(p.project);
+        window.dispatchEvent(new CustomEvent("motion:suggest", { detail: p.text }));
+        setMobileView("direct");
+      } else if (p.kind === "instant" && p.template) {
+        void publishStarter(sessionId, p.template, p.headline ? { headline: p.headline } : {})
+          .then(() => reload())
+          .catch(() => undefined);
+      }
+    } catch {
+      /* malformed package — ignore */
+    }
+  });
 
   return (
-    // Mobile: the app shell's content div is an unbounded scroll container,
-    // so h-full collapses and the preview's fit-box measures 0px — the
-    // player looks missing. Bound the studio to the viewport on small
-    // screens (lg keeps h-full inside the desktop grid).
-    <div className="flex h-[calc(100dvh-3rem)] min-h-0 flex-col lg:h-full lg:grid lg:grid-cols-[1fr_400px]">
-      <div className="flex shrink-0 gap-1 border-b border-line p-2 lg:hidden" role="tablist" aria-label="Studio panels">
-        {(["preview", "chat"] as const).map((t) => (
+    <div className="flex h-[calc(100dvh-3rem)] min-h-0 flex-col bg-ink lg:h-full">
+      {/* slim header: status left, export right */}
+      <div className="flex shrink-0 items-center gap-2.5 border-b border-line px-4 py-2.5">
+        <span className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+          <span
+            className={`h-2 w-2 rounded-full ${busy ? "live-dot bg-tungsten" : hasCut ? "bg-ok" : "bg-dim"}`}
+            aria-hidden
+          />
+          {status}
+        </span>
+        {projectName ? (
+          <span className="hidden max-w-40 truncate rounded-full border border-tungsten/40 bg-tungsten/10 px-2.5 py-0.5 text-[11px] font-semibold text-tungsten sm:inline" title={`Cutting in ${projectName}`}>
+            {projectName}
+          </span>
+        ) : null}
+        {loadError ? <span className="text-xs text-bad">· offline</span> : null}
+        <button
+          type="button"
+          onClick={openExport}
+          disabled={!hasCut}
+          title={hasCut ? "Export this cut" : "Export unlocks once your cut renders"}
+          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-xl bg-paper px-4 text-sm font-bold text-ink transition-all hover:bg-tungsten hover:text-white disabled:cursor-not-allowed disabled:bg-panel-2 disabled:text-dim"
+        >
+          <Download size={14} aria-hidden />
+          Export
+        </button>
+      </div>
+
+      {/* mobile switch */}
+      <div className="flex shrink-0 gap-1 border-b border-line p-2 lg:hidden" role="tablist" aria-label="Studio views">
+        {(["preview", "direct"] as const).map((v) => (
           <button
-            key={t}
+            key={v}
             role="tab"
-            aria-selected={tab === t}
-            onClick={() => setTab(t)}
-            className={`flex-1 rounded-md px-3 py-1.5 text-sm capitalize ${
-              tab === t ? "bg-tungsten font-semibold text-ink" : "text-muted hover:text-paper"
+            aria-selected={mobileView === v}
+            onClick={() => setMobileView(v)}
+            className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium capitalize transition-colors ${
+              mobileView === v ? "bg-paper font-bold text-ink" : "text-muted hover:text-paper"
             }`}
           >
-            {t}
-            {t === "chat" && busy ? " •" : ""}
+            {v === "preview" ? "Preview" : `Direct${busy ? " •" : ""}`}
           </button>
         ))}
       </div>
-      <main className={`${
-        tab === "preview" ? "flex" : "hidden"
-      } scroll-thin min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-3 lg:flex lg:h-full lg:p-4`}>
-        <header className="flex shrink-0 items-center gap-3">
-          <span className="text-[13px] font-semibold tracking-tight">Studio</span>
-          <span className="eyebrow">workspace</span>
-          <div className="ml-auto flex items-center gap-2 text-[10px] text-dim">
-            {loadError ? (
-              <span className="text-bad">offline — {loadError}</span>
-            ) : (
-              <span className="font-mono">{version > 0 ? `cut v${version}` : "no cut"}</span>
-            )}
-          </div>
-        </header>
-        {chunkStale ? (
-          <div className="flex shrink-0 items-center gap-3 rounded-md border border-tungsten/50 bg-tungsten/10 px-3 py-2 text-sm" role="alert">
-            <span className="text-tungsten">A new studio version is available.</span>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="ml-auto rounded-md bg-tungsten px-3 py-1 text-xs font-semibold text-ink hover:brightness-110"
-            >
-              Reload
-            </button>
-          </div>
-        ) : null}
-        {/* Fixed stage height on mobile: inside the scrolling column the
-            Stage's flex-1 would otherwise resolve against unbounded content
-            height and the fit-box measures 0px. Desktop keeps the old
-            flex-1 behaviour inside the bounded grid. */}
-        <div className="flex h-[42dvh] min-h-[280px] shrink-0 flex-col lg:h-auto lg:min-h-0 lg:flex-1">
-          <Stage code={code} plan={plan} version={version} reloadKey={reloadKey} sessionId={sessionId} />
+
+      {chunkStale ? (
+        <div className="flex shrink-0 items-center gap-3 border-b border-tungsten/50 bg-tungsten/10 px-4 py-2 text-sm" role="alert">
+          <span className="text-tungsten">A new studio version is available.</span>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="ml-auto rounded-lg bg-tungsten px-3 py-1 text-xs font-bold text-white hover:brightness-110"
+          >
+            Reload
+          </button>
         </div>
-        <Timeline plan={plan} duration={duration} />
-        <div className="flex shrink-0 flex-col gap-3 xl:flex-row">
-          <Inspector plan={plan} code={code} version={version} />
-          <ProgressView code={code} plan={plan} version={version} busy={busy} messages={chat.messages} sessionId={sessionId} />
-        </div>
-      </main>
-      <div
-        className={`${
-          tab === "chat" ? "flex" : "hidden"
-        } min-h-0 min-w-0 flex-1 flex-col lg:flex lg:h-full [&>aside]:min-h-0 [&>aside]:flex-1`}
-      >
-        <Conversation chat={chat} sessionId={sessionId} onFiles={() => {}} />
+      ) : null}
+
+      <div className="flex min-h-0 flex-1">
+        {/* preview: the stage fills everything */}
+        <main
+          className={`${
+            mobileView === "preview" ? "flex" : "hidden"
+          } min-h-0 min-w-0 flex-1 flex-col p-4 lg:order-2 lg:flex`}
+          aria-label="Preview"
+        >
+          <div className="flex min-h-[300px] flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-black lg:min-h-0">
+            <Stage code={code} plan={plan} version={version} reloadKey={reloadKey} sessionId={sessionId} />
+          </div>
+
+          {/* scenes: collapsed by default, one-tap tweaks inside */}
+          {sceneCount > 0 ? (
+            <details className="group mx-auto mt-2 w-full max-w-2xl shrink-0 overflow-hidden rounded-xl border border-line bg-panel">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm text-muted transition-colors hover:text-paper [&::-webkit-details-marker]:hidden">
+                <Film size={14} className="text-tungsten" aria-hidden />
+                <span className="font-medium">
+                  Scenes <span className=" text-xs text-dim">({sceneCount})</span>
+                </span>
+                <ChevronDown size={14} className="ml-auto text-dim transition-transform duration-300 group-open:rotate-180" aria-hidden />
+              </summary>
+              <div className="scroll-thin max-h-56 space-y-1.5 overflow-y-auto border-t border-line-soft p-3">
+                {plan!.beats.map((b, i) => (
+                  <div key={i} className="rounded-lg bg-ink px-3 py-2">
+                    <p className="flex items-baseline gap-2">
+                      <span className=" text-[11px] font-bold text-tungsten">{String(i + 1).padStart(2, "0")}</span>
+                      <span className="tc text-[11px] text-dim">{b.from}–{b.to}f</span>
+                    </p>
+                    <p className="mt-0.5 truncate text-[13px] text-paper" title={b.what}>{b.what}</p>
+                    <p className="mt-1.5 flex flex-wrap gap-1.5">
+                      {(
+                        [
+                          ["Faster", `Make scene ${i + 1} ("${b.what.slice(0, 40)}") faster — retime, don't restyle`],
+                          ["Slower", `Make scene ${i + 1} slower with room to land`],
+                          ["Split", `Split scene ${i + 1} into two scenes with a change of state`],
+                        ] as Array<[string, string]>
+                      ).map(([label, text]) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => {
+                            suggest(text);
+                            if (window.innerWidth < 1024) setMobileView("direct");
+                          }}
+                          className="rounded-md border border-line px-2 py-0.5  text-[10px] text-muted transition-colors hover:border-tungsten hover:text-tungsten"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : null}
+        </main>
+
+        {/* direct: the conversation is the whole panel */}
+        <aside
+          className={`${
+            mobileView === "direct" ? "flex" : "hidden"
+          } min-h-0 w-full flex-col lg:order-1 lg:flex lg:w-[400px] lg:shrink-0 lg:border-r lg:border-line`}
+          aria-label="Direct"
+        >
+          <Conversation chat={chat} sessionId={sessionId} onFiles={() => {}} />
+        </aside>
       </div>
+
       <ExportDialog totalFrames={duration} sessionId={sessionId} />
     </div>
   );

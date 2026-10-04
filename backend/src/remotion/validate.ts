@@ -92,6 +92,36 @@ const LANGUAGE_GLOBALS = new Set([
 ])
 
 /**
+ * Code with comments, strings and JSX text blanked (length-preserving, so
+ * line numbers survive). Identifier scans must run on this, never on raw
+ * source: a headline like `SCROLL FOR MORE`, a brand word, or a `// Beat 1`
+ * comment is content, not a variable — scanning raw source flagged every
+ * composition with real copy as "not in the player scope" and rejected
+ * files that render fine, including hand-written ones.
+ */
+function stripNoise(src: string): string {
+  const blank = (m: string) => m.replace(/[^\n]/g, " ")
+  const noComments = src
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(/\/\/[^\n]*/g, blank)
+    .replace(/`(?:\\.|[^`\\])*`/g, blank)
+    .replace(/"(?:\\.|[^"\\])*"/g, blank)
+    .replace(/'(?:\\.|[^'\\])*'/g, blank)
+  // JSX text nodes between tags: `>Motion that lands<` and `>Hello {name}<`
+  // are rendered copy, not identifiers. Expressions stay (they hold real
+  // code); only the literal text around them is blanked.
+  return noComments.replace(/>([^<>]+)</g, (m, inner: string) => {
+    const kept = inner.replace(/\{[^{}]*\}/g, (e: string) => "\0".repeat(e.length))
+    let out = ""
+    for (let i = 0; i < inner.length; i++) {
+      const c = inner[i]!
+      out += kept[i] === "\0" ? c : c === "\n" ? "\n" : " "
+    }
+    return `>${out}<`
+  })
+}
+
+/**
  * Names a composition references that the browser scope cannot
  * provide. The player strips imports and resolves every identifier
  * from a fixed scope, so anything outside it is a hard ReferenceError
@@ -99,6 +129,7 @@ const LANGUAGE_GLOBALS = new Set([
  */
 function scopeViolations(src: string, imports: Array<{ clause: string; source: string }>): Check[] {
   const out: Check[] = []
+  const clean = stripNoise(src)
 
   for (const imp of imports) {
     if (imp.source !== "lucide-react") continue
@@ -129,9 +160,10 @@ function scopeViolations(src: string, imports: Array<{ clause: string; source: s
 
   // Capitalised identifiers that are neither declared, nor imported,
   // nor core Remotion API: the exact class of failure the player
-  // reports as "<name> is not available".
+  // reports as "<name> is not available". Scanned on noise-stripped
+  // source so JSX copy and comments are never mistaken for code.
   const declared = new Set<string>()
-  for (const m of src.matchAll(/\b(?:const|let|var|function|class|type|interface)\s+([A-Za-z_$][\w$]*)/g)) {
+  for (const m of clean.matchAll(/\b(?:const|let|var|function|class|type|interface)\s+([A-Za-z_$][\w$]*)/g)) {
     declared.add(m[1]!)
   }
   for (const imp of imports) {
@@ -152,7 +184,7 @@ function scopeViolations(src: string, imports: Array<{ clause: string; source: s
     "OffthreadVideo", "Shapes", "Paths", "TransitionSeries", "Transition",
     "Overlay", "linearTiming", "springTiming", "useTransitionProgress",
   ])
-  for (const m of src.matchAll(/(?<![.\w$'"`])([A-Z][A-Za-z0-9_$]{1,})\s*(?=[(<{[\s,;)}])/g)) {
+  for (const m of clean.matchAll(/(?<![.\w$'"`])([A-Z][A-Za-z0-9_$]{1,})\s*(?=[(<{[\s,;)}])/g)) {
     const name = m[1]!
     if (
       declared.has(name) ||
@@ -269,8 +301,8 @@ export function checkComposition(code: string): Check[] {
     const stack = (m[1] ?? "").trim()
     if (/^(system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica)$/i.test(stack)) {
       out.push({
-        level: "warn",
-        message: `fontFamily "${stack}" (line ${lineOf(src, m.index ?? 0)}) is a page default, not a choice. Use Fonts.<name>.family — the available faces are listed in the prompt and in load_skill("typography").`,
+        level: "error",
+        message: `fontFamily "${stack}" (line ${lineOf(src, m.index ?? 0)}) is a browser page default — it is never a deliberate choice in a motion composition and reads as unfinished. Replace it with Fonts.<name>.family (e.g. Fonts.unbounded.family for modern, Fonts.bricolage.family for playful). Run load_skill("typography") for the full catalogue.`,
       })
     }
   }
@@ -365,22 +397,23 @@ export function checkComposition(code: string): Check[] {
   // The canvas is fixed at 1920x1080, so positions and animated ranges that
   // statically escape it are caught here instead of on the user's screen.
 
-  // Single absolute offsets that alone escape the canvas.
+  // Single absolute offsets that alone escape the canvas. Advisory: entering
+  // and exiting elements live off-canvas by design — the bug is one that
+  // never appears, which the player report (not this heuristic) proves.
   for (const m of src.matchAll(/(?:left|top|right|bottom|width|height):\s*(-?\d+(?:\.\d+)?)/g)) {
     const v = Number(m[1])
     const near = lineOf(src, m.index ?? 0)
     if (Math.abs(v) > CANVAS_W && Math.abs(v) > CANVAS_H) {
       out.push({
         level: "warn",
-        message: `Position/size ${v}px (line ${near}) exceeds the ${CANVAS_W}x${CANVAS_H} canvas — the element renders off-canvas. Check the interpolate ranges and scale.`,
+        message: `Position/size ${v}px (line ${near}) sits outside the ${CANVAS_W}x${CANVAS_H} canvas — normal for an element that enters the frame (advisory): only fix it if the element never appears on screen.`,
       })
       break // one warning is enough; the model does not need all of them
     }
   }
 
-  // Duplicate z-index on positioned elements: without bounds we cannot prove
-  // an overlap, but two absolutely-positioned layers sharing a z-index is
-  // where paint-order fights come from.
+  // Duplicate z-index on positioned elements: advisory only. Siblings in DOM
+  // order usually paint fine — separate them only if layers actually fight.
   {
     const positioned = (src.match(/position:\s*['"]absolute['"]/g) ?? []).length
     const zValues = [...src.matchAll(/zIndex:\s*(\d+)/g)].map((m) => m[1])
@@ -389,14 +422,36 @@ export function checkComposition(code: string): Check[] {
       if (dupes.length > 0) {
         out.push({
           level: "warn",
-          message: `z-index conflict: ${positioned} absolutely-positioned elements share zIndex ${[...new Set(dupes)].join(", ")}. Use the layer convention background=1, content=10, overlays=20, UI=30 so paint order is deliberate.`,
+          message: `z-index note (advisory): ${positioned} absolutely-positioned elements share zIndex ${[...new Set(dupes)].join(", ")}. DOM order already paints siblings correctly — only separate layers that actually fight (background=1, content=10, overlays=20, UI=30).`,
         })
       } else if (zValues.length < positioned) {
         out.push({
           level: "warn",
-          message: `${positioned} absolutely-positioned elements but only ${zValues.length} declare zIndex. Declare one per layer (background=1, content=10, overlays=20, UI=30).`,
+          message: `${positioned} absolutely-positioned elements but only ${zValues.length} declare zIndex (advisory). Declare one per layer (background=1, content=10, overlays=20, UI=30) where paint order matters.`,
         })
       }
+    }
+  }
+
+  // Two absolutely-positioned elements at the exact same spot: always a bug,
+  // never a design — one of them was meant to move. Advisory, one warning.
+  {
+    const posRe = /position:\s*['"]absolute['"]/g
+    const seen = new Map<string, number>()
+    let m: RegExpExecArray | null
+    while ((m = posRe.exec(src)) !== null) {
+      const window = src.slice(m.index, m.index + 500)
+      const left = /left:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0] ?? "?"
+      const top = /top:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0] ?? "?"
+      const key = `${left} | ${top}`
+      seen.set(key, (seen.get(key) ?? 0) + 1)
+    }
+    const dupe = [...seen.entries()].find(([, n]) => n >= 2)
+    if (dupe) {
+      out.push({
+        level: "warn",
+        message: `Two absolutely-positioned elements share the spot (${dupe[0]}) — they paint on top of each other. Stack text in one flex column with gap, or offset one deliberately (see layout-composition).`,
+      })
     }
   }
 
@@ -410,7 +465,7 @@ export function checkComposition(code: string): Check[] {
     if (/translate/i.test(ctx) && peak > CANVAS_W) {
       out.push({
         level: "warn",
-        message: `translate range peaks at ${peak}px (line ${near}) — past the ${CANVAS_W}px canvas width. The element leaves the frame; overflow.`,
+        message: `translate range reaches ${peak}px (line ${near}) — past the canvas edge. Entrances and exits do this by design (advisory): only fix it if the element never appears on screen.`,
       })
     } else if (!/translate|scale|rotate|opacity|clipPath/.test(ctx) && peak > CANVAS_W * 1.2) {
       out.push({
@@ -421,7 +476,7 @@ export function checkComposition(code: string): Check[] {
     if (/scale/i.test(ctx) && Math.max(...outs) > 1.5 && /position:\s*['"]absolute['"]/.test(src)) {
       out.push({
         level: "warn",
-        message: `scale peaks above 1.5x (line ${near}) on an absolutely-positioned element — elements near edges will overflow. Keep scale ≤1.5 or pull the element inward.`,
+        message: `scale peaks above 1.5x (line ${near}) — fine for a punch-in or bloom that settles inside the frame (advisory): the player report, not this heuristic, is the authority on whether it renders.`,
       })
       break
     }
@@ -517,6 +572,172 @@ export function checkComposition(code: string): Check[] {
     })
   }
 
+  // --- new hard errors from analysis: blank-frame bugs ---------------------
+
+  // interpolate() on opacity/scale without extrapolateRight: "clamp"
+  // causes values to run past their range (opacity goes negative, scale
+  // grows unbounded) after the animation window ends — blank or broken frame.
+  {
+    const interpMatches = [...src.matchAll(/interpolate\(\s*frame\s*,\s*\[[^\]]*\]\s*,\s*\[([^\]]*)\]/g)]
+    for (const m of interpMatches) {
+      const outputs = (m[1] ?? "").split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
+      if (outputs.length < 2) continue
+      const min = Math.min(...outputs)
+      const max = Math.max(...outputs)
+      // Only flag when the range is bounded [0,1] or [0,n≤2] — the patterns
+      // that go invisible/garbled when they extrapolate past the boundary.
+      const isBoundedRange = min >= 0 && max <= 2
+      if (!isBoundedRange) continue
+      // The context around this call — look for opacity or scale to be sure.
+      const ctx = src.slice(Math.max(0, (m.index ?? 0) - 300), (m.index ?? 0) + 200)
+      const isOpacityOrScale = /opacity|scale/i.test(ctx)
+      if (!isOpacityOrScale) continue
+      // Check if this specific call has an options object with extrapolate.
+      // Take the slice just past the output array to the end of the options
+      // object. NOTE: never split on ")" — an Easing.bezier(0.16, 1, 0.3, 1)
+      // inside the options contains parens, and splitting there truncated the
+      // search before extrapolateRight, flagging clamped calls as unclamped
+      // (every auto-repaired file failed validation because of this).
+      const afterOutputs = src.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 300)
+      const optsEnd = afterOutputs.indexOf("})")
+      const opts = optsEnd === -1 ? afterOutputs.split(")")[0] ?? "" : afterOutputs.slice(0, optsEnd)
+      const hasClamp = /extrapolate(?:Left|Right)\s*:\s*["']clamp["']/.test(opts)
+      if (!hasClamp) {
+        const near = lineOf(src, m.index ?? 0)
+        out.push({
+          level: "error",
+          message:
+            `interpolate() on opacity/scale at line ${near} has no extrapolateRight: "clamp". ` +
+            `After frame ${outputs[outputs.length - 1]} the value continues past ${max} — ` +
+            `element becomes invisible or oversized. Add { extrapolateRight: "clamp" } as the fourth argument.`,
+        })
+        break // one instance is enough to require a fix; avoid spam
+      }
+    }
+  }
+
+  // spring() without both frame and fps produces NaN — blank frame.
+  // The only safe form is spring({ frame: ..., fps: ..., config: ... }).
+  {
+    for (const m of src.matchAll(/\bspring\s*\(\s*\{([^}]*)\}/g)) {
+      const body = m[1] ?? ""
+      const hasFrame = /\bframe\b/.test(body)
+      const hasFps = /\bfps\b/.test(body)
+      if (!hasFrame || !hasFps) {
+        const near = lineOf(src, m.index ?? 0)
+        const missing = [!hasFrame && "frame", !hasFps && "fps"].filter(Boolean).join(" and ")
+        out.push({
+          level: "error",
+          message:
+            `spring() at line ${near} is missing ${missing}. ` +
+            `Without both, spring() returns NaN and renders a blank frame. ` +
+            `Use spring({ frame: frame - startFrame, fps, config: { damping, mass, stiffness } }).`,
+        })
+        break
+      }
+    }
+  }
+
+  // interpolateColors() with non-hex/non-valid CSS colour strings produces
+  // undefined style values — invisible text.
+  {
+    for (const m of src.matchAll(/interpolateColors\s*\([^,]+,\s*\[[^\]]*\]\s*,\s*\[([^\]]*)\]/g)) {
+      const colorsRaw = m[1] ?? ""
+      // Extract quoted strings from the colours array
+      const colorStrings = [...colorsRaw.matchAll(/["']([^"']+)["']/g)].map((c) => c[1] ?? "")
+      const VALID_COLOR = /^(#[0-9a-fA-F]{3,8}|rgb\(|rgba\(|hsl\(|hsla\(|transparent|black|white|red|blue|green|yellow|orange|purple|pink|gray|grey|navy|coral|cyan|magenta|lime|indigo|violet|teal|brown|tan|olive|silver|gold|crimson|turquoise|aqua|maroon|fuchsia)/
+      for (const color of colorStrings) {
+        if (!VALID_COLOR.test(color.trim())) {
+          const near = lineOf(src, m.index ?? 0)
+          out.push({
+            level: "error",
+            message:
+              `interpolateColors() at line ${near} contains "${color}" which is not a valid CSS colour. ` +
+              `Invalid values produce undefined — invisible text or background. ` +
+              `Use hex (#rrggbb), rgb(...), or a named CSS colour.`,
+          })
+          break
+        }
+      }
+    }
+  }
+
+  // useEffect with [frame] in its dependency array fires on every scrub —
+  // expensive and produces incorrect, non-deterministic output.
+  {
+    for (const m of src.matchAll(/useEffect\s*\([^,)]*,\s*\[([^\]]*)\]/g)) {
+      const deps = m[1] ?? ""
+      if (/\bframe\b/.test(deps)) {
+        const near = lineOf(src, m.index ?? 0)
+        out.push({
+          level: "error",
+          message:
+            `useEffect at line ${near} depends on [frame]. This fires on every scrub and produces ` +
+            `non-deterministic output — the effect runs thousands of times during a render. ` +
+            `Derive the value from useCurrentFrame() and frame directly, without useEffect.`,
+        })
+        break
+      }
+    }
+  }
+
+  // <Video> or <Audio> without crossOrigin="anonymous" when src is an http URL
+  // causes canvas tainting that breaks any effect that reads pixel data.
+  {
+    const mediaTagRe = /<(Video|Audio|OffthreadVideo)\s([^>]*?)(?:\/?>|>)/gs
+    for (const m of src.matchAll(mediaTagRe)) {
+      const attrs = m[2] ?? ""
+      const srcMatch = attrs.match(/src=\{?["']?(https?:\/\/[^"'\s}]+)["']?\}?/)
+      if (srcMatch && !/crossOrigin/.test(attrs)) {
+        const near = lineOf(src, m.index ?? 0)
+        out.push({
+          level: "warn",
+          message:
+            `<${m[1]}> at line ${near} loads from ${srcMatch[1].slice(0, 60)}... without crossOrigin="anonymous". ` +
+            `This taints the canvas and breaks effects that read pixel data (blur, effects, compositing). ` +
+            `Add crossOrigin="anonymous" as a prop.`,
+        })
+        break
+      }
+    }
+  }
+
+  // <Audio startFrom={non-integer}> — startFrom requires an integer; a float
+  // causes the audio to fail silently.
+  {
+    for (const m of src.matchAll(/<Audio\s[^>]*startFrom=\{([^}]+)\}/g)) {
+      const expr = (m[1] ?? "").trim()
+      // Only flag plain float literals — expressions like Math.round(...) are fine.
+      if (/^\d+\.\d+$/.test(expr)) {
+        const near = lineOf(src, m.index ?? 0)
+        out.push({
+          level: "warn",
+          message:
+            `<Audio> startFrom={${expr}} at line ${near} is a float — startFrom must be an integer or the audio fails silently. ` +
+            `Use Math.round(${expr}) or compute it as an integer.`,
+        })
+      }
+    }
+  }
+
+  // Duplicate import sources produce TS warnings that confuse the model.
+  {
+    const sources = imports.map((imp) => imp.source)
+    const seen = new Set<string>()
+    for (const source of sources) {
+      if (seen.has(source)) {
+        out.push({
+          level: "warn",
+          message:
+            `"${source}" is imported more than once. Merge all imports from this module into a single import statement ` +
+            `to avoid TypeScript compile warnings and confusing the tree-shaker.`,
+        })
+        break // one warning is enough
+      }
+      seen.add(source)
+    }
+  }
+
   // --- motion quality heuristics (AGENT_UPGRADE_PLAN Phase 1) ----------------
   // Advisory only (warn): these read as cheap motion, never as broken code.
 
@@ -524,10 +745,12 @@ export function checkComposition(code: string): Check[] {
     const interpolates = (src.match(/interpolate\(/g) ?? []).length
     const easings = (src.match(/Easing\./g) ?? []).length
     const springs = (src.match(/\bspring\(/g) ?? []).length
-    const hasTransform = /translate[XY]|scale|rotate|skew/i.test(src)
+    const hasTransform = /translate[XY]?|scale|rotate|skew/i.test(src)
     const hasOpacity = /opacity/i.test(src)
     const hasMap = /\.map\(/.test(src)
-    const hasStagger = /delay|stagger|index\s*[\*\+\-]/.test(src)
+    // Stagger patterns: explicit delay/stagger variable, or index multiplied/added
+    // to a number (e.g. `i * 3`, `index + 2`, `idx * 5`).
+    const hasStagger = /\bdelay\b|\bstagger\b|\b(?:index|idx|i)\s*[\*\+]\s*\d/.test(src)
 
     if (interpolates > 0 && easings === 0 && springs === 0) {
       out.push({
@@ -549,24 +772,30 @@ export function checkComposition(code: string): Check[] {
     if (hasMap && !hasStagger) {
       out.push({
         level: "warn",
-        message: "A list maps over items with no stagger. Offset each item's start (e.g. index * 3 frames) to turn a block into a sequence.",
+        message: "A list maps over items with no stagger. Offset each item's start by index (e.g. `i * 3` frames) to turn a block appearance into a cascade.",
       })
     }
 
     // Transitions faster than ~15 frames are felt, not seen.
-    for (const m of src.matchAll(/interpolate\(\s*frame\s*,\s*\[([^\]]*)\]/g)) {
-      const nums = (m[1] ?? "").split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
-      for (let i = 1; i < nums.length; i++) {
-        const span = (nums[i] ?? 0) - (nums[i - 1] ?? 0)
-        if (span > 0 && span < 15) {
-          out.push({
-            level: "warn",
-            message: `A transition spans ${span} frames (line ${lineOf(src, m.index ?? 0)}) — under 15 frames it is too fast to perceive. Hold it for at least 15-24 frames.`,
-          })
-          break
+    {
+      let firedFastTransition = false
+      for (const m of src.matchAll(/interpolate\(\s*frame\s*,\s*\[([^\]]*)\]/g)) {
+        if (firedFastTransition) break
+        const nums = (m[1] ?? "").split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
+        for (let i = 1; i < nums.length; i++) {
+          const span = (nums[i] ?? 0) - (nums[i - 1] ?? 0)
+          if (span > 0 && span < 15) {
+            out.push({
+              level: "warn",
+              message:
+                `A transition spans ${span} frames (line ${lineOf(src, m.index ?? 0)}) — too fast to perceive (under 15 frames at 30fps). ` +
+                `Hold it for at least 15-24 frames so the motion registers.`,
+            })
+            firedFastTransition = true
+            break
+          }
         }
       }
-      break // first offending range is enough to act on
     }
 
     // Sequential Sequences with no handoff read as a slide deck.
@@ -581,9 +810,25 @@ export function checkComposition(code: string): Check[] {
         if (!overlaps) {
           out.push({
             level: "warn",
-            message: `${sorted.length} Sequences run end-to-end with no overlap — isolated blocks, no handoff. Start each beat 10-15 frames before the previous ends.`,
+            message: `${sorted.length} Sequences run end-to-end with no overlap — isolated blocks, no handoff. Start each beat 10-15 frames before the previous ends so elements cross-dissolve rather than cut.`,
           })
         }
+      }
+    }
+
+    // Entrance/exit motion validation: elements that have position absolute
+    // but no translate/scale animation are static layers with no entrance.
+    // Only fire if there are at least 2 positioned elements and none animate.
+    {
+      const positioned = (src.match(/position:\s*['"]absolute['"]/g) ?? []).length
+      const hasAnyMotion = /translate|scale|rotate|opacity\s*:\s*interpolate|spring\s*\(/.test(src)
+      if (positioned >= 2 && !hasAnyMotion && interpolates === 0) {
+        out.push({
+          level: "warn",
+          message:
+            `${positioned} absolutely-positioned elements with no entrance or exit motion. ` +
+            `Static layers read as a still image — give each element a translate, scale or opacity entrance from useCurrentFrame().`,
+        })
       }
     }
   }

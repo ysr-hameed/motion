@@ -50,8 +50,11 @@ const Overlay = TransitionSeries.Overlay
 
 export const SCOPE: Record<string, unknown> = {
   // React
+  // NOTE: useState is deliberately absent — the validator rejects it (Remotion
+  // renders must derive everything from useCurrentFrame) and scope + validator
+  // must agree, otherwise the model gets contradictory errors. Same for
+  // Composition below.
   React,
-  useState: React.useState,
   useEffect: React.useEffect,
   useLayoutEffect: React.useLayoutEffect,
   useMemo: React.useMemo,
@@ -81,7 +84,8 @@ export const SCOPE: Record<string, unknown> = {
   Audio: Remotion.Audio,
   AnimatedImage: Remotion.AnimatedImage,
   Solid: Remotion.Solid,
-  Composition: Remotion.Composition,
+  // Composition deliberately absent — rendering one inside the player throws;
+  // the validator rejects it, so the scope must too (see note above).
   /**
    * `Interactive.*` is how Remotion wants anything authored today — each
    * element becomes a separately editable node in the Studio. Remotion's

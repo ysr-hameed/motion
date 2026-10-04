@@ -66,20 +66,31 @@ account is on Free, which rejects it, and it is not needed.
 
 ## Tools
 
-Eleven, all scoped to a single composition — none of them take a project or
+Sixty-four, all scoped to a single composition — none of them take a project or
 file id, because there is exactly one cut per conversation and an id the model
 could get wrong was a reliable source of mistakes.
 
+Fast path (a new brief costs 3 calls, not 11):
+
 | Tool | Purpose |
 |---|---|
-| `get_canvas` | Dimensions, fps, frame budget, current version |
-| `load_skill` | One of 31 vendored Remotion docs, on demand |
+| `quick_start` | Plans + writes + validates a golden composition in ONE call |
+| `preview_composition` | Publishes to the player; only when it validates |
+| `read_render_report` | Browser compile+mount verdict — the only render truth |
+
+Full path and refinement:
+
+| Tool | Purpose |
+|---|---|
+| `creative_direct` | Art direction in one call: intent + palette + fonts + beat→preset map |
+| `load_skill` | One of 35 vendored docs (Remotion API + 4 design skills), on demand |
 | `plan_motion` | Records the beat sheet; the player draws it as a timeline |
 | `read_file` | Current source, verbatim |
-| `write_composition` | The whole file in one call; refuses to save invalid source |
-| `edit_file` | Exact-string ops for small changes |
+| `write_composition` | The whole file in one call; auto-repairs inline, refuses invalid source |
+| `edit_file` / `bulk_edit` | Exact-string ops for small / batched changes |
 | `validate_composition` | Errors that stop a render, warnings that mean a blank frame |
-| `preview_comotion` | Publishes to the player; only when it validates |
+| `verify_no_errors` | Blocking gate before preview (errors + failed player report) |
+| `auto_fix_code` / `auto_enhance_motion` | Mechanical repairs, max 2 rounds |
 | `review_motion` | Motion critique — see below |
 | `list_versions` / `restore_version` | Roll back without losing history |
 
@@ -96,10 +107,11 @@ returns two or three specific findings rather than a generic list.
 
 ### Skills
 
-31 Remotion documents in `skills/remotion-markup/`, inlined into the Worker by
-`pnpm run skills:build`. The model sees only the ids (~60 tokens) and pulls the
-one it needs, so a `load_skill` costs 1-3k tokens of context regardless of how
-many exist.
+35 documents in `skills/remotion-markup/` (31 Remotion API + 4 design skills:
+`creative-direction`, `kinetic-typography`, `cinematic-motion`,
+`layout-composition`), inlined into the Worker by `pnpm run skills:build`.
+The model sees only the ids (~60 tokens) and pulls the one it needs, so a
+`load_skill` costs 1-3k tokens of context regardless of how many exist.
 
 `calculate` deliberately does not use `eval`/`new Function`: the input comes
 from a model, so that would turn a bad generation into remote code execution.

@@ -17,14 +17,19 @@ interface PlanUsage {
 }
 
 function Bar({ used, limit }: { used: number; limit: number }) {
-  if (limit < 0) return <span className="text-xs text-muted">Unlimited</span>;
+  if (limit < 0) return <span className="rounded-full border border-ok/40 bg-ok/10 px-2 py-0.5  text-[10px] text-ok">Unlimited</span>;
   const pct = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+  const hot = pct >= 80;
   return (
     <span className="flex items-center gap-2 text-xs text-muted">
-      <span className="h-1.5 w-32 overflow-hidden rounded-full bg-line">
-        <span className="block h-full bg-tungsten" style={{ width: `${pct}%` }} />
+      <span className="h-2 w-40 overflow-hidden rounded-full bg-line">
+        <span
+          className={`block h-full rounded-full transition-all ${hot ? "bg-bad shadow-[0_0_12px_rgb(255_122_122/0.6)]" : "bg-tungsten shadow-[0_0_12px_rgb(217_72_0/0.5)]"}`}
+          style={{ width: `${pct}%` }}
+        />
       </span>
-      {used} / {limit}
+      <span className="tc">{used} / {limit}</span>
+      {hot ? <span className=" text-[10px] text-bad">near limit</span> : null}
     </span>
   );
 }

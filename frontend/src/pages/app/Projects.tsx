@@ -73,18 +73,21 @@ export default function Projects() {
       <PageHeader
         title="My Projects"
         action={
-          <Button size="sm" onClick={() => setCreating((v) => !v)}>
+          <Button size="sm" className="btn-sheen shadow-[0_0_20px_rgb(217_72_0/0.25)]" onClick={() => setCreating((v) => !v)}>
             + New Project
           </Button>
         }
       />
+      <p className="mb-4  text-[11px] text-dim">
+        {(data?.projects ?? []).length} projects · {(data?.projects ?? []).filter((p) => p.status === "active").length} active · groups for campaigns & clients
+      </p>
       {actionError ? (
         <div className="mb-4">
           <Alert>{actionError}</Alert>
         </div>
       ) : null}
       {creating ? (
-        <form onSubmit={create} className="mb-4 flex gap-2">
+        <form onSubmit={create} className="panel-lift mb-4 flex gap-2 p-3">
           <div className="flex-1">
             <Field label="Project name" value={name} onChange={(e) => setName(e.target.value)} required />
           </div>
@@ -101,14 +104,14 @@ export default function Projects() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search projects"
             aria-label="Search projects"
-            className="h-9 w-56 rounded-md border border-line bg-panel pl-9 pr-3 text-sm outline-none placeholder:text-dim focus:border-tungsten"
+            className="h-10 w-64 rounded-xl border border-line bg-panel pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-dim focus:border-tungsten/60"
           />
         </span>
         {(["all", "active", "archived"] as const).map((s) => (
           <button
             key={s}
             onClick={() => setStatus(s)}
-            className={`rounded-full px-3 py-1 text-xs capitalize ${status === s ? "bg-tungsten font-semibold text-ink" : "border border-line text-muted hover:text-paper"}`}
+            className={`rounded-full px-4 py-1.5 text-xs font-bold capitalize transition-all ${status === s ? "bg-paper text-ink shadow-[2px_2px_0_rgb(217_72_0)]" : "border border-line text-muted hover:border-dim hover:text-paper"}`}
           >
             {s}
           </button>
@@ -143,35 +146,47 @@ export default function Projects() {
       ) : filtered.length === 0 ? (
         <Card><p className="text-center text-sm text-muted">No projects match.</p></Card>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((p) => (
-            <Card key={p.id}>
-              <p className="truncate text-sm font-semibold">{p.name}</p>
-              <p className="mt-1 text-xs text-dim">
-                {p.status} · {new Date(p.updated_at).toLocaleDateString()}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Link to="/studio">
-                  <Button size="sm" variant="secondary">Open</Button>
-                </Link>
-                {p.status === "active" ? (
-                  <Button size="sm" variant="ghost" onClick={() => setStatusOf(p.id, "archived")}>
-                    Archive
-                  </Button>
-                ) : (
-                  <Button size="sm" variant="ghost" onClick={() => setStatusOf(p.id, "active")}>
-                    Restore
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => remove(p.id)}
-                >
-                  Delete
-                </Button>
+            <div key={p.id} className="spotlight panel-lift card-hover group overflow-hidden p-0">
+              {/* thumbnail strip — generative gradient per project */}
+              <div
+                className="relative flex h-24 items-end justify-between overflow-hidden p-3"
+                style={{ background: `linear-gradient(120deg, hsl(${(p.name.length * 47) % 360} 40% 14%), hsl(${((p.name.length * 47) + 60) % 360} 55% 20%))` }}
+              >
+                <div className="flex items-end gap-1 opacity-70" aria-hidden>
+                  {[5, 9, 6, 12, 8, 11, 7, 10].map((h, i) => (
+                    <div key={i} className={`w-1.5 rounded-sm ${i % 3 === 1 ? "bg-tungsten" : "bg-white/25"}`} style={{ height: `${h * 2}px` }} />
+                  ))}
+                </div>
+                <span className={`rounded-full border px-2 py-0.5  text-[10px] capitalize backdrop-blur ${p.status === "active" ? "border-ok/40 bg-ok/15 text-ok" : "border-line bg-black/40 text-muted"}`}>
+                  {p.status}
+                </span>
               </div>
-            </Card>
+              <div className="p-4">
+                <p className="truncate text-[15px] font-semibold">{p.name}</p>
+                <p className="mt-1  text-[11px] text-dim">
+                  updated {new Date(p.updated_at).toLocaleDateString()}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Link to="/studio">
+                    <Button size="sm">Open →</Button>
+                  </Link>
+                  {p.status === "active" ? (
+                    <Button size="sm" variant="ghost" onClick={() => setStatusOf(p.id, "archived")}>
+                      Archive
+                    </Button>
+                  ) : (
+                    <Button size="sm" variant="ghost" onClick={() => setStatusOf(p.id, "active")}>
+                      Restore
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={() => remove(p.id)}>
+                    Delete
+                  </Button>
+                </div>
+              </div>
+            </div>
           ))}
         </div>
       )}

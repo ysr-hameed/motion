@@ -15,7 +15,7 @@ import {
   performanceProfile,
   preferenceApply,
 } from "./intelligence"
-import { applyTemplate, TEMPLATES } from "./templates"
+import { applyTemplate, goldenStarter, TEMPLATES } from "./templates"
 import { cacheGet, cacheSet, predictTools, TTL } from "./cache"
 import {
   backgroundGenerate,
@@ -30,7 +30,7 @@ import { cdnPublish, exportBundle, exportPreset, EXPORT_PRESETS, thumbnailSpec, 
 import { feedbackRequest, shareCreate, teamInvite } from "./collab"
 import { threeCameraPath, threeModelAnimate, threeSceneCreate } from "./motion3d"
 import { presetForBeat, presetSnippet, textAnimationSnippet } from "./motion-library"
-import { LayoutEngine } from "./layout-engine"
+import { LayoutEngine, buildCompositionHints } from "./layout-engine"
 import type { ElementType, LayoutStrategy } from "./layout-engine"
 import { DISPLAY_FACES } from "./type"
 
@@ -50,6 +50,28 @@ export const CANVAS = { width: 1920, height: 1080, fps: 30, maxFrames: 900 } as 
 
 const FRAME = `frame numbers, 0-indexed, ${CANVAS.fps}fps, canvas ${CANVAS.width}x${CANVAS.height}, max ${CANVAS.maxFrames} frames (30s)`
 
+/** Studio palettes per tone — background, ink, accent(s). Three hues max. */
+function paletteForTone(tone: string): { bg: string; ink: string; accents: string[]; note: string } {
+  const t = tone.toLowerCase()
+  if (/energetic|hype|bold|sport/.test(t))
+    return { bg: "#101014", ink: "#F4F2EC", accents: ["#FF5A5A", "#5AC8FA"], note: "Fast entrances 24-40f, overshoot 1.06-1.12." }
+  if (/playful|fun|quirky/.test(t))
+    return { bg: "#1B1035", ink: "#F4F2EC", accents: ["#FF7AD9", "#C6F24E"], note: "Bouncy springs damping 10-14, stagger 2-3f." }
+  if (/minimal/.test(t))
+    return { bg: "#F4F2EC", ink: "#141414", accents: ["#E4572E"], note: "Long holds, mask reveals, no glow." }
+  if (/elegant|prestige|luxury|editorial|serif/.test(t))
+    return { bg: "#111214", ink: "#EFE9DC", accents: ["#D8B56B"], note: "Slow settles damping 24+, fades earned and paired with push." }
+  if (/tech|futur|saas|data/.test(t))
+    return { bg: "#0B0E14", ink: "#E8EEF7", accents: ["#5AC8FA"], note: "Geometric type, grid decor, tight springs." }
+  return { bg: "#0B0C10", ink: "#F2F3F7", accents: ["#FFB340"], note: "Cinematic default: vignette + slow settles." }
+}
+
+/** Beat → preset numbers for creative_direct (one call, no preset round-trips). */
+function pickPreset(beat: string): { preset: string; easing: string; duration: number } {
+  const { id, preset } = presetForBeat(beat)
+  return { preset: id, easing: preset.easing, duration: preset.duration }
+}
+
 /**
  * Builds the tool set for one conversation.
  *
@@ -64,8 +86,11 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "Load the Remotion documentation for one topic. This is the reference for " +
         "the exact Remotion version installed here — the API moves, so working from " +
         "memory produces plausible code that does not render. Load a skill BEFORE " +
-        "writing the code it covers, not when something is already broken. Always " +
-        "worth loading: timing, sequencing, compositions. Then as needed: animations, " +
+        "writing the code it covers, not when something is already broken. Design " +
+        "skills (taste, not API): creative-direction, kinetic-typography, " +
+        "cinematic-motion, layout-composition — load creative-direction once per " +
+        "new full-path cut, the others when the beat needs them. API skills: " +
+        "timing, sequencing, compositions. Then as needed: animations, " +
         "transitions, effects, shapes, audio, images, video, fonts, text, parameters, " +
         "multi-scene-video, spring, interpolate, easing.",
       inputSchema: z.object({
@@ -169,7 +194,12 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
           .describe("The complete TSX source of the composition, imports included."),
       }),
       execute: async ({ code }) => {
-        const checks = checkComposition(code)
+        // 50x fix: mechanical repairs run INLINE on every write, so a turn
+        // that needed write → validate → auto_fix_code → rewrite (4 paced
+        // model calls, ~48s) now lands in one call. Repairs are the same
+        // pure helpers auto_fix_code uses — results can never drift.
+        const repaired = autoRepairInline(code)
+        const checks = checkComposition(repaired.code)
         const errors = checks.filter((c) => c.level === "error")
         // Refuse a file that cannot run, with the reason. The alternative is
         // storing broken source and discovering it at render time.
@@ -179,13 +209,15 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
             rejected: true,
             errors: errors.map((e) => e.message),
             warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
+            ...(repaired.applied.length > 0 ? { autoRepaired: repaired.applied } : {}),
           }
         }
-        const n = store.write(code, { bumpVersion: true })
+        const n = store.write(repaired.code, { bumpVersion: true })
         return {
           ok: true,
           version: n,
           warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
+          ...(repaired.applied.length > 0 ? { autoRepaired: repaired.applied } : {}),
         }
       },
     }),
@@ -194,8 +226,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       description:
         "Change a small, specific part of the existing composition. One note touches " +
         "one thing. Each op's `find` must be copied EXACTLY from read_file, " +
-        "including indentation — it is a literal string match, and a near miss is " +
-        "reported back as unapplied rather than silently ignored. Use write_composition " +
+        "including indentation — it is a literal string match. When an op misses, " +
+        "the result names the closest real lines (suggestion): retry from those " +
+        "instead of re-guessing. Use write_composition " +
         "instead only for a genuine rewrite. For multi-part changes (rename " +
         "across the file, icon swaps, several small fixes) use bulk_edit.",
       inputSchema: z.object({
@@ -220,7 +253,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "read_file; ops apply in order, the whole batch validates once, and " +
         "the version bumps once. Any op may match MANY occurrences to " +
         "rename/replace across the file (that is the difference from edit_file, " +
-        "which requires a unique match). Prefer this over five sequential " +
+        "which requires a unique match). Atomic: one missed op saves nothing, " +
+        "but the failure names the closest real lines (suggestion) — retry the " +
+        "batch from those. Prefer this over five sequential " +
         "edit_file calls.",
       inputSchema: z.object({
         ops: z
@@ -245,17 +280,31 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       description:
         "Run the correctness checks over the current source. Call after any change. " +
         "Returns errors that would stop it rendering and warnings about things that " +
-        "usually mean a blank frame or a non-deterministic render.",
+        "usually mean a blank frame or a non-deterministic render. When the player " +
+        "already failed THIS version in the browser, that verdict comes back as " +
+        "browserError — fix it first; the static results below it are secondary.",
       inputSchema: z.object({}),
       execute: async () => {
         const { code, version } = store.current()
         if (!code) return { ok: false, errors: ["No composition to validate."], warnings: [] }
         const checks = checkComposition(code)
+        const browserFailure = currentBrowserFailure(store, agent)
         return {
           ok: !checks.some((c) => c.level === "error"),
           version,
           errors: checks.filter((c) => c.level === "error").map((c) => c.message),
           warnings: checks.filter((c) => c.level === "warn").map((c) => c.message),
+          ...(browserFailure
+            ? {
+                browserError: {
+                  ...(browserFailure.phase ? { phase: browserFailure.phase } : {}),
+                  ...(browserFailure.message ? { message: browserFailure.message } : {}),
+                  ...(browserFailure.line !== undefined ? { line: browserFailure.line } : {}),
+                  fixHint: browserFixHint(browserFailure.message ?? ""),
+                },
+                note: "The player failed THIS version in the browser — fix browserError first; static results below are secondary.",
+              }
+            : {}),
         }
       },
     }),
@@ -332,11 +381,13 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
               }
             }
             if (!report.ok) {
+              const message = report.message ?? "The browser failed to render this version."
               return {
                 status: "failed",
                 version: report.version,
-                message: report.message ?? "The browser failed to render this version.",
+                message,
                 findings: report.findings,
+                fixHint: browserFixHint(message),
               }
             }
             // Compile succeeded but nothing has mounted yet — keep waiting
@@ -510,13 +561,15 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
     auto_fix_code: tool({
       description:
         "Apply confidence-scored repairs to the current composition, then re-validate. " +
-        "High-confidence fixes (Math.random→random, page-default font→Fonts, " +
-        "linear interpolate→Easing.bezier) apply automatically. Medium/low-confidence " +
-        "findings (missing frame binding, missing default export, overflow, " +
-        "z-conflict, missing spring) return with a preview for approval instead. " +
+        "High-confidence fixes (Math.random→random with import, page-default " +
+        "font→Fonts, lucide named imports→Lucide namespace with correct alias handling, " +
+        "linear interpolate→Easing.bezier, missing frame binding, missing default export) " +
+        "apply automatically. Pass it EITHER validate_composition errors OR a browser " +
+        "failure message from read_render_report — it understands both. Medium/low-confidence " +
+        "findings (overflow, z-conflict, missing spring) return with a preview for approval. " +
         "A genuine rewrite still goes through write_composition.",
       inputSchema: z.object({
-        errors: z.array(z.string()).min(1).describe("Error messages from validate_composition."),
+        errors: z.array(z.string()).min(1).describe("Error messages from validate_composition, or a browser failure message from read_render_report."),
       }),
       execute: async ({ errors }) => {
         let code = store.current().code
@@ -531,41 +584,153 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         const suggested: Fix[] = []
 
         // --- high-confidence: objective errors, safe to apply ----------------
-        if (/Math\.random\s*\(/.test(code)) {
-          code = code.replace(/Math\.random\(\)/g, "random(null)")
-          applied.push({
-            issue: "Non-deterministic Math.random()",
-            fix: "Replaced with Remotion's seeded random(null)",
-            confidence: "high",
-            preview: { before: "Math.random()", after: "random(null)" },
-          })
-        }
+
+        // Fix: only replace Math.random() in non-comment, non-string contexts
+        // Bug fix (Issue 8): the previous regex replaced Math.random() inside
+        // comments, which changed comment text without fixing the actual error.
         {
-          const m = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica)["']/i.exec(code)
-          if (m) {
-            const face = DISPLAY_FACES[0]
-            code = code.replace(m[0], `fontFamily: Fonts.${face}.family`)
+          const stripped = code
+            .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
+            .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
+            .replace(/`(?:\\.|[^`\\])*`/g, (m) => " ".repeat(m.length))
+            .replace(/"(?:\\.|[^"\\])*"/g, (m) => " ".repeat(m.length))
+            .replace(/'(?:\\.|[^'\\])*'/g, (m) => " ".repeat(m.length))
+          if (/Math\.random\s*\(/.test(stripped)) {
+            // Apply the replacement only to positions that are in the stripped version
+            const randomRe = /Math\.random\s*\(\s*\)/g
+            let newCode = ""
+            let lastIdx = 0
+            let match: RegExpExecArray | null
+            let count = 0
+            while ((match = randomRe.exec(code)) !== null) {
+              // Only replace if the same position in stripped is not whitespace-padded
+              const atPos = stripped.slice(match.index, match.index + match[0].length)
+              if (!/^\s+$/.test(atPos)) {
+                newCode += code.slice(lastIdx, match.index) + "random(null)"
+                lastIdx = match.index + match[0].length
+                count++
+              }
+            }
+            if (count > 0) {
+              code = newCode + code.slice(lastIdx)
+              code = ensureRandomImport(code).code
+              applied.push({
+                issue: `Non-deterministic Math.random() (${count} occurrence${count > 1 ? "s" : ""})`,
+                fix: "Replaced with Remotion's seeded random(null), import added from remotion",
+                confidence: "high",
+                preview: { before: "Math.random()", after: "random(null)" },
+              })
+            }
+          }
+        }
+
+        {
+          const { code: next, names } = applyLucideNamespace(code)
+          if (names.length > 0) {
+            code = next
             applied.push({
-              issue: `Page-default fontFamily "${m[1]}"`,
-              fix: `Replaced with Fonts.${face}.family`,
+              issue: `Named lucide-react import(s): ${names.join(", ")}`,
+              fix: "Converted to the Lucide namespace the player scope provides (<Lucide.Name/>) — named imports throw at mount. Alias mappings (import { X as Y }) handled correctly.",
               confidence: "high",
-              preview: { before: m[0], after: `fontFamily: Fonts.${face}.family` },
+              preview: {
+                before: `import { ${names[0]} } from "lucide-react"`,
+                after: `import * as Lucide from "lucide-react" + <Lucide.${names[0]} />`,
+              },
             })
           }
         }
+
+        // Fix: replace ALL occurrences of page-default fonts, not just the first
+        // Bug fix (Issue 8): previous code used a single .exec() + replace on m[0],
+        // so only the first occurrence was fixed.
+        {
+          const fontRe = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica)["']/gi
+          const matches = [...code.matchAll(fontRe)]
+          if (matches.length > 0) {
+            const face = DISPLAY_FACES[0]
+            code = code.replace(fontRe, `fontFamily: Fonts.${face}.family`)
+            applied.push({
+              issue: `Page-default fontFamily (${matches.length} occurrence${matches.length > 1 ? "s" : ""})`,
+              fix: `Replaced all with Fonts.${face}.family`,
+              confidence: "high",
+              preview: { before: matches[0]![0], after: `fontFamily: Fonts.${face}.family` },
+            })
+          }
+        }
+
         {
           const { upgraded, count } = applyNakedEasing(code)
           if (count > 0) {
             code = ensureEasingImport(upgraded).code
             applied.push({
               issue: `${count} linear interpolate() call(s)`,
-              fix: "Added Easing.bezier(0.16, 1, 0.3, 1)",
+              fix: "Added Easing.bezier(0.16, 1, 0.3, 1) with clamped extrapolation",
               confidence: "high",
               preview: {
                 before: "interpolate(frame, [a, b], [c, d])",
-                after: "interpolate(frame, [a, b], [c, d], { easing: Easing.bezier(0.16, 1, 0.3, 1) })",
+                after: "interpolate(frame, [a, b], [c, d], { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: \"clamp\", extrapolateRight: \"clamp\" })",
               },
             })
+          }
+        }
+
+        // Structural fix: missing frame binding — auto-add useCurrentFrame()
+        // Bug fix (Issue 8): previously only surfaced as "suggested", never applied.
+        // This is mechanical and safe: useCurrentFrame() is always the right fix.
+        {
+          const needsFrame =
+            /interpolate\(\s*frame\b/.test(code) &&
+            !/useCurrentFrame\(\)/.test(code) &&
+            !/(?:const|let|var)\s+frame\b/.test(code)
+          if (needsFrame) {
+            // Insert `const frame = useCurrentFrame();` after the first `{` of
+            // the component function body. Match the first function/arrow body opening.
+            const bodyOpen = code.search(/(?:function\s+\w+[^{]*|=>\s*)\{/)
+            if (bodyOpen !== -1) {
+              const insertAt = code.indexOf("{", bodyOpen) + 1
+              const indent = "  "
+              const insertion = `\n${indent}const frame = useCurrentFrame();`
+              code = code.slice(0, insertAt) + insertion + code.slice(insertAt)
+              // Ensure useCurrentFrame is imported from remotion
+              if (!/useCurrentFrame/.test(code.split(insertion)[0] ?? "")) {
+                const m = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/.exec(code)
+                if (m) {
+                  code = code.replace(m[0], `import {${m[1].replace(/\s+$/, "")}, useCurrentFrame } from "remotion"`)
+                }
+              }
+              applied.push({
+                issue: "interpolate() reads `frame` but no frame binding exists",
+                fix: "Added `const frame = useCurrentFrame();` at the top of the component body",
+                confidence: "high",
+                preview: { before: "(no frame binding)", after: "const frame = useCurrentFrame();" },
+              })
+            }
+          }
+        }
+
+        // Structural fix: missing default export
+        // Bug fix (Issue 8): previously only surfaced as "suggested". This is mechanical:
+        // find the last top-level function/const that looks like a component.
+        {
+          if (!/export\s+default\b/.test(code)) {
+            const compMatch = [...code.matchAll(/^(?:const|function)\s+([A-Z][A-Za-z0-9_]*)\s*(?:=|{|\()/gm)].pop()
+            if (compMatch?.[1]) {
+              const name = compMatch[1]
+              code = code.trimEnd() + `\n\nexport default ${name};\n`
+              applied.push({
+                issue: "Missing default export",
+                fix: `Appended \`export default ${name};\` — matched the last top-level component`,
+                confidence: "high",
+                preview: { before: "(no default export)", after: `export default ${name};` },
+              })
+            } else {
+              suggested.push({
+                issue: "Missing default export",
+                fix: "Append `export default <TopLevelComponent>;` matching the component name",
+                confidence: "medium",
+                preview: { before: "(no default export)", after: "export default MyCut;" },
+              })
+            }
           }
         }
 
@@ -576,22 +741,6 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
             .filter((c) => c.level === "warn")
             .map((c) => c.message),
         ].join("\n")
-        if (/frame variable|useCurrentFrame|needs a frame/i.test(context) && !/useCurrentFrame\(\)/.test(code)) {
-          suggested.push({
-            issue: "interpolate() reads `frame` with no frame binding",
-            fix: "Add `const frame = useCurrentFrame();` inside the component (and import useCurrentFrame from remotion)",
-            confidence: "medium",
-            preview: { before: "(no frame binding)", after: "const frame = useCurrentFrame();" },
-          })
-        }
-        if (/default export/i.test(context)) {
-          suggested.push({
-            issue: "Missing default export",
-            fix: "Append `export default <TopLevelComponent>;` matching the component name",
-            confidence: "medium",
-            preview: { before: "(no default export)", after: "export default MyCut;" },
-          })
-        }
         if (/overflow|off-canvas/i.test(context)) {
           suggested.push({
             issue: "Layout overflow",
@@ -696,6 +845,47 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       execute: async ({ brief }) => intentQuestionnaire(brief),
     }),
 
+    creative_direct: tool({
+      description:
+        "ONE-CALL art direction for a new brief: intent + palette + font pairing + " +
+        "beat-to-preset map + layout strategy + which skill holds the detail. " +
+        "Call this INSTEAD of intent_deep_analyze + font_suggest + load_motion_preset " +
+        "on the full path — it replaces three paced calls with one. The presets " +
+        "name exact easing/spring numbers; copy them, never invent curves.",
+      inputSchema: z.object({
+        brief: z.string().min(1).describe("The user's brief, verbatim."),
+      }),
+      execute: async ({ brief }) => {
+        const intent = intentDeepAnalyze(brief)
+        const fonts = suggestFonts(intent.tone)
+        const b = brief.toLowerCase()
+        const beats: Array<{ beat: string; preset: string; easing: string; duration: number }> = [
+          { beat: "anticipation", ...pickPreset("anticipation") },
+          { beat: "entrance", ...pickPreset("entrance") },
+        ]
+        if (/word|text|headline|title|quote|list|stagger|cascade|name/i.test(b)) {
+          beats.push({ beat: /char|letter/.test(b) ? "text-cascade" : "cascade", ...pickPreset("cascade") })
+        }
+        if (/logo|icon|badge|mark/i.test(b)) beats.push({ beat: "emphasis", ...pickPreset("emphasis") })
+        if (/depth|parallax|scene|background|layer/i.test(b)) {
+          beats.push({ beat: "parallax", ...pickPreset("parallax") })
+          beats.push({ beat: "counter-motion", ...pickPreset("counter-motion") })
+        }
+        if (/reveal|mask|wipe|curtain|uncover/i.test(b)) beats.push({ beat: "reveal", ...pickPreset("reveal") })
+        beats.push({ beat: "settle", ...pickPreset("settle") })
+        beats.push({ beat: "idle", ...pickPreset("idle") })
+        beats.push({ beat: "hold", ...pickPreset("hold") })
+        return {
+          intent: { goal: intent.goal, tone: intent.tone, length: intent.lengthLabel, audience: intent.audience, platform: intent.platform },
+          palette: paletteForTone(intent.tone),
+          fonts: { display: fonts.display, text: fonts.text, css: fonts.css },
+          beats,
+          layout: "One focal element upper-third or center; supporting copy in ONE flex column beneath it; decor at zIndex 1; 96px safe margins; load_skill(\"layout-composition\") for placement rules.",
+          aliveness: "Anticipation → overshoot spring → secondary motion → idle breathing. Load_skill(\"cinematic-motion\") for the snippets; load_skill(\"kinetic-typography\") when the beat is type-led.",
+        }
+      },
+    }),
+
     decision_make: tool({
       description:
         "Score explicit design options on weighted criteria and return the " +
@@ -789,6 +979,45 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       execute: async () => ({
         templates: TEMPLATES.map((t) => ({ id: t.id, name: t.name, variants: t.variants })),
       }),
+    }),
+
+    quick_start: tool({
+      description:
+        "FAST PATH: plan + write + validate a proven golden composition in ONE model call. " +
+        "Use this FIRST on every new brief that matches a template (product reveal, logo sting, " +
+        "quote card, ad, promo, intro) — it publishes a rendering cut immediately, and follow-up " +
+        "edits refine it. Costs 1 paced call instead of 6 (template + plan + presets + write + " +
+        "validate + fix). Pass the brief's product/brand/headline words; the golden file already " +
+        "has spring landings, bezier easing, clamps, stagger, Fonts.* and the Lucide namespace.",
+      inputSchema: z.object({
+        template: z.string().describe("Template id, e.g. 'product-reveal'. Any id falls back to the product-reveal golden."),
+        product: z.string().optional().describe("Product or hero word shown large."),
+        brand: z.string().optional().describe("Brand word for the logo sting."),
+        headline: z.string().max(120).optional().describe("Headline cascaded per word."),
+      }),
+      execute: async ({ template, product, brand, headline }) => {
+        const golden = goldenStarter(template, { product, brand, headline })
+        const repaired = autoRepairInline(golden.code)
+        const checks = checkComposition(repaired.code)
+        const errors = checks.filter((c) => c.level === "error")
+        if (errors.length > 0) {
+          return {
+            ok: false,
+            error: "Golden starter failed validation — write manually with write_composition instead.",
+            errors: errors.map((e) => e.message),
+          }
+        }
+        store.setPlan(golden.plan)
+        const n = store.write(repaired.code, { bumpVersion: true })
+        return {
+          ok: true,
+          version: n,
+          plan: golden.plan,
+          warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
+          ...(repaired.applied.length > 0 ? { autoRepaired: repaired.applied } : {}),
+          next: "Call preview_composition, then read_render_report, then ONE sentence. Do not rewrite what quick_start published — refine it with edit_file.",
+        }
+      },
     }),
 
     // --- Phase 3: orchestration (§1.2, §5) ---------------------------------
@@ -1135,13 +1364,29 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
     // --- Agent upgrade: motion design system (AGENT_UPGRADE_PLAN Phases 2-3) --
     load_motion_preset: tool({
       description:
-        "Load a professional motion preset (timing + easing + transform) for a beat " +
-        "type. Returns the numbers and a ready-to-paste snippet — copy them instead " +
-        "of inventing curves. Beat types: entrance, transition, settle, exit, emphasis. " +
-        "Pass text + textStyle (charByChar, wordByWord, maskReveal) for an animated " +
-        "headline snippet on top of the preset.",
+        "Load a professional motion preset (timing + easing + transform snippet) for " +
+        "a beat type. Returns ready-to-paste code — copy the numbers instead of " +
+        "inventing curves. REQUIRED before writing any spring() or Easing.bezier(): " +
+        "never hand-roll timing values. " +
+        "Original five: entrance, transition, settle, exit, emphasis. " +
+        "Extended beat vocabulary: reveal (clip-path wipe, not a fade), " +
+        "anticipation (pre-movement compress), cascade (list stagger), " +
+        "text-cascade (per-char spring), counter / counter-motion (opposite movement = depth), " +
+        "hold / pause (rest beat), parallax (multi-layer speed), morph / blend (shape/colour transition). " +
+        "Pass text + textStyle for an animated headline snippet on top of the preset.",
       inputSchema: z.object({
-        beatType: z.enum(["entrance", "transition", "settle", "exit", "emphasis"]),
+        beatType: z
+          .enum([
+            "entrance", "transition", "settle", "exit", "emphasis",
+            "reveal", "anticipation", "cascade", "text-cascade",
+            "counter", "counter-motion", "hold", "pause", "parallax", "morph", "blend",
+          ])
+          .describe(
+            "The kind of motion this beat is. Use 'reveal' for clip-path reveals (not entrance), " +
+            "'cascade' or 'text-cascade' for staggered lists/type, " +
+            "'anticipation' for a compress-then-launch, " +
+            "'parallax' for multi-layer depth, 'morph'/'blend' for shape/colour transitions."
+          ),
         startFrame: z.number().int().min(0).default(0),
         text: z.string().max(120).optional().describe("Headline to animate, if this beat is type-led."),
         textStyle: z.enum(["charByChar", "wordByWord", "maskReveal"]).default("charByChar"),
@@ -1153,7 +1398,10 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
           preset,
           snippet: presetSnippet(id, startFrame),
           textSnippet: text ? textAnimationSnippet(textStyle, text, startFrame) : null,
-          timing: { duration: preset.duration, easing: preset.easing },
+          timing: { duration: preset.duration, easing: preset.easing, stagger: preset.stagger ?? null },
+          note: preset.stagger
+            ? `This beat uses a ${preset.stagger}f stagger — offset each item in the mapped list by index * ${preset.stagger}.`
+            : null,
         }
       },
     }),
@@ -1161,9 +1409,12 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
     layout_plan: tool({
       description:
         "Plan element layout BEFORE writing code. Returns positioned elements with " +
-        "conflict detection (overflow/overlap/z-conflict) and ready-to-paste " +
-        "absolute-position hints. Pass approximate sizes; the engine clamps to " +
-        "the 60px safe margin.",
+        "conflict detection (overflow/overlap/z-conflict), ready-to-paste " +
+        "absolute-position hints, AND visual composition guidance (rule of thirds, " +
+        "focal point, reading direction, visual weight). Pass approximate sizes; " +
+        "the engine clamps to the 60px safe margin. " +
+        "Mark the hero element with type='text' and a large height to get rule-of-thirds placement. " +
+        "Full-bleed backgrounds should be type='image' — they get zIndex=1 automatically.",
       inputSchema: z.object({
         elements: z
           .array(
@@ -1174,99 +1425,250 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
                 width: z.number().min(1).max(1920),
                 height: z.number().min(1).max(1080),
               }),
+              role: z
+                .enum(["hero", "body", "label", "background", "accent"])
+                .optional()
+                .describe("Semantic role — 'hero' gets rule-of-thirds placement, 'background' gets zIndex=1."),
             })
           )
           .min(1)
           .max(20),
         strategy: z.enum(["hierarchy", "grid", "stack"]).default("hierarchy"),
+        canvas: z
+          .object({ width: z.number().default(1920), height: z.number().default(1080) })
+          .optional()
+          .describe("Defaults to the 1920x1080 composition canvas."),
       }),
-      execute: async ({ elements, strategy }) => {
+      execute: async ({ elements, strategy, canvas }) => {
+        const w = canvas?.width ?? CANVAS.width
+        const h = canvas?.height ?? CANVAS.height
         const engine = new LayoutEngine()
-        const plan = engine.autoLayout(
-          elements.map((e) => ({
-            id: e.id,
-            type: e.type,
-            width: Math.round(e.approximate_size.width),
-            height: Math.round(e.approximate_size.height),
-          })),
-          strategy
-        )
-        return { layout: plan.elements, conflicts: plan.conflicts, code_hints: plan.codeHints }
+        const sized = elements.map((e) => ({
+          id: e.id,
+          type: e.type,
+          width: Math.round(e.approximate_size.width),
+          height: Math.round(e.approximate_size.height),
+        }))
+        const plan = engine.autoLayout(sized, strategy)
+
+        // Visual composition guidance — rule of thirds, focal point, reading direction
+        const compositionHints = buildCompositionHints(sized, plan.elements, w, h)
+
+        return {
+          layout: plan.elements,
+          conflicts: plan.conflicts,
+          code_hints: plan.codeHints,
+          composition: compositionHints,
+        }
       },
     }),
 
     auto_enhance_motion: tool({
       description:
-        "Upgrade linear animations in the current composition to designed motion: " +
-        "naked interpolate() calls get Easing.bezier(0.16, 1, 0.3, 1), and mapped " +
-        "lists without stagger are reported with the fix. Re-validates after; " +
-        "saves only when no new errors appear.",
+        "Upgrade linear animations in the current composition to designed motion. " +
+        "Applies three tiers of enhancement: " +
+        "(1) EASING — naked interpolate() calls get Easing.bezier(0.16, 1, 0.3, 1), " +
+        "(2) CLAMPING — interpolate() calls on opacity or scale without extrapolateRight:\"clamp\" " +
+        "get clamped so values never run past 0/1 after the animation ends (most common blank-frame bug), " +
+        "(3) STAGGER REPORT — mapped lists without stagger are reported with the exact fix. " +
+        "Re-validates after; saves only when no new errors appear.",
       inputSchema: z.object({}),
       execute: async () => {
         const { code } = store.current()
         if (!code) return { ok: false, error: "No composition to enhance — use write_composition." }
-        const { upgraded: eased, count } = applyNakedEasing(code)
-        const withImport = count > 0 ? ensureEasingImport(eased).code : eased
-        const staggerSites = findUnstaggeredMaps(withImport)
-        if (count === 0 && staggerSites === 0) {
+
+        let enhanced = code
+        const enhancements: string[] = []
+
+        // Tier 1: Add easing to naked interpolate() calls
+        const { upgraded: eased, count: easingCount } = applyNakedEasing(enhanced)
+        if (easingCount > 0) {
+          enhanced = ensureEasingImport(eased).code
+          enhancements.push(`Added Easing.bezier(0.16, 1, 0.3, 1) to ${easingCount} linear interpolate() call(s)`)
+        }
+
+        // Tier 2: Add extrapolateRight: "clamp" to opacity/scale interpolations
+        // that are missing it — the most common cause of blank frames after the
+        // animation ends (Issue 6 fix).
+        const { clamped, clampCount } = applyExtrapolateClamp(enhanced)
+        if (clampCount > 0) {
+          enhanced = clamped
+          enhancements.push(
+            `Added extrapolateRight: "clamp" + extrapolateLeft: "clamp" to ${clampCount} opacity/scale interpolation(s) — prevents values running past [0,1] after animation ends`
+          )
+        }
+
+        // Tier 3: Report unstaggered mapped lists
+        const staggerSites = findUnstaggeredMaps(enhanced)
+        if (staggerSites > 0) {
+          enhancements.push(
+            `${staggerSites} mapped list(s) still need a stagger — offset each item by index * 3 frames: ` +
+            `opacity: spring({ frame: frame - (startFrame + i * 3), fps: 30, config: { damping: 18, mass: 0.5, stiffness: 180 } })`
+          )
+        }
+
+        if (easingCount === 0 && clampCount === 0 && staggerSites === 0) {
           return {
             ok: true,
             version: store.current().version,
-            enhancements: ["Already designed — every interpolation has easing or a spring."],
+            enhancements: ["Already designed — every interpolation has easing, clamping, and stagger."],
           }
         }
-        const checks = checkComposition(withImport)
-        const errors = checks.filter((c) => c.level === "error")
-        if (errors.length > 0) {
-          return {
-            ok: false,
-            error: "Auto-enhance would break the code — fix manually instead.",
-            errors: errors.map((e) => e.message),
+
+        // Only save if something was mechanically changed (easing or clamping)
+        if (easingCount > 0 || clampCount > 0) {
+          const checks = checkComposition(enhanced)
+          const errors = checks.filter((c) => c.level === "error")
+          if (errors.length > 0) {
+            return {
+              ok: false,
+              error: "Auto-enhance would break the code — fix manually instead.",
+              errors: errors.map((e) => e.message),
+            }
           }
-        }
-        const enhancements = [
-          ...(count > 0 ? [`Added Easing.bezier(0.16, 1, 0.3, 1) to ${count} linear interpolate() call(s)`] : []),
-          ...(staggerSites > 0
-            ? [
-                `${staggerSites} mapped list(s) still need a stagger — offset each item by index * 3 frames (delay: startFrame + i * 3)`,
-              ]
-            : []),
-        ]
-        if (count > 0) {
-          const n = store.write(withImport, { bumpVersion: true })
+          const n = store.write(enhanced, { bumpVersion: true })
           return { ok: true, version: n, enhancements }
         }
+
+        // Stagger sites need manual intervention — just report
         return { ok: true, version: store.current().version, enhancements }
       },
     }),
 
     verify_no_errors: tool({
       description:
-        "Final validation gate — confirms zero errors before preview. Blocking: " +
-        "if it returns ok:false, DO NOT call preview_composition; fix the named " +
-        "issues with edit_file or write_composition first.",
+        "Final validation gate — confirms zero errors before preview. Blocking " +
+        "on ERRORS and on a failed player report for THIS exact version. Layout " +
+        "warnings come back as advisory and NEVER block: entrances, exits, " +
+        "punch-ins and shared z-indexes are normal motion, and the player " +
+        "report is the authority on whether they render. If ok:false names a " +
+        "browser error, the fixHint field tells you the exact tool call to make.",
       inputSchema: z.object({}),
       execute: async () => {
         const { code, version } = store.current()
-        if (!code) return { ok: false, blocking: true, errors: ["No composition yet."], warnings: [] }
-        const checks = checkComposition(code)
-        const errors = checks.filter((c) => c.level === "error").map((c) => c.message)
-        const layoutWarnings = checks
-          .filter((c) => c.level === "warn" && /overflow|overlap|z-index|zIndex|off-canvas/i.test(c.message))
-          .map((c) => c.message)
-        if (errors.length > 0 || layoutWarnings.length > 0) {
+        if (!code) return { ok: false, blocking: true, errors: ["No composition yet."], advisory: [] }
+        const browserFailure = currentBrowserFailure(store, agent)
+        const gate = gateVerification(checkComposition(code), browserFailure)
+        if (!gate.ok) {
           return {
             ok: false,
             blocking: true,
-            errors,
-            warnings: layoutWarnings,
-            instruction: "DO NOT PREVIEW. Fix these issues with edit_file or write_composition first.",
+            errors: gate.errors,
+            ...(browserFailure?.line !== undefined ? { line: browserFailure.line } : {}),
+            ...(browserFailure?.message ? { fixHint: browserFixHint(browserFailure.message) } : {}),
+            advisory: [],
+            instruction: browserFailure
+              ? "DO NOT PREVIEW. Fix the browser error first with edit_file (it names the line), then preview the new version."
+              : "DO NOT PREVIEW. Fix these errors with edit_file or write_composition first.",
           }
         }
-        return { ok: true, version, ready: true }
+        return {
+          ok: true,
+          version,
+          ready: true,
+          advisory: gate.advisory,
+          note: gate.advisory.length > 0
+            ? "Advisory items never block preview — fix them only if cheap, or if the player shows a blank frame."
+            : "Clean — no errors, no advisory warnings. Safe to call preview_composition.",
+        }
       },
     }),
   }
+}
+
+/**
+ * Mechanical repairs applied inline on every write_composition / quick_start,
+ * so the model never spends a paced round-trip on what is deterministic:
+ * lucide namespace, Easing import, random import, naked linear easing, and a
+ * missing frame binding. Same helpers auto_fix_code uses — no drift.
+ */
+export function autoRepairInline(code: string): { code: string; applied: string[] } {
+  let next = code
+  const applied: string[] = []
+
+  const lucide = applyLucideNamespace(next)
+  if (lucide.names.length > 0) {
+    next = lucide.code
+    applied.push(`lucide namespace (${lucide.names.join(", ")})`)
+  }
+
+  // Non-deterministic Math.random() outside comments/strings → seeded random().
+  // Same comment/string-aware scan auto_fix_code uses; without it the write
+  // would be refused and cost the turn an extra paced round-trip.
+  {
+    const stripped = next
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
+      .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
+      .replace(/`(?:\\.|[^`\\])*`/g, (m) => " ".repeat(m.length))
+      .replace(/"(?:\\.|[^"\\])*"/g, (m) => " ".repeat(m.length))
+      .replace(/'(?:\\.|[^'\\])*'/g, (m) => " ".repeat(m.length))
+    if (/Math\.random\s*\(/.test(stripped)) {
+      const randomRe = /Math\.random\s*\(\s*\)/g
+      let rebuilt = ""
+      let lastIdx = 0
+      let match: RegExpExecArray | null
+      let count = 0
+      while ((match = randomRe.exec(next)) !== null) {
+        const atPos = stripped.slice(match.index, match.index + match[0].length)
+        if (!/^\s+$/.test(atPos)) {
+          rebuilt += next.slice(lastIdx, match.index) + "random(null)"
+          lastIdx = match.index + match[0].length
+          count++
+        }
+      }
+      if (count > 0) {
+        next = rebuilt + next.slice(lastIdx)
+        applied.push(`Math.random → random(null) (${count}x)`)
+      }
+    }
+  }
+
+  // Page-default fontFamily → Fonts.*. Mechanical and always right: a literal
+  // "Arial"/"system-ui" stack is never a deliberate motion choice.
+  {
+    const fontRe = /fontFamily:\s*["'](system-ui|sans-serif|serif|ui-sans-serif|Arial|Helvetica)["']/gi
+    const matches = [...next.matchAll(fontRe)]
+    if (matches.length > 0) {
+      const face = DISPLAY_FACES[0]
+      next = next.replace(fontRe, `fontFamily: Fonts.${face}.family`)
+      applied.push(`page-default font → Fonts.${face}.family (${matches.length}x)`)
+    }
+  }
+
+  const naked = applyNakedEasing(next)
+  if (naked.count > 0) {
+    next = naked.upgraded
+    applied.push(`${naked.count}x linear interpolate → Easing.bezier + clamp`)
+  }
+  const easing = ensureEasingImport(next)
+  if (easing.added) {
+    next = easing.code
+    applied.push("Easing import")
+  }
+  const rnd = ensureRandomImport(next)
+  if (rnd.added) {
+    next = rnd.code
+    applied.push("random import")
+  }
+
+  const needsFrame =
+    /interpolate\(\s*frame\b/.test(next) &&
+    !/useCurrentFrame\(\)/.test(next) &&
+    !/(?:const|let|var)\s+frame\b/.test(next)
+  if (needsFrame) {
+    const bodyOpen = next.search(/(?:function\s+\w+[^{]*|=>\s*)\{/)
+    if (bodyOpen !== -1) {
+      const insertAt = next.indexOf("{", bodyOpen) + 1
+      next = next.slice(0, insertAt) + "\n  const frame = useCurrentFrame();" + next.slice(insertAt)
+      const m = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/.exec(next)
+      if (m && !/useCurrentFrame/.test(m[1] ?? "")) {
+        next = next.replace(m[0], `import {${m[1]!.replace(/\s+$/, "")}, useCurrentFrame } from "remotion"`)
+      }
+      applied.push("frame binding")
+    }
+  }
+
+  return { code: next, applied }
 }
 
 /**
@@ -1288,7 +1690,7 @@ async function applyEditOps(
   }
 
   const applied: Array<{ find: string; count: number }> = []
-  const failed: Array<{ find: string; reason: string }> = []
+  const failed: Array<{ find: string; reason: string; suggestion?: Array<{ line: number; text: string }> }> = []
 
   for (const op of ops) {
     if (op.find === "") {
@@ -1300,6 +1702,7 @@ async function applyEditOps(
       failed.push({
         find: op.find.slice(0, 80),
         reason: "No exact match. Copy the text from read_file, whitespace included.",
+        suggestion: suggestCloseMatch(code, op.find),
       })
       continue
     }
@@ -1307,6 +1710,7 @@ async function applyEditOps(
       failed.push({
         find: op.find.slice(0, 80),
         reason: `Matches ${occurrences} times — include more surrounding lines to make it unique, or use bulk_edit with all:true.`,
+        suggestion: suggestCloseMatch(code, op.find).slice(0, 1),
       })
       continue
     }
@@ -1319,13 +1723,15 @@ async function applyEditOps(
   }
 
   // bulk_edit is atomic: a failed op poisons the batch, so nothing saves.
+  // Each failed op carries the closest real lines (suggestion) — retry the
+  // batch from those instead of re-guessing.
   if (!opts.allowPartial && failed.length > 0) {
     return {
       ok: false,
       applied: 0,
       appliedPreview: applied,
       failed,
-      note: "bulk_edit is atomic — nothing was saved. Fix the failed ops and retry the batch.",
+      note: "bulk_edit is atomic — nothing was saved. Fix the failed ops using their `suggestion` lines and retry the batch.",
     }
   }
 
@@ -1353,6 +1759,173 @@ async function applyEditOps(
 }
 
 /**
+ * Pure verification gate, shared by the verify_no_errors tool and the tests:
+ * static errors and a failed player report for the current version block;
+ * layout warnings are advisory and never block.
+ */
+export function gateVerification(
+  checks: Array<{ level: "error" | "warn"; message: string }>,
+  browserFailure: { phase?: string; message?: string; line?: number } | null
+): { ok: boolean; blocking: boolean; errors: string[]; advisory: string[] } {
+  if (browserFailure) {
+    return {
+      ok: false,
+      blocking: true,
+      errors: [
+        `The player failed this exact version in the browser (${browserFailure.phase ?? "unknown phase"}): ${browserFailure.message ?? "no message"}`,
+      ],
+      advisory: [],
+    }
+  }
+  const errors = checks.filter((c) => c.level === "error").map((c) => c.message)
+  if (errors.length > 0) return { ok: false, blocking: true, errors, advisory: [] }
+  return {
+    ok: true,
+    blocking: false,
+    errors: [],
+    advisory: checks.filter((c) => c.level === "warn").map((c) => c.message),
+  }
+}
+
+/**
+ * The player's verdict on the CURRENT version, when it failed in the browser.
+ * Stale reports (older version than the code on stage) are ignored — a newer
+ * write already superseded them, and resurfacing them sends the model to fix
+ * code that no longer exists.
+ */
+export function currentBrowserFailure(
+  store: CompositionStore,
+  agent?: Chat
+): { phase?: string; message?: string; line?: number } | null {
+  const audit = agent?.state?.audit
+  if (!audit || audit.ok) return null
+  if (audit.version !== store.current().version) return null
+  const line = audit.message ? /\(line (\d+)\)/.exec(audit.message)?.[1] : undefined
+  return {
+    ...(audit.phase ? { phase: audit.phase } : {}),
+    ...(audit.message ? { message: audit.message } : {}),
+    ...(line !== undefined ? { line: Number(line) } : {}),
+  }
+}
+
+/**
+ * Maps a browser failure to the cheapest fix path, so a failed render turns
+ * into one precise tool call instead of a full rewrite.
+ */
+export function browserFixHint(message: string): string {
+  if (/"[^"]+" is not available/.test(message)) {
+    return "A name the player scope cannot provide. Call auto_fix_code with this message — it converts lucide named imports to the Lucide namespace automatically; otherwise declare the name or import it from remotion."
+  }
+  if (/\(line (\d+)\)/.test(message)) {
+    const line = /\(line (\d+)\)/.exec(message)?.[1]
+    return `Compile error at line ${line}. Call read_file, look at that line, and fix it with edit_file — do not rewrite the whole composition.`
+  }
+  if (/runtime:/i.test(message)) {
+    return "It compiled but threw while rendering a frame. The message names the failing access — guard it (optional chaining / default) with edit_file, then re-preview."
+  }
+  return "Fix the named issue with edit_file, then preview_composition again (new version), then read_render_report."
+}
+
+/** Closest real lines for a `find` that matched nothing, so a retry is precise. */
+export function suggestCloseMatch(code: string, find: string): Array<{ line: number; text: string }> {
+  const codeLines = code.split("\n")
+  const findLines = find.split("\n")
+  const first = findLines.find((l) => l.trim() !== "") ?? ""
+  if (!first.trim()) return []
+  const norm = (s: string) => s.trim().replace(/\s+/g, " ")
+  const target = norm(first)
+  const targetTokens = new Set(target.split(" ").filter(Boolean))
+  if (targetTokens.size === 0) return []
+  const scored = codeLines
+    .map((line, i) => {
+      const cand = norm(line)
+      if (!cand) return { i, score: -1 }
+      const candTokens = new Set(cand.split(" ").filter(Boolean))
+      let overlap = 0
+      for (const t of targetTokens) if (candTokens.has(t)) overlap++
+      const overlapScore = overlap / targetTokens.size
+      const lenScore = 1 - Math.min(1, Math.abs(cand.length - target.length) / Math.max(target.length, 1))
+      return { i, score: overlapScore * 0.7 + lenScore * 0.3 }
+    })
+    .filter((s) => s.score > 0.35)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+  return scored.map(({ i }) => ({
+    line: i + 1,
+    text: codeLines.slice(i, i + findLines.length).join("\n").slice(0, 600),
+  }))
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * Named lucide imports compile but throw "<name> is not available" at mount —
+ * the player scope only registers the Lucide namespace. Mechanical to repair:
+ * one namespace import plus prefixed JSX usages.
+ *
+ * Fixed (Issue 8): correctly handles `import { Zap as Lightning }` aliases.
+ * The JSX tag uses the local alias name, so we must map alias → original and
+ * replace `<Lightning />` with `<Lucide.Zap />`, not `<Lucide.Lightning />`.
+ */
+export function applyLucideNamespace(code: string): { code: string; names: string[] } {
+  // Collect { original, local } pairs from every lucide-react named import.
+  // e.g. `import { Zap, ArrowRight as Arrow }` → [{original: "Zap", local: "Zap"}, {original: "ArrowRight", local: "Arrow"}]
+  // NOTE: the specifier list is [^{}]* — never [\s\S]*?. The lazy-dot version
+  // spanned `}` boundaries, so a file with `from "remotion"` above the lucide
+  // line matched from the FIRST import and mangled both lines (real model
+  // output always has several imports, so this broke nearly every repair).
+  const pairs: Array<{ original: string; local: string }> = []
+  const importRe = /import\s*\{([^{}]*)\}\s*from\s*["']lucide-react["']/g
+  let m: RegExpExecArray | null
+  while ((m = importRe.exec(code)) !== null) {
+    for (const raw of (m[1] ?? "").split(",")) {
+      const parts = raw.trim().split(/\s+as\s+/)
+      const original = parts[0]?.trim()
+      const local = parts[1]?.trim() ?? original
+      if (original && local) pairs.push({ original, local })
+    }
+  }
+  if (pairs.length === 0) return { code, names: [] }
+
+  // Replace all lucide-react named imports with the namespace import.
+  let next = code.replace(importRe, `import * as Lucide from "lucide-react"`)
+  // Deduplicate if there were multiple named-import lines.
+  next = next.replace(
+    /(import \* as Lucide from "lucide-react";?\s*){2,}/g,
+    `import * as Lucide from "lucide-react";\n`
+  )
+
+  // Replace JSX tags: use the LOCAL alias name in the regex (that's what's in the JSX),
+  // but output <Lucide.ORIGINAL /> (the actual icon name in the Lucide namespace).
+  for (const { original, local } of pairs) {
+    next = next.replace(
+      new RegExp(`<(/?)${escapeRegExp(local)}(?=[\\s/>])`, "g"),
+      `<$1Lucide.${original}`
+    )
+  }
+
+  return { code: next, names: pairs.map((p) => p.local) }
+}
+
+/** random() needs its import, or the Math.random repair trades one mount error for another. */
+export function ensureRandomImport(code: string): { code: string; added: boolean } {
+  if (!/\brandom\s*\(/.test(code)) return { code, added: false }
+  if (/import\s*\{[^}]*\brandom\b[^}]*\}\s*from\s*["']remotion["']/.test(code)) {
+    return { code, added: false }
+  }
+  const m = /import\s*\{([^}]*)\}\s*from\s*["']remotion["']/.exec(code)
+  if (m) {
+    return {
+      code: code.replace(m[0], `import {${m[1]!.replace(/\s+$/, "")}, random } from "remotion"`),
+      added: true,
+    }
+  }
+  return { code: `import { random } from "remotion";\n${code}`, added: true }
+}
+
+/**
  * Agent upgrade: high-confidence easing repair shared by auto_fix_code and
  * auto_enhance_motion. Only touches interpolate() calls with exactly two
  * array args and NO options object (they end in `])`) — anything else is
@@ -1364,10 +1937,46 @@ function applyNakedEasing(code: string): { upgraded: string; count: number } {
     /interpolate\(\s*frame\s*,\s*\[[^\]]*\]\s*,\s*\[[^\]]*\]\)/g,
     (m) => {
       count += 1
-      return `${m.slice(0, -1)}, { easing: Easing.bezier(0.16, 1, 0.3, 1) })`
+      return `${m.slice(0, -1)}, { easing: Easing.bezier(0.16, 1, 0.3, 1), extrapolateLeft: "clamp", extrapolateRight: "clamp" })`
     }
   )
   return { upgraded, count }
+}
+
+/**
+ * Adds extrapolateRight: "clamp" + extrapolateLeft: "clamp" to interpolate()
+ * calls whose output range is [0, 1] or [0, n] (opacity, scale, clip-path
+ * progress) but which already have an options object without clamping.
+ *
+ * This is the fix for Issue 6: the most common blank-frame bug is an opacity
+ * or scale that runs past 1.0 or below 0.0 after the animation ends because
+ * there is no extrapolation clamp. validate_composition previously missed this.
+ */
+function applyExtrapolateClamp(code: string): { clamped: string; clampCount: number } {
+  let clampCount = 0
+  // Match interpolate() calls that:
+  // 1. Have an options object ({ ... }) as the 4th argument
+  // 2. Do NOT already contain extrapolateRight
+  // 3. Have an output range that looks like [0, 1] or [0, n] (opacity/scale/progress)
+  const clamped = code.replace(
+    /interpolate\(\s*frame\s*,\s*\[[^\]]*\]\s*,\s*\[([^\]]*)\]\s*,\s*\{([^}]*)\}\s*\)/g,
+    (m, outputRange: string, options: string) => {
+      // Skip if already clamped
+      if (/extrapolateRight/.test(options)) return m
+      // Only clamp output ranges that look like [0, n] — opacity, scale, progress
+      const nums = outputRange.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
+      if (nums.length < 2) return m
+      const [first, last] = [nums[0]!, nums[nums.length - 1]!]
+      // [0, 1], [0, 1.x], [0, x] where x <= 2 — animation progress values
+      if (first !== 0 || last > 2 || last <= 0) return m
+      clampCount++
+      return m.replace(
+        /,\s*\{([^}]*)\}\s*\)$/,
+        `, { $1, extrapolateLeft: "clamp", extrapolateRight: "clamp" })`
+      )
+    }
+  )
+  return { clamped, clampCount }
 }
 
 /** Easing references need their import, or the repair trades an error for a warning. */
@@ -1594,9 +2203,15 @@ async function batchExecute(
         num(args.seconds, 5)
       )
     case "load_motion_preset": {
-      const beat = ["entrance", "transition", "settle", "exit", "emphasis"].includes(str(args.beatType))
-        ? str(args.beatType)
-        : "entrance"
+      // 50x fix: the batch path allowlisted only the original five beats, so
+      // reveal/cascade/parallax/etc silently fell back to entrance — the batch
+      // and solo results drifted. Accept the full 16-beat vocabulary.
+      const ALL_BEATS = [
+        "entrance", "transition", "settle", "exit", "emphasis",
+        "reveal", "anticipation", "cascade", "text-cascade",
+        "counter", "counter-motion", "hold", "pause", "parallax", "morph", "blend",
+      ]
+      const beat = ALL_BEATS.includes(str(args.beatType)) ? str(args.beatType) : "entrance"
       const { id, preset } = presetForBeat(beat)
       const start = num(args.startFrame, 0)
       const text = str(args.text)

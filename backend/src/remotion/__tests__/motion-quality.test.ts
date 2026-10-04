@@ -8,6 +8,15 @@ import { describe, it } from "node:test"
 import * as assert from "node:assert/strict"
 import { checkComposition } from "../validate"
 import {
+  applyLucideNamespace,
+  autoRepairInline,
+  browserFixHint,
+  ensureRandomImport,
+  gateVerification,
+  suggestCloseMatch,
+} from "../tools"
+import { goldenStarter } from "../templates"
+import {
   MotionPatterns,
   SpringPresets,
   cascadeSpring,
@@ -114,6 +123,73 @@ describe("Validation Correctness", () => {
   })
 })
 
+describe("Verification Gate", () => {
+  it("passes warnings-only code as advisory, never blocking", () => {
+    const gate = gateVerification(
+      [{ level: "warn", message: "translate range reaches 2000px — past the canvas edge (advisory)" }],
+      null
+    )
+    assert.equal(gate.ok, true)
+    assert.equal(gate.blocking, false)
+    assert.equal(gate.advisory.length, 1)
+  })
+
+  it("blocks on static errors", () => {
+    const gate = gateVerification([{ level: "error", message: "Math.random() is non-deterministic" }], null)
+    assert.equal(gate.ok, false)
+    assert.equal(gate.blocking, true)
+  })
+
+  it("blocks on a failed player report even with zero static errors", () => {
+    const gate = gateVerification([], { phase: "runtime", message: "runtime: cannot read x (line 42)" })
+    assert.equal(gate.ok, false)
+    assert.equal(gate.blocking, true)
+    assert.ok(/browser/i.test(gate.errors[0] ?? ""))
+  })
+
+  it("lets entrance motion through: off-canvas start is advisory, not an error", () => {
+    const code = wrap(`style={{ translateY: interpolate(frame, [0, 60], [2000, 540]) }}`)
+    assert.equal(errors(code).length, 0, "an entrance must not be an error")
+  })
+})
+
+describe("AI-Friendly Edits", () => {
+  it("suggests the closest real lines for a missed find", () => {
+    const code = `const a = 1;\n  const eyeY = interpolate(frame, [0, 60], [0, 540]);\nconst b = 2;`
+    const s = suggestCloseMatch(code, "const eyeY = interpolate(frame, [0, 60], [0, 500]);")
+    assert.ok(s.length > 0, "expected a suggestion")
+    assert.equal(s[0]?.line, 2)
+    assert.ok((s[0]?.text ?? "").includes("eyeY"))
+  })
+
+  it("returns no suggestion for unrelated text", () => {
+    const s = suggestCloseMatch(`const a = 1;\nconst b = 2;`, "quux zzz top-level wobble fnord")
+    assert.equal(s.length, 0)
+  })
+
+  it("converts lucide named imports to the Lucide namespace", () => {
+    const src = `import { Zap, Play } from "lucide-react";\nexport const A = () => <div><Zap size={12} /><Play /></div>;`
+    const { code, names } = applyLucideNamespace(src)
+    assert.deepEqual(names, ["Zap", "Play"])
+    assert.ok(code.includes(`import * as Lucide from "lucide-react"`))
+    assert.ok(code.includes("<Lucide.Zap") && code.includes("<Lucide.Play"))
+    assert.ok(!code.includes("{ Zap"))
+  })
+
+  it("adds the random import once, idempotently", () => {
+    const src = `import { interpolate } from "remotion";\nconst x = random(1);`
+    const first = ensureRandomImport(src)
+    assert.equal(first.added, true)
+    assert.ok(/import\s*\{[^}]*\brandom\b[^}]*\}\s*from\s*"remotion"/.test(first.code))
+    assert.equal(ensureRandomImport(first.code).added, false)
+  })
+
+  it("maps browser failures to the cheapest fix path", () => {
+    assert.ok(/auto_fix_code/.test(browserFixHint(`"Zap" is not available`)))
+    assert.ok(/edit_file/.test(browserFixHint(`oops (line 42)`)))
+  })
+})
+
 describe("Motion Library", () => {
   it("maps beat types to presets with a fallback", () => {
     assert.equal(presetForBeat("entrance").id, "heroEntrance")
@@ -195,6 +271,50 @@ describe("Layout Engine", () => {
     assert.equal(engine.detectOverlap(a, b), true)
     assert.equal(engine.detectOverlap(a, c), false)
     assert.ok(engine.detectConflicts([a, b]).some((x) => x.type === "z-conflict"))
+  })
+})
+
+describe("Golden Starters + Inline Repair (fast path)", () => {
+  it("every golden validates with zero errors and real motion", () => {
+    for (const id of ["product-reveal", "logo-animation", "quote-card", "social-ad", "no-such-template"]) {
+      const g = goldenStarter(id, { product: "Acme", headline: "Motion that lands" })
+      const errs = errors(g.code)
+      assert.equal(errs.length, 0, `${id} errors: ${errs.map((e) => e.message).join(" | ")}`)
+      assert.ok(g.plan.beats.length >= 2, `${id} needs at least two beats`)
+      for (const re of [/\bspring\(/, /Easing\.bezier/, /extrapolateRight: "clamp"/, /export default/]) {
+        assert.ok(re.test(g.code), `${id} missing ${re}`)
+      }
+    }
+  })
+
+  it("ignores JSX copy and comments in scope checks", () => {
+    const code = [
+      `import { AbsoluteFill, useCurrentFrame } from "remotion";`,
+      `// Beat 1 — hero Entrance for Acme Corp`,
+      `export default function MyCut() {`,
+      `  const frame = useCurrentFrame();`,
+      `  return <AbsoluteFill><div>SCROLL FOR MORE</div></AbsoluteFill>;`,
+      `}`,
+    ].join("\n")
+    const scopeErrs = errors(code).filter((e) => /not in the player scope|not available/.test(e.message))
+    assert.equal(scopeErrs.length, 0, `copy flagged as code: ${scopeErrs.map((e) => e.message).join(" | ")}`)
+  })
+
+  it("repairs multi-import files without touching other imports", () => {
+    const src = `import { interpolate, spring } from "remotion";\nimport { Zap, Play as Go } from "lucide-react";\nexport const A = () => <div><Zap /><Go /></div>;`
+    const { code, names } = applyLucideNamespace(src)
+    assert.deepEqual(names, ["Zap", "Go"])
+    assert.ok(code.includes(`import { interpolate, spring } from "remotion"`), "remotion import mangled")
+    assert.ok(code.includes(`import * as Lucide from "lucide-react"`))
+    assert.ok(code.includes("<Lucide.Zap") && code.includes("<Lucide.Play"), "alias must map to the original icon")
+  })
+
+  it("autoRepairInline fixes a dirty write to zero errors in one pass", () => {
+    const dirty = `import { interpolate, spring } from "remotion"\nimport { Zap } from "lucide-react"\nexport default function C() {\n const x = Math.random()\n const o = interpolate(frame, [0,60], [0,1])\n return <div><Zap /></div>\n}`
+    const fixed = autoRepairInline(dirty)
+    assert.ok(fixed.applied.length >= 4, `expected 4+ repairs, got ${fixed.applied.join(", ")}`)
+    const errs = errors(fixed.code)
+    assert.equal(errs.length, 0, `still broken: ${errs.map((e) => e.message).join(" | ")}`)
   })
 })
 

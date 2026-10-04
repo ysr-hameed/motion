@@ -107,7 +107,7 @@ export default function Signup() {
             type="checkbox"
             checked={agreed}
             onChange={(e) => setAgreed(e.target.checked)}
-            className="mt-0.5 accent-[#ffb340]"
+            className="mt-0.5 accent-[#d94800]"
           />
           I agree to the Terms &amp; Privacy Policy
         </label>
