@@ -423,7 +423,13 @@ export function textAnimationSnippet(
     const end = startFrame + 45
     return [
       `// maskReveal: ${literal} frames ${startFrame}→${end}`,
-      `<div style={{ clipPath: interpolate(frame, [${startFrame}, ${end}], ["inset(0 100% 0 0)", "inset(0 0 0 0)"], { easing: Easing.bezier(0.16, 1, 0.3, 1) }) }}>`,
+      `// Interpolate a NUMBER 0→1, then compute the inset string — interpolate() does not support string outputs.`,
+      `const maskProgress = interpolate(frame, [${startFrame}, ${end}], [0, 1], {`,
+      `  easing: Easing.bezier(0.16, 1, 0.3, 1),`,
+      `  extrapolateLeft: "clamp",`,
+      `  extrapolateRight: "clamp",`,
+      `});`,
+      `<div style={{ clipPath: \`inset(0 \${(1 - maskProgress) * 100}% 0 0)\` }}>`,
       `  {${literal}}`,
       `</div>`,
     ].join("\n")

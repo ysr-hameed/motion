@@ -141,12 +141,39 @@ function makeFace(name: string, role: Face["role"], note: string): Face {
   return { family: name, role, note, href: "" }
 }
 
+/** Real CSS family names, matching what @remotion/google-fonts getInfo() returns. */
+const FAMILY_NAMES: Record<string, string> = {
+  anton: "Anton",
+  bebasNeue: "Bebas Neue",
+  archivoBlack: "Archivo Black",
+  syne: "Syne",
+  unbounded: "Unbounded",
+  bricolage: "Bricolage Grotesque",
+  fraunces: "Fraunces",
+  instrumentSerif: "Instrument Serif",
+  bodoni: "Bodoni Moda",
+  newsreader: "Newsreader",
+  crimson: "Crimson Pro",
+  spectral: "Spectral",
+  spaceGrotesk: "Space Grotesk",
+  chivo: "Chivo",
+  archivo: "Archivo",
+  manrope: "Manrope",
+  outfit: "Outfit",
+  epilogue: "Epilogue",
+  publicSans: "Public Sans",
+  karla: "Karla",
+  spaceMono: "Space Mono",
+  bungee: "Bungee",
+  righteous: "Righteous",
+}
+
 /** `Fonts.anton.family` and friends, populated as faces load. */
 export const FONTS: Record<string, Face> = {}
 for (const [key, meta] of Object.entries(CATALOGUE)) {
-  // Placeholder: the real family name arrives with the loader. It matches
-  // the key for every family Remotion exposes, and is corrected on load.
-  FONTS[key] = makeFace(key, meta.role, meta.note)
+  // Start with the real CSS family name so a failed load still renders
+  // in the intended face rather than a key-name fallback.
+  FONTS[key] = makeFace(FAMILY_NAMES[key] ?? key, meta.role, meta.note)
 }
 
 /** Loads the faces a source cites and registers them under `FONTS`. */

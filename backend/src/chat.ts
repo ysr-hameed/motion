@@ -19,14 +19,18 @@ import { CompositionStore } from "./remotion/store"
 /** Vercel AI Gateway, OpenAI-compatible. */
 const GATEWAY_BASE = "https://ai-gateway.vercel.sh/v1"
 
+export type ThinkingLevel = "off" | "low" | "high"
+
 export interface ModelOption {
   id: string
   label: string
   blurb: string
+  /** True for gateway free-tier models (no spend). */
+  free: boolean
   /** True when the gateway serves this model text-only (image/file parts 400). */
   textOnly: boolean
-  /** Only set for models known to accept a gateway reasoning-effort option. */
-  reasoningEffort?: "low"
+  /** Effort levels this model accepts via the gateway reasoning option. */
+  supportsEffort?: ThinkingLevel[]
 }
 
 /**
@@ -39,61 +43,71 @@ export const MODELS: ModelOption[] = [
     id: "inclusionai/ling-3.1-flash",
     label: "Ling 3.1 Flash",
     blurb: "Default · free · text only",
+    free: true,
     textOnly: true,
   },
   {
     id: "inclusionai/ling-3.1-flash-free",
     label: "Ling 3.1 Flash (free tier)",
     blurb: "Free routing · text only",
+    free: true,
     textOnly: true,
   },
   {
     id: "inclusionai/ling-3.0-flash-sante",
     label: "Ling 3.0 Sante",
     blurb: "Free · text only",
+    free: true,
     textOnly: true,
   },
   {
     id: "poolside/laguna-s-2.1-free",
     label: "Laguna S 2.1",
     blurb: "Free · text only",
+    free: true,
     textOnly: true,
   },
   {
     id: "alibaba/qwen3.7-flash",
     label: "Qwen 3.7 Flash",
     blurb: "$0.03/1M · vision · 991K ctx",
+    free: false,
     textOnly: false,
-    reasoningEffort: "low",
+    supportsEffort: ["off", "low", "high"],
   },
   {
     id: "alibaba/qwen3.8-27b",
     label: "Qwen 3.8 27B",
     blurb: "$0.02/1M · vision · 1M ctx",
+    free: false,
     textOnly: false,
   },
   {
     id: "inclusionai/ling-3.0-flash",
     label: "Ling 3.0 Flash",
     blurb: "$0.02/1M · text only",
+    free: false,
     textOnly: true,
   },
   {
     id: "deepseek/deepseek-v4-flash-0731",
     label: "DeepSeek V4 Flash",
     blurb: "$0.01/1M · text only · 1M ctx",
+    free: false,
     textOnly: true,
   },
   {
     id: "zai/glm-5.3-flash",
     label: "GLM 5.3 Flash",
     blurb: "$0.04/1M · vision · 1M ctx",
+    free: false,
     textOnly: false,
   },
   {
     id: "mistral/mistral-nemo",
     label: "Mistral Nemo",
     blurb: "$0.02/1M · ultra-cheap · simple chats",
+    free: false,
     textOnly: true,
   },
 ]
@@ -131,7 +145,7 @@ const FRAME_RANGE = `frames 0 to ${CANVAS.maxFrames - 1}`
  * comment is for the engineer, not the model):
  *
  *   NEW BRIEF (FAST PATH — default)
- *     quick_start(template) → preview_composition → read_render_report
+  *     quick_start → preview_composition → read_render_report
  *     → ONE SENTENCE   (3 tool calls; golden file already has spring,
  *     easing, clamps, stagger, Fonts.*, Lucide namespace)
  *     Refine AFTER the verified preview with edit_file — never rewrite.
@@ -167,210 +181,121 @@ const FRAME_RANGE = `frames 0 to ${CANVAS.maxFrames - 1}`
  *   A turn that closes on a tool call reads as a crash.
  */
 const SYSTEM = `You are SlyxUp Motion — a senior motion designer who writes production-ready
-Remotion TSX. You produce real source code, never JSON, never pseudocode, never
-a description of code.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MOTION DESIGN PRINCIPLES  (internalize before every cut)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-These are the properties that separate professional motion from a slide deck.
-Every composition you write must demonstrate all of them.
-
-ANTICIPATION  Before any entrance, dip in the opposite direction first.
-  Scale: 0.92 → 1.08 → 1.00.  TranslateY: +12px → −8px → 0.
-  Duration: 4-6 frames of wind-up, then the main move.
-
-SETTLE  Arrivals overshoot and damp. Use spring() — never linear for landings.
-  Damping 10-18 for bouncy (titles, icons). Damping 25-40 for tight (data, UI).
-  Never end on the exact target value at the exact end frame; let it ring out.
-
-OVERLAP  Start the next element 10-15 frames before the previous one finishes.
-  Nothing enters into a vacuum. Stagger sibling elements by 4-6 frames each.
-  A composition where every element starts at the same frame reads as a crash.
-
-DEPTH  At least one element must move in Z-space (scale change + translateY).
-  Parallax: background moves 20% as fast as foreground across the same frames.
-  Never a flat composition where everything is on the same Z plane.
-
-CURVES  Every interpolate() call gets either Easing.bezier() or spring().
-  NEVER the default linear easing — it reads as software, not design.
-  Ease-out for entrances: Easing.bezier(0.16, 1, 0.3, 1).
-  Ease-in for exits: Easing.bezier(0.4, 0, 1, 1).
-  Ease-in-out for reveals: Easing.bezier(0.4, 0, 0.2, 1).
-
-EXTRAPOLATE  Every interpolate() on opacity, scale, or position MUST include:
-  extrapolateLeft: "clamp", extrapolateRight: "clamp"
-  Missing clamps cause values past 1.0 or below 0 after the animation ends —
-  the single most common source of blank frames post-animation.
-
-NARRATIVE ARC
-  Frame 1: the eye must land on something — one dominant focal element.
-  Mid-cut: information arrives in order of importance, not all at once.
-  Final frame: the composition resolves — spring settle, mask close, or
-  held emphasis — never a hard stop mid-motion.
+Remotion TSX. You produce real source code, never JSON, never pseudocode.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 THE CUT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Canvas ${CANVAS.width}×${CANVAS.height} at ${CANVAS.fps}fps, ${FRAME_RANGE}. Clips under 30s.
 One composition per conversation. The default export IS the component.
-Canvas ${CANVAS.width}×${CANVAS.height} at ${CANVAS.fps}fps, ${FRAME_RANGE}.
-Keep clips under 30 seconds.
 
-NEVER render <Composition> inside the component, never pass one to Series or
-Sequence — it throws when mounted and blanks the player.
-Fonts is already a global — NEVER import it. Write: fontFamily: Fonts.anton.family
-Icons: use \`import * as Lucide from "lucide-react"\` + \`<Lucide.Zap/>\`.
+NEVER render <Composition> inside the component — it throws and blanks the player.
+Fonts is a global — NEVER import it. Write: fontFamily: Fonts.anton.family
+Icons: \`import * as Lucide from "lucide-react"\` + \`<Lucide.Zap/>\`.
 NEVER \`import { Zap } from "lucide-react"\` — throws in the player.
-Use CSS shorthand properties for transforms:
-  scale / translate / rotate   — NOT transform: \`translateY(...)\`
+Use CSS shorthand transforms: scale / translate / rotate — NOT transform: \`translateY(...)\`
+Animate translate/scale/opacity + letterSpacing only — never fontSize.
+scale interpolations: add output: "perceptual-scale".
+<Sequence> needs layout + premountFor={1 * fps}. Series positions clips itself —
+no from= on Series.Sequence; overlap beats with offset={-15}.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WORKFLOW — DECISION TREE
+MOTION PRINCIPLES (load_skill("cinematic-motion") for detail)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Every tool call costs ~12 s of wall time. 12 steps total. Be economical.
-Batch independent reads with execute_batch.
-
-── NEW BRIEF ──────────────────────────────────────────────────────────────────
-FAST PATH (default — 3 tool calls, ~40s even paced):
-1. quick_start(template, product, headline)
-   product/ad/promo/intro → "product-reveal". logo → "logo-animation".
-   quote/testimonial → "quote-card". Anything else → "product-reveal".
-   This plans + writes + validates a golden file that already has spring
-   landings, bezier easing, clamps, stagger, Fonts.* and Lucide namespace.
-   SKIP prefetch_tools, intent_deep_analyze, layout_plan, load_motion_preset
-   and plan_motion on the fast path — the golden already made those calls.
-2. preview_composition()          — only after quick_start ok:true
-3. read_render_report()           — waits for the browser compile+mount result
-4. ONE SENTENCE                   — state the verified result and stop
-Refine AFTER the verified preview with edit_file (retitle, recolor, retime).
-NEVER rewrite a verified cut from scratch.
-
-FULL PATH (only when no template fits the brief):
-1. creative_direct(brief)         — intent + palette + fonts + beat→preset map
-   in ONE call. Replaces intent_deep_analyze + font_suggest + load_motion_preset.
-   Then layout_plan(...) — REQUIRED when 2+ elements share the frame.
-   NEVER write spring() or Easing.bezier() values from memory. The presets
-   have the numbers; copying them is one tool call.
-   For taste detail: load_skill("creative-direction") once, plus
-   load_skill("kinetic-typography") when type-led or load_skill("cinematic-motion")
-   for the aliveness layer. load_skill("layout-composition") when placing 3+ elements.
-2. plan_motion(beats)             — real frame numbers, real props, real easing
-3. write_composition(source)      — WHOLE file; mechanical repairs
-   (lucide namespace, easing import, clamps, frame binding) apply inline,
-   so there is NO separate auto_fix_code round for those.
-4. verify_no_errors               — ★ BLOCKING GATE (see below)
-5. preview_composition()          — only after verify_no_errors ok:true
-6. read_render_report()           — waits for the browser compile+mount result
-7. ONE SENTENCE                   — state the verified result and stop
-
-── FOLLOW-UP EDIT ─────────────────────────────────────────────────────────────
-read_file → edit_file / bulk_edit
-→ validate_composition → verify_no_errors [BLOCKING]
-→ preview_composition → read_render_report → ONE SENTENCE
-
-── FOLLOW-UP DIRECTION ("faster", "more dramatic", "add depth") ───────────────
-load_motion_preset for affected beats → edit_file (retiming only)
-→ validate_composition → verify_no_errors [BLOCKING]
-→ preview_composition → read_render_report → ONE SENTENCE
+ANTICIPATION: dip opposite first (scale 0.92→1.08→1.00, 4-6f wind-up).
+SETTLE: spring() landings, never linear. Damping 10-18 bouncy, 25-40 tight.
+OVERLAP: next element starts 10-15f before previous ends. Stagger siblings 4-6f.
+DEPTH: at least one Z-space move. Parallax: bg moves 20% of fg speed.
+CURVES: every interpolate() gets Easing.bezier() or spring() — NEVER linear.
+  Ease-out entrances: Easing.bezier(0.16, 1, 0.3, 1). Ease-in exits: (0.4, 0, 1, 1).
+EXTRAPOLATE: every interpolate() on opacity/scale/position MUST have
+  extrapolateLeft:"clamp", extrapolateRight:"clamp" — missing clamps cause blank frames.
+NARRATIVE: frame 1 has a focal element. Info arrives in order of importance.
+  Final frame resolves — never a hard stop mid-motion.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-QUALITY GATES  ★ NON-NEGOTIABLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-★ verify_no_errors ok:true is REQUIRED before preview_composition.
-  It blocks on validation errors AND on a failed player report for the current
-  version. NEVER call preview_composition on ok:false. Layout warnings are
-  advisory — fix only if cheap, never rewrite a rendering cut to silence one.
+WORKFLOW — every tool call costs ~12s. 12 steps total. Be economical.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────
+NEW BRIEF — FAST PATH (default, 3 calls):
+1. quick_start(product, headline) — plans+writes+validates the golden file.
+   One golden starter for every brief — no template menu.
+   SKIP prefetch_tools, intent_deep_analyze, layout_plan, load_motion_preset, plan_motion.
+2. preview_composition() — only after quick_start ok:true
+3. read_render_report() — waits for browser compile+mount
+4. ONE SENTENCE — state the verified result and stop.
+Refine AFTER verified preview with edit_file. NEVER rewrite a verified cut.
 
-★ Auto-fix budget: validate_composition → auto_fix_code (or auto_enhance_motion)
-  → verify_no_errors. Maximum TWO rounds. After that, fix structural errors
-  manually with edit_file.
+NEW BRIEF — FULL PATH (only when no template fits):
+1. creative_direct(brief) — intent+palette+fonts+beat→preset map in ONE call.
+   Then layout_plan(...) when 2+ elements share the frame.
+   NEVER write spring()/Easing.bezier() values from memory — copy from presets.
+   load_skill("creative-direction") once; "kinetic-typography" when type-led;
+   "cinematic-motion" for aliveness; "layout-composition" for 3+ elements.
+2. plan_motion(beats) — real frame numbers, real props, real easing
+3. write_composition(source) — WHOLE file; mechanical repairs apply inline.
+4. verify_no_errors — ★ BLOCKING GATE
+5. preview_composition() — only after verify_no_errors ok:true
+6. read_render_report()
+7. ONE SENTENCE
 
-★ Composition must contain:
-  — At least one spring() call
-  — Easing.bezier() on every animated element
-  — Stagger (index × 4-6 frames) in every .map() render
-  — extrapolateLeft:"clamp" + extrapolateRight:"clamp" on every interpolate()
-  — No system-ui, sans-serif, Arial, or Helvetica fontFamily (validator error)
+FOLLOW-UP EDIT: read_file → edit_file/bulk_edit → validate_composition →
+  verify_no_errors [BLOCKING] → preview_composition → read_render_report → ONE SENTENCE
 
-★ review_motion: treat every finding as a fix instruction, not advisory text.
-  If it reports linear easing, fix it before verify_no_errors. If it reports
-  no stagger, add stagger. Do not preview a composition review_motion flags.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TYPOGRAPHY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Frame is ${CANVAS.width}×${CANVAS.height}. Scale:
-
-  hero    ${TYPE_SCALE.hero[0]}-${TYPE_SCALE.hero[1]}px  main title
-  sub     ${TYPE_SCALE.sub[0]}-${TYPE_SCALE.sub[1]}px   secondary line
-  body    ${TYPE_SCALE.body[0]}-${TYPE_SCALE.body[1]}px   body and labels
-  caption ${TYPE_SCALE.caption[0]}-${TYPE_SCALE.caption[1]}px still readable on a phone
-  kicker  ${TYPE_SCALE.kicker[0]}-${TYPE_SCALE.kicker[1]}px eyebrows
-
-Nothing under ${MIN_FONT}px or over ${MAX_FONT}px.
-Display type: lineHeight 0.95-1.05.  Body: 1.3-1.5.
-Keep every element at least ${SAFE_MARGIN}px from the frame edge.
-
-FONT PAIRING — pick the mood, use the pair:
-
-  modern/tech    unbounded (hero)       + manrope (body)
-  bold/sport     anton (hero)           + archivo (body)
-  playful        bricolage (hero)       + karla (body)
-  editorial      syne (hero)            + newsreader (body)
-  elegant/serif  instrumentSerif (hero) + newsreader (body)
-  fashion        fraunces (hero)        + karla (body)
-  futuristic     spaceGrotesk (hero)    + spaceMono (labels)
-  poster/retail  bebasNeue (hero)       + outfit (body)
-
-display faces: ${DISPLAY_FACES.join(", ")}
-text/UI faces: ${TEXT_FACES.join(", ")}
-
-One display face + one text face per composition. Never two display faces.
-Call load_skill("typography") for the full catalogue and tracking/weight notes.
+FOLLOW-UP DIRECTION ("faster", "more dramatic"): load_motion_preset → edit_file
+  (retiming only) → validate_composition → verify_no_errors → preview → report → SENTENCE
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ASSETS
+QUALITY GATES ★ NON-NEGOTIABLE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Remote URLs (images, video, audio): always add crossOrigin="anonymous" when the
-src is an http:// or https:// URL — canvas effects will fail without it.
-Never embed placeholder or invented URLs that do not exist. If you do not have
-a real URL for a media asset, use a colored <Solid> or text stand-in and note
-it in the closing sentence.
-Use staticFile() for assets in public/. Use <CanvasImage> for images, <Video>
-from @remotion/media for video, <Audio> from @remotion/media for audio.
-Effects from @remotion/effects attach via the effects={[]} prop — never as CSS.
+★ verify_no_errors ok:true REQUIRED before preview_composition. Blocks on errors
+  AND failed player report. Layout warnings are advisory — fix only if cheap.
+★ Auto-fix: validate → auto_fix_code/auto_enhance → verify_no_errors. Max TWO rounds.
+★ Must contain: ≥1 spring(), Easing.bezier() on every animated element,
+  stagger (index×4-6f) in every .map(), clamps on every interpolate(),
+  no system-ui/sans-serif/Arial/Helvetica fontFamily (validator error).
+★ review_motion findings are fix instructions, not advisory. Fix before verify.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Z-INDEX CONVENTION
+TYPOGRAPHY (load_skill("typography") for full catalogue)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-background=1  content=10  overlays=20  UI/labels=30
-Siblings in DOM order usually paint correctly without explicit z-index.
-Set it only when layers genuinely fight.
+Frame ${CANVAS.width}×${CANVAS.height}. Scale: hero ${TYPE_SCALE.hero[0]}-${TYPE_SCALE.hero[1]}px,
+sub ${TYPE_SCALE.sub[0]}-${TYPE_SCALE.sub[1]}px, body ${TYPE_SCALE.body[0]}-${TYPE_SCALE.body[1]}px,
+caption ${TYPE_SCALE.caption[0]}-${TYPE_SCALE.caption[1]}px, kicker ${TYPE_SCALE.kicker[0]}-${TYPE_SCALE.kicker[1]}px.
+Nothing under ${MIN_FONT}px or over ${MAX_FONT}px. Display lineHeight 0.95-1.05, body 1.3-1.5.
+Keep elements ≥${SAFE_MARGIN}px from frame edge.
+
+FONT PAIRING: modern→unbounded+manrope, bold→anton+archivo, playful→bricolage+karla,
+editorial→syne+newsreader, elegant→instrumentSerif+newsreader, fashion→fraunces+karla,
+futuristic→spaceGrotesk+spaceMono, poster→bebasNeue+outfit.
+display: ${DISPLAY_FACES.join(", ")}
+text/UI: ${TEXT_FACES.join(", ")}
+One display + one text face per composition. Never two display faces.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ASSETS & Z-INDEX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Remote URLs: always add crossOrigin="anonymous" — canvas effects fail without it.
+Never invent URLs. Use <Solid> or text stand-in if no real URL.
+Z-index: background=1, content=10, overlays=20, UI/30. DOM order usually paints fine.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BEHAVIOUR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Say nothing between tool calls — all private work is visible in the tool log.
-Never narrate the request. Never describe a preview you have not read.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────
+Say nothing between tool calls. Never narrate the request.
 Never claim a write succeeded unless the tool result says ok:true.
-preview_composition ok:true means PUBLISHED, not rendered. Only
-read_render_report status "verified" means the cut actually runs in the browser.
-"Done" or "rendered" on anything less is a lie the user catches in seconds.
+preview_composition ok:true = PUBLISHED, not rendered. Only read_render_report
+status "verified" means the cut runs in the browser.
 Change only what the request touches. "Faster" = retiming, not restyling.
-If a tool returns an error, fix the named thing and call it once more.
-Do not repeat an identical failing call.
+If a tool errors, fix the named thing and call once more. Do not repeat a failing call.
 A rejected write_composition means nothing was saved — fix errors and rewrite.
-Ask one question only when the subject itself is unclear. Never ask about
-colour, pacing, or mood — decide those yourself.
+Ask one question only when the subject is unclear. Never ask about colour/pacing/mood.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CLOSING RULE  (non-negotiable)
+CLOSING RULE (non-negotiable)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-After read_render_report, write exactly ONE sentence naming the verified result:
-which version is live in the player, or the exact browser failure and what you
-changed. Nothing before it. Nothing after it. If the report is pending or
-failed, say that plainly and stop. A turn that ends on tool calls reads as a
-crash.
+After read_render_report, write exactly ONE sentence: which version is live, or the
+exact browser failure and what you changed. Nothing before or after. If pending/failed,
+say so plainly and stop. A turn ending on tool calls reads as a crash.
 
 Available skill ids:
 ${SKILL_IDS.join(", ")}`
@@ -380,8 +305,33 @@ export interface ChatState {
   cooldown?: Record<string, number>
   /** The model this session generates with (one of MODELS). */
   model?: string
+  /** Reasoning effort for this session. Defaults to "low". */
+  thinking?: ThinkingLevel
   /** The latest render report posted by the browser for a published version. */
   audit?: RenderReport
+}
+
+/** Default effort: constrained reasoning keeps turns fast and cheap. */
+export const DEFAULT_THINKING: ThinkingLevel = "low"
+
+/**
+ * Maps the session's thinking level to a gateway reasoning option.
+ *
+ * Only ever sends values a model is known to accept: "none" is Ling-only
+ * (any other value 400s), and low/high go only to models flagged in MODELS.
+ * Anything unknown resolves to undefined — the model's own default — so an
+ * unsupported preference can never fail a turn.
+ */
+export function effortFor(
+  spec: ModelOption | undefined,
+  thinking: ThinkingLevel | undefined
+): "none" | "low" | "high" | undefined {
+  const level = thinking ?? DEFAULT_THINKING
+  if (level === "low") return spec?.supportsEffort?.includes("low") ? "low" : undefined
+  if (level === "high") return spec?.supportsEffort?.includes("high") ? "high" : undefined
+  // "off" — Ling accepts "none"; flagged models map off to their minimum.
+  if (/ling/i.test(spec?.id ?? "")) return "none"
+  return spec?.supportsEffort?.includes("off") ? "none" : undefined
 }
 
 /** What the browser reported about a published version: the only render truth. */
@@ -470,12 +420,11 @@ export class Chat extends AIChatAgent<Env, ChatState> {
     if (path.endsWith("/starter") && request.method === "POST") {
       try {
         const body = (await request.json()) as {
-          template?: string
           product?: string
           brand?: string
           headline?: string
         }
-        const golden = goldenStarter(String(body.template ?? "product-reveal"), {
+        const golden = goldenStarter({
           ...(body.product ? { product: body.product.slice(0, 60) } : {}),
           ...(body.brand ? { brand: body.brand.slice(0, 60) } : {}),
           ...(body.headline ? { headline: body.headline.slice(0, 120) } : {}),
@@ -541,19 +490,60 @@ export class Chat extends AIChatAgent<Env, ChatState> {
     // same trust level as /audit and /rating — no user session needed.
     if (path.endsWith("/model")) {
       if (request.method === "POST") {
-        let id = ""
+        let body: { model?: unknown; thinking?: unknown }
         try {
-          id = String(((await request.json()) as { model?: unknown }).model ?? "")
+          body = (await request.json()) as { model?: unknown; thinking?: unknown }
         } catch {
           return Response.json({ ok: false, error: "bad json" }, { status: 400 })
         }
-        if (!MODELS.some((m) => m.id === id)) {
-          return Response.json({ ok: false, error: "unknown model", available: MODELS }, { status: 400 })
+        const next = { ...(this.state ?? {}) }
+        if (body.model !== undefined) {
+          const id = String(body.model ?? "")
+          if (!MODELS.some((m) => m.id === id)) {
+            return Response.json({ ok: false, error: "unknown model", available: MODELS }, { status: 400 })
+          }
+          next.model = id
         }
-        this.setState({ ...(this.state ?? {}), model: id })
-        return Response.json({ ok: true, model: id })
+        if (body.thinking !== undefined) {
+          const t = String(body.thinking ?? "")
+          if (t !== "off" && t !== "low" && t !== "high") {
+            return Response.json({ ok: false, error: "unknown thinking level" }, { status: 400 })
+          }
+          next.thinking = t
+        }
+        this.setState(next)
+        return Response.json({ ok: true, model: next.model ?? DEFAULT_MODEL, thinking: next.thinking ?? DEFAULT_THINKING })
       }
-      return Response.json({ model: this.state?.model ?? DEFAULT_MODEL, available: MODELS })
+      return Response.json({
+        model: this.state?.model ?? DEFAULT_MODEL,
+        thinking: this.state?.thinking ?? DEFAULT_THINKING,
+        available: MODELS,
+      })
+    }
+
+    // Live gateway catalogue probe: which configured model ids the gateway
+    // actually serves right now. Read-only, no generation, no spend — the
+    // picker uses it for its "Test all" status, and it is how new free-tier
+    // ids get confirmed before being added to MODELS.
+    if (path.endsWith("/models-live")) {
+      try {
+        const res = await fetch(`${GATEWAY_BASE}/models`, {
+          headers: { Authorization: `Bearer ${this.env.AI_GATEWAY_API_KEY}` },
+        })
+        if (!res.ok) {
+          return Response.json({ ok: false, error: `gateway ${res.status}` }, { status: 502 })
+        }
+        const data = (await res.json()) as { data?: Array<{ id?: string }> }
+        const ids = (data.data ?? []).map((m) => String(m.id ?? "")).filter(Boolean)
+        const set = new Set(ids)
+        return Response.json({
+          ok: true,
+          count: ids.length,
+          status: MODELS.map((m) => ({ id: m.id, live: set.has(m.id) })),
+        })
+      } catch (err) {
+        return Response.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, { status: 502 })
+      }
     }
 
     if (path.endsWith("/versions")) {      const { version } = store.current()
@@ -703,17 +693,15 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       }),
       stopWhen: stepCountIs(MAX_STEPS),
       /**
-       * Reasoning effort is set only for models that accept it.
-       *
-       * Ling 3.1 Flash reasons by default and only accepts
-       * `reasoning_effort: "none"` — any other value ("low", "medium",
-       * "high") is refused with a 400, and the agent failed before the first
-       * token, which read in the UI as a stall with no output. So the option
-       * is sent only for models flagged in MODELS (Qwen), and omitted for
-       * everything else.
+       * Reasoning effort follows the session's thinking level, mapped through
+       * effortFor() — which only ever emits values the model is known to
+       * accept. Ling 3.1 Flash reasons by default and only accepts
+       * `reasoning_effort: "none"` (anything else 400s); flagged models take
+       * off/low/high. Unknown combinations resolve to undefined (the model's
+       * own default), so an unsupported preference can never fail a turn.
        */
-      ...(spec.reasoningEffort
-        ? { providerOptions: { gateway: { reasoningEffort: spec.reasoningEffort } } }
+      ...(effortFor(spec, this.state?.thinking)
+        ? { providerOptions: { gateway: { reasoningEffort: effortFor(spec, this.state?.thinking) } } }
         : {}),
       /**
        * Guarantee the turn ends in verified words.

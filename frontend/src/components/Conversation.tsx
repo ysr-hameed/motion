@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { UIMessage } from "ai"
-import { ArrowUp, ChevronRight, Plus, Sparkles, Square, X } from "lucide-react"
+import { ArrowUp, Brain, Check, ChevronDown, ChevronRight, FlaskConical, Plus, Sparkles, Square, X } from "lucide-react"
 import { useAgentChat } from "@cloudflare/ai-chat/react"
-import { TEMPLATES as TEMPLATE_CHIPS } from "~/lib/templates"
-import { fetchChatModel, setChatModel, type ModelOption } from "~/lib/composition"
+import {
+  fetchChatModel,
+  fetchLiveModels,
+  setChatModel,
+  setChatThinking,
+  type LiveModelStatus,
+  type ModelOption,
+  type ThinkingLevel,
+} from "~/lib/composition"
 
 const TOOL_LABEL: Record<string, string> = {
   load_skill: "load skill",
@@ -24,8 +31,7 @@ const TOOL_LABEL: Record<string, string> = {
   design_analyze: "analyze design",
   performance_profile: "profile perf",
   accessibility_audit: "audit a11y",
-  template_apply_intelligent: "apply template",
-  template_list: "list templates",
+
   blackboard_write: "post note",
   blackboard_read: "read note",
   blackboard_list: "list notes",
@@ -160,28 +166,24 @@ function toolInput(part: Record<string, unknown>): string {
   return ""
 }
 
-/** What the tool returned (output summary). */
-function toolOutput(part: Record<string, unknown>): { text: string; kind: "ok" | "warn" | "err" | "info" } {
+/**
+ * What the tool returned — failures only. Success needs no chip: the status
+ * dot already turns green. Version numbers, line counts and byte sizes are
+ * agent bookkeeping, not user information.
+ */
+function toolOutput(part: Record<string, unknown>): { text: string; kind: "warn" | "err" } | null {
   const output = part.output as Record<string, unknown> | undefined
-  if (!output) return { text: "", kind: "info" }
-  if (output.error) return { text: String(output.error).slice(0, 80), kind: "err" }
+  if (!output) return null
+  if (output.error) return { text: String(output.error).slice(0, 90), kind: "err" }
   if (output.errors && Array.isArray(output.errors) && output.errors.length > 0) {
-    return { text: `${output.errors.length} error${output.errors.length > 1 ? "s" : ""}`, kind: "err" }
+    const first = String((output.errors as unknown[])[0] ?? "").slice(0, 90)
+    return { text: first || `${(output.errors as unknown[]).length} errors`, kind: "err" }
   }
+  if (output.ok === false) return { text: "needs a fix", kind: "err" }
   if (output.warnings && Array.isArray(output.warnings) && output.warnings.length > 0) {
-    return { text: `${output.warnings.length} warning${output.warnings.length > 1 ? "s" : ""}`, kind: "warn" }
+    return { text: `${(output.warnings as unknown[]).length} warning${(output.warnings as unknown[]).length > 1 ? "s" : ""}`, kind: "warn" }
   }
-  if (output.version) return { text: `v${output.version}`, kind: "ok" }
-  if (output.findings && Array.isArray(output.findings)) {
-    return { text: `${output.findings.length} finding${output.findings.length > 1 ? "s" : ""}`, kind: output.findings.length > 0 ? "warn" : "ok" }
-  }
-  if (output.content) return { text: `${Math.round(String(output.content).length / 1000)}kB`, kind: "info" }
-  if (output.code) return { text: `${String(output.code).split("\n").length} lines`, kind: "ok" }
-  if (output.ok === false) return { text: "rejected", kind: "err" }
-  if (output.ok === true) return { text: "ok", kind: "ok" }
-  if (output.beats && Array.isArray(output.beats)) return { text: `${output.beats.length} beats`, kind: "ok" }
-  if (output.url) return { text: "published", kind: "ok" }
-  return { text: "", kind: "info" }
+  return null
 }
 
 type Part = Record<string, unknown>
@@ -367,58 +369,40 @@ function ToolCall({ part }: { part: Part }) {
       ? (output.findings as string[])
       : null
 
-  // write_composition / edit_file → show line count if large
-  const lineCount =
-    (rawName === "write_composition" || rawName === "edit_file") && output?.code
-      ? String(output.code).split("\n").length
-      : null
-
   // load_skill → show skill name as pill
   const skillName = rawName === "load_skill" && input?.skill ? String(input.skill) : null
 
   const hasDetail = beats || (validationErrors && validationErrors.length > 0) ||
-    (validationWarnings && validationWarnings.length > 0) || findings || lineCount
+    (validationWarnings && validationWarnings.length > 0) || findings
 
   return (
     <div className="tick-in my-0.5">
-      {/* Main row */}
-      <div className="flex items-baseline gap-2  text-[11px]">
-        {/* Status indicator */}
-        <span
-          className={[
-            "h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full",
-            failed ? "bg-bad" : done ? "bg-ok" : "live-dot bg-tungsten",
-          ].join(" ")}
-          aria-hidden="true"
-        />
-        {/* Category icon */}
-        <span className="shrink-0 text-[10px] text-dim" aria-hidden="true">{icon}</span>
-        {/* Tool label */}
-        <span className={done ? "text-muted" : "text-tungsten"}>{label}</span>
-        {/* Input hint */}
-        {hint && <span className="truncate text-dim" title={hint}>{hint}</span>}
-        {/* Skill pill */}
-        {skillName && (
-          <span className="rounded-xs bg-panel-2 px-1 py-px text-[10px] text-muted">{skillName}</span>
-        )}
-        {/* Result chip — appears only once done */}
-        {result && result.text && (
+      {/* Main row: status rail + icon + label + hint. Failures get a chip. */}
+      <div className="flex items-center gap-2 text-[12px] leading-5">
+        <span className="flex shrink-0 items-center gap-1.5">
           <span
             className={[
-              "ml-auto shrink-0 rounded-xs px-1 py-px text-[10px]",
-              result.kind === "err" ? "bg-bad/15 text-bad" :
-              result.kind === "warn" ? "bg-tungsten/15 text-tungsten" :
-              result.kind === "ok" ? "bg-ok/15 text-ok" :
-              "bg-panel-2 text-dim",
+              "h-1.5 w-1.5 rounded-full",
+              failed ? "bg-bad" : done ? "bg-ok" : "live-dot bg-tungsten",
             ].join(" ")}
+            aria-hidden="true"
+          />
+          <span className="text-[11px] text-dim" aria-hidden="true">{icon}</span>
+        </span>
+        <span className={`font-medium ${done && !failed ? "text-muted" : failed ? "text-bad" : "text-paper"}`}>{label}</span>
+        {hint && <span className="truncate font-normal text-dim" title={hint}>{hint}</span>}
+        {skillName && (
+          <span className="shrink-0 rounded-full bg-panel-2 px-1.5 py-px text-[10px] text-muted">{skillName}</span>
+        )}
+        {result && (
+          <span
+            className={[
+              "ml-auto max-w-[55%] shrink-0 truncate rounded-full px-2 py-px text-[10px]",
+              result.kind === "err" ? "bg-bad/15 text-bad" : "bg-tungsten/15 text-tungsten",
+            ].join(" ")}
+            title={result.text}
           >
             {result.text}
-          </span>
-        )}
-        {/* Line count badge for writes */}
-        {lineCount && (
-          <span className="ml-auto shrink-0 rounded-xs bg-panel-2 px-1 py-px text-[10px] text-muted">
-            {lineCount}L
           </span>
         )}
       </div>
@@ -504,9 +488,9 @@ function Attachments({ parts }: { parts: Part[] }) {
 function Thought({ text, streaming }: { text: string; streaming?: boolean }) {
   const trimmed = text.trim()
   if (!trimmed) return null
-  const words = trimmed.split(/\s+/).length
-  // Show the last ~300 chars while streaming — the tail is what's fresh
-  const preview = streaming ? trimmed.slice(-300) : ""
+  // Fixed-height live tail: the box never resizes while streaming, so the
+  // chat below it stops jumping. Only the text inside moves.
+  const preview = streaming ? trimmed.slice(-320) : ""
   return (
     <details
       className="group my-2.5 overflow-hidden rounded-2xl border border-line/80 bg-ink/50"
@@ -515,7 +499,6 @@ function Thought({ text, streaming }: { text: string; streaming?: boolean }) {
       <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[11px] text-dim transition-colors hover:text-muted">
         <ChevronRight size={12} aria-hidden className="transition-transform group-open:rotate-90" />
         <span className="">thinking</span>
-        <span className=" text-dim/70">{words}w</span>
         {streaming && (
           <span className="ml-auto flex items-center gap-1.5  text-[10px] text-tungsten">
             <span className="live-dot h-1 w-1 rounded-full bg-tungsten" aria-hidden />
@@ -524,11 +507,12 @@ function Thought({ text, streaming }: { text: string; streaming?: boolean }) {
         )}
       </summary>
       {streaming ? (
-        /* During stream: show the live tail so user sees real-time progress */
-        <p className="px-2.5 pb-2.5  text-[10.5px] leading-relaxed whitespace-pre-wrap text-muted/70 italic scroll-thin">
-          {preview}
-          <span className="animate-pulse text-tungsten">▌</span>
-        </p>
+        <div className="h-24 overflow-hidden px-2.5 pb-2.5" aria-live="off">
+          <p className="text-[11px] leading-relaxed whitespace-pre-wrap text-muted/70 italic">
+            {preview}
+            <span className="animate-pulse text-tungsten">▌</span>
+          </p>
+        </div>
       ) : (
         <p className="max-h-56 overflow-y-auto px-2.5 pb-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap text-muted scroll-thin">
           {trimmed}
@@ -628,6 +612,158 @@ interface Props {
   onFiles: (files: File[]) => void
 }
 
+const THINKING_HINT: Record<ThinkingLevel, string> = {
+  off: "No chain of thought — fastest, cheapest",
+  low: "Brief reasoning — the default balance",
+  high: "Full reasoning — slower, sharper",
+}
+
+/**
+ * Custom model + thinking picker. Groups free vs paid, marks vision models,
+ * and carries a Test-all probe (read-only gateway catalogue check, no spend)
+ * plus the thinking-effort segmented control.
+ */
+function ModelPicker({
+  models,
+  activeModel,
+  thinking,
+  live,
+  liveBusy,
+  open,
+  onToggle,
+  onClose,
+  onPick,
+  onThinking,
+  onTest,
+  disabled,
+}: {
+  models: ModelOption[]
+  activeModel: string
+  thinking: ThinkingLevel
+  live: LiveModelStatus[] | null
+  liveBusy: boolean
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+  onPick: (id: string) => void
+  onThinking: (t: ThinkingLevel) => void
+  onTest: () => void
+  disabled: boolean
+}) {
+  const active = models.find((m) => m.id === activeModel)
+  const liveById = new Map((live ?? []).map((s) => [s.id, s.live]))
+  const free = models.filter((m) => m.free)
+  const paid = models.filter((m) => !m.free)
+
+  const row = (m: ModelOption) => {
+    const isActive = m.id === activeModel
+    const status = liveById.get(m.id)
+    return (
+      <button
+        key={m.id}
+        type="button"
+        onClick={() => {
+          onPick(m.id)
+          onClose()
+        }}
+        aria-pressed={isActive}
+        className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors ${
+          isActive ? "bg-tungsten/10" : "hover:bg-white/5"
+        }`}
+      >
+        <span className={`flex h-4 w-4 shrink-0 items-center justify-center ${isActive ? "text-tungsten" : "text-transparent"}`} aria-hidden>
+          <Check size={13} strokeWidth={3} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span className={`truncate text-[12.5px] font-semibold ${isActive ? "text-paper" : "text-muted"}`}>{m.label}</span>
+            {status === true ? (
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ok" title="Serving on the gateway" />
+            ) : status === false ? (
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-bad" title="Not in the gateway catalogue" />
+            ) : null}
+          </span>
+          <span className="block truncate text-[10.5px] text-dim" title={m.blurb}>{m.blurb}</span>
+        </span>
+        {!m.textOnly ? (
+          <span className="shrink-0 rounded-full bg-panel-3 px-1.5 py-px text-[9px] font-bold text-muted">vision</span>
+        ) : null}
+      </button>
+    )
+  }
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={disabled}
+        aria-label="Model and thinking"
+        aria-expanded={open}
+        title={active?.blurb ?? "Model — applies to the next message"}
+        className="flex h-8 max-w-[150px] items-center gap-1 rounded-full border border-line px-2.5 text-[11px] font-semibold text-muted transition-colors hover:border-dim hover:text-paper focus:border-tungsten disabled:opacity-40"
+      >
+        <Brain size={12} className="shrink-0 text-tungsten" aria-hidden />
+        <span className="truncate">{active?.label ?? "Model"}</span>
+        <ChevronDown size={12} className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
+      </button>
+      {open ? (
+        <>
+          <button type="button" aria-label="Close" onClick={onClose} className="fixed inset-0 z-40 cursor-default bg-transparent" />
+          <div className="absolute bottom-10 left-0 z-50 w-72 overflow-hidden rounded-2xl border border-line bg-panel-2 shadow-[0_16px_48px_-12px_rgb(0_0_0/0.8)]">
+            <div className="scroll-thin max-h-64 overflow-y-auto p-1.5">
+              <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-widest text-dim">Free</p>
+              {free.map(row)}
+              {paid.length > 0 ? (
+                <>
+                  <p className="px-2.5 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-dim">Paid</p>
+                  {paid.map(row)}
+                </>
+              ) : null}
+            </div>
+            <div className="border-t border-line-soft p-2.5">
+              <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-dim">
+                <Brain size={11} aria-hidden /> Thinking
+              </p>
+              <div className="grid grid-cols-3 gap-1 rounded-xl bg-ink p-1" role="group" aria-label="Thinking effort">
+                {(["off", "low", "high"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => onThinking(t)}
+                    aria-pressed={thinking === t}
+                    title={THINKING_HINT[t]}
+                    className={`rounded-lg px-2 py-1.5 text-[11px] font-bold capitalize transition-colors ${
+                      thinking === t ? "bg-tungsten text-white" : "text-dim hover:text-paper"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[10px] leading-snug text-dim">{THINKING_HINT[thinking]}</p>
+              <button
+                type="button"
+                onClick={onTest}
+                disabled={liveBusy}
+                className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl border border-line px-2 py-1.5 text-[11px] font-semibold text-muted transition-colors hover:border-tungsten hover:text-paper disabled:opacity-50"
+              >
+                <FlaskConical size={12} aria-hidden />
+                {liveBusy ? "Probing gateway…" : live ? "Re-test all models" : "Test all models"}
+              </button>
+              {live ? (
+                <p className="mt-1 text-center text-[10px] text-dim">
+                  {live.filter((s) => s.live).length}/{live.length} serving · no spend, catalogue check only
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
 export function Conversation({ chat, sessionId }: Props) {
   const { messages, sendMessage, clearHistory, stop, status, isStreaming, isRecovering, regenerate } = chat as UseAgentChatReturn & {
     regenerate?: () => void
@@ -684,8 +820,13 @@ export function Conversation({ chat, sessionId }: Props) {
     return () => el.removeEventListener("scroll", onScroll)
   }, [])
 
-  // Model switcher: list + current pick live in the Chat Durable Object,
-  // so every tab on this session agrees. Applies to the next message sent.
+  const [thinking, setThinking] = useState<ThinkingLevel>("low")
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [live, setLive] = useState<LiveModelStatus[] | null>(null)
+  const [liveBusy, setLiveBusy] = useState(false)
+
+  // Model + thinking live in the Chat Durable Object, so every tab on this
+  // session agrees. Applies to the next message sent.
   useEffect(() => {
     let dead = false
     fetchChatModel(sessionId)
@@ -693,6 +834,7 @@ export function Conversation({ chat, sessionId }: Props) {
         if (dead) return
         setModels(r.available)
         setActiveModel(r.model)
+        setThinking(r.thinking)
       })
       .catch(() => {
         if (!dead) setModelError("models unavailable")
@@ -713,6 +855,33 @@ export function Conversation({ chat, sessionId }: Props) {
       setModelError(err instanceof Error ? err.message : String(err))
     } finally {
       setModelBusy(false)
+    }
+  }
+
+  async function changeThinking(t: ThinkingLevel) {
+    if (t === thinking || modelBusy) return
+    setModelBusy(true)
+    setModelError(null)
+    try {
+      const r = await setChatThinking(sessionId, t)
+      setThinking(r.thinking)
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setModelBusy(false)
+    }
+  }
+
+  async function testAll() {
+    if (liveBusy) return
+    setLiveBusy(true)
+    try {
+      const r = await fetchLiveModels(sessionId)
+      setLive(r.status)
+    } catch {
+      setModelError("live probe failed — gateway unreachable")
+    } finally {
+      setLiveBusy(false)
     }
   }
 
@@ -913,20 +1082,20 @@ export function Conversation({ chat, sessionId }: Props) {
               <Plus size={16} aria-hidden />
             </button>
             {models.length > 0 ? (
-              <select
-                value={activeModel}
+              <ModelPicker
+                models={models}
+                activeModel={activeModel}
+                thinking={thinking}
+                live={live}
+                liveBusy={liveBusy}
+                open={pickerOpen}
+                onToggle={() => setPickerOpen((v) => !v)}
+                onClose={() => setPickerOpen(false)}
+                onPick={(id) => void changeModel(id)}
+                onThinking={(t) => void changeThinking(t)}
+                onTest={() => void testAll()}
                 disabled={busy || modelBusy}
-                onChange={(e) => void changeModel(e.target.value)}
-                title={models.find((m) => m.id === activeModel)?.blurb ?? "Model — applies to the next message"}
-                aria-label="Model"
-                className="h-8 max-w-[108px] shrink-0 truncate rounded-full border border-line bg-transparent px-2 text-[11px] font-semibold text-muted outline-none transition-colors hover:border-dim hover:text-paper focus:border-tungsten disabled:opacity-40"
-              >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id} title={m.blurb}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
+              />
             ) : null}
             {pending.length > 0 ? (
               <span className=" text-[10px] text-tungsten">{pending.length} attached</span>
@@ -993,19 +1162,6 @@ function EmptyBrief() {
           </li>
         ))}
       </ul>
-      <p className="eyebrow mt-5 mb-2">or start from a template</p>
-      <div className="flex flex-wrap gap-1.5">
-        {TEMPLATE_CHIPS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => fill(t.prompt)}
-            className="rounded-lg border border-line bg-panel px-2.5 py-1.5 text-[11.5px] text-muted transition-colors hover:border-tungsten hover:text-paper"
-          >
-            {t.name}
-          </button>
-        ))}
-      </div>
     </div>
   )
 }
@@ -1028,14 +1184,12 @@ function Working({ messages, startedAt }: { messages: UIMessage[]; startedAt: nu
   }, [startedAt])
 
   // Find the last pending tool call across all messages
-  const { currentTool, callCount } = useMemo(() => {
+  const currentTool = useMemo(() => {
     let last: string | null = null
-    let count = 0
     for (const m of messages) {
       for (const p of (m.parts ?? []) as Part[]) {
         const t = String(p.type ?? "")
         if (t.startsWith("tool-")) {
-          count++
           const state = String(p.state ?? "")
           if (state !== "output-available" && state !== "output-error") {
             last = toolName(p)
@@ -1043,7 +1197,7 @@ function Working({ messages, startedAt }: { messages: UIMessage[]; startedAt: nu
         }
       }
     }
-    return { currentTool: last, callCount: count }
+    return last
   }, [messages])
 
   const mins = Math.floor(elapsed / 60)
@@ -1056,9 +1210,6 @@ function Working({ messages, startedAt }: { messages: UIMessage[]; startedAt: nu
       <span className="truncate text-xs font-semibold text-paper">
         {currentTool ? `Running ${currentTool}…` : "Directing…"}
       </span>
-      {callCount > 0 && (
-        <span className="shrink-0  text-[10px] text-dim">step {callCount}</span>
-      )}
       <span className="ml-auto shrink-0  text-[11px] tabular-nums text-tungsten">{timeStr}</span>
     </div>
   )

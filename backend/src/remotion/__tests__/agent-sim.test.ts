@@ -178,7 +178,7 @@ describe("Agent simulation — scripted turns through real tools", () => {
   it("S1 fast path (product): quick_start → verify → preview → verified report", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    const q = await call("S1", "quick_start", { template: "product-reveal", product: "Acme", headline: "Motion that lands" })
+    const q = await call("S1", "quick_start", { product: "Acme", headline: "Motion that lands" })
     assert.equal(q.ok, true, `quick_start failed: ${JSON.stringify(q.errors ?? q.error)}`)
     const v = await call("S1", "verify_no_errors")
     assert.equal(v.ok, true, `gate blocked a golden: ${JSON.stringify(v)}`)
@@ -192,21 +192,19 @@ describe("Agent simulation — scripted turns through real tools", () => {
     assert.ok(((d as { score: number }).score ?? 0) >= 90, `golden score too low: ${JSON.stringify(d)}`)
   })
 
-  it("S2+S3 fast path goldens verify clean (logo, quote)", async () => {
-    for (const [s, t] of [["S2", "logo-animation"], ["S3", "quote-card"]] as const) {
-      const store = new FakeStore()
-      const call = toolsFor(store, null)
-      const q = await call(s, "quick_start", { template: t, brand: "Acme" })
-      assert.equal(q.ok, true, `${t}: ${JSON.stringify(q.errors ?? q.error)}`)
-      const v = await call(s, "verify_no_errors")
-      assert.equal(v.ok, true, `${t} blocked: ${JSON.stringify(v)}`)
-    }
+  it("S2 golden verifies clean with brand-only context", async () => {
+    const store = new FakeStore()
+    const call = toolsFor(store, null)
+    const q = await call("S2", "quick_start", { brand: "Acme" })
+    assert.equal(q.ok, true, `golden failed: ${JSON.stringify(q.errors ?? q.error)}`)
+    const v = await call("S2", "verify_no_errors")
+    assert.equal(v.ok, true, `golden blocked: ${JSON.stringify(v)}`)
   })
 
   it("S4 browser failure blocks preview, names the fix, auto-fix recovers", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    await call("S4", "quick_start", { template: "product-reveal", product: "Acme" })
+    await call("S4", "quick_start", { product: "Acme" })
     // v1 shipped with a named lucide import: compiles, throws at mount.
     store.code = `import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion"
 import { Zap } from "lucide-react"
@@ -282,7 +280,7 @@ export default function NamedCut() {
   it("S7 edit path: retitle without rewrite, still clean", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    await call("S7", "quick_start", { template: "product-reveal", product: "Acme" })
+    await call("S7", "quick_start", { product: "Acme" })
     const e = await call("S7", "edit_file", { ops: [{ find: "Acme", replace: "Nova" }] })
     assert.equal(e.ok, true, `edit failed: ${JSON.stringify(e)}`)
     assert.ok(store.current().code.includes("Nova"), "edit did not apply")
@@ -293,7 +291,7 @@ export default function NamedCut() {
   it("S8 golden motion outscores a cheap fade by 15+ points", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    await call("S8", "quick_start", { template: "product-reveal", product: "Acme" })
+    await call("S8", "quick_start", { product: "Acme" })
     const gold = (await call("S8", "design_analyze")) as { score: number }
     store.code = CHEAP_FADE
     const cheap = (await call("S8", "design_analyze")) as { score: number; findings: string[] }
@@ -301,15 +299,13 @@ export default function NamedCut() {
     assert.ok(cheap.findings.join(" ").length > 20, "cheap fade must produce actionable findings")
   })
 
-  it("S9 placement: goldens carry no overlap/overflow/safe-margin findings", async () => {
+  it("S9 placement: the golden carries no overlap/overflow/safe-margin findings", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    for (const t of ["product-reveal", "logo-animation", "quote-card"]) {
-      await call("S9", "quick_start", { template: t })
-      const v = (await call("S9", "validate_composition")) as { warnings: string[] }
-      const placement = v.warnings.filter((m) => /share the spot|outside|overlap|cropped|safe margin|off-canvas/i.test(m))
-      assert.equal(placement.length, 0, `${t} placement warnings: ${placement.join(" | ")}`)
-    }
+    await call("S9", "quick_start", { product: "Acme" })
+    const v = (await call("S9", "validate_composition")) as { warnings: string[] }
+    const placement = v.warnings.filter((m) => /share the spot|outside|overlap|cropped|safe margin|off-canvas/i.test(m))
+    assert.equal(placement.length, 0, `placement warnings: ${placement.join(" | ")}`)
   })
 
   it("prints the tracked report", () => {

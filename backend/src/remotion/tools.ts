@@ -15,7 +15,7 @@ import {
   performanceProfile,
   preferenceApply,
 } from "./intelligence"
-import { applyTemplate, goldenStarter, TEMPLATES } from "./templates"
+import { goldenStarter } from "./templates"
 import { cacheGet, cacheSet, predictTools, TTL } from "./cache"
 import {
   backgroundGenerate,
@@ -407,13 +407,9 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     review_motion: tool({
       description:
-        "Critique the cut as a motion designer, against what a finished piece needs. " +
-        "Call this after a preview and then act on what it finds. It looks for the " +
-        "failures that make motion read as cheap: single-property fades, uniform " +
-        "linear timing, nothing settling, no hierarchy, a last frame that simply " +
-        "stops. Real motion has anticipation, overlap, layered depth, a curve with " +
-        "intent, and a landing worth watching. Two or three precise findings beat a " +
-        "generic list.",
+        "Critique the cut as a motion designer. Call after a preview, then act on findings. " +
+        "Detects: linear-only timing, opacity-only motion, no settle, no stagger, " +
+        "overlapping elements, off-canvas overflow, single-beat plans.",
       inputSchema: z.object({
         focus: z
           .string()
@@ -431,6 +427,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         const transforms = (code.match(/translate[XY]|scale|rotate|skew/gi) ?? []).length
         const opacities = (code.match(/opacity/gi) ?? []).length
         const staggers = (code.match(/delay|offset|stagger/i) ?? []).length
+        const maps = (code.match(/\.map\(/g) ?? []).length
 
         if (frames > 0 && easings === 0) {
           findings.push(
@@ -456,7 +453,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
               "overshoot, so the cut has a landing instead of easing to a stop."
           )
         }
-        if (staggers === 0 && (code.match(/\.map\(/g) ?? []).length > 0) {
+        if (staggers === 0 && maps > 0) {
           findings.push(
             "A list maps over items with no stagger. Offsetting each item's start frame " +
               "(e.g. index * 3) turns a block into a sequence."
@@ -468,6 +465,41 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
               "Real pieces have a change of state — add a second beat with a different idea."
           )
         }
+
+        // Detect overlapping absolute-positioned elements at the same spot
+        const posRe = /position:\s*['"]absolute['"]/g
+        const seen = new Map<string, number>()
+        let m: RegExpExecArray | null
+        while ((m = posRe.exec(code)) !== null) {
+          const window = code.slice(m.index, m.index + 500)
+          const left = /left:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0] ?? "?"
+          const top = /top:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0] ?? "?"
+          const key = `${left} | ${top}`
+          seen.set(key, (seen.get(key) ?? 0) + 1)
+        }
+        const dupe = [...seen.entries()].find(([, n]) => n >= 2)
+        if (dupe) {
+          findings.push(
+            `Two absolutely-positioned elements share the spot (${dupe[0]}) — they paint on top of each other. ` +
+              `Stack text in one flex column with gap, or offset one deliberately.`
+          )
+        }
+
+        // Detect translate ranges that push elements off-canvas
+        for (const m of code.matchAll(/interpolate\(\s*frame\s*,\s*\[([^\]]*)\]\s*,\s*\[([^\]]*)\]/g)) {
+          const outs = (m[2] ?? "").split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n))
+          if (outs.length === 0) continue
+          const peak = Math.max(...outs.map((n) => Math.abs(n)))
+          const ctx = code.slice(Math.max(0, (m.index ?? 0) - 220), (m.index ?? 0) + 120)
+          if (/translate/i.test(ctx) && peak > 1920) {
+            findings.push(
+              `translate range reaches ${peak}px — past the 1920px canvas edge. ` +
+                `Only fix if the element never appears on screen.`
+            )
+            break
+          }
+        }
+
         if (findings.length === 0) {
           findings.push(
             "Nothing structural is wrong. Push on the ending: does the last frame resolve, " +
@@ -954,49 +986,20 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       },
     }),
 
-    template_apply_intelligent: tool({
-      description:
-        "Apply one of the 10 professional templates with smart customization: " +
-        "structure, context swap, retiming, export guidance. Returns a SPEC — " +
-        "turn it into a composition with plan_motion + write_composition. " +
-        "Template ids: product-reveal, social-ad, logo-animation, explainer-intro, " +
-        "event-promo, tutorial-intro, app-demo, brand-story, quote-card, podcast-intro.",
-      inputSchema: z.object({
-        template: z.string().describe("Template id, e.g. 'product-reveal'."),
-        product: z.string().optional(),
-        brand: z.string().optional(),
-        mood: z.string().optional(),
-        platform: z.string().optional(),
-        seconds: z.number().min(2).max(30).optional(),
-      }),
-      execute: async ({ template, product, brand, mood, platform, seconds }) =>
-        applyTemplate(template, { product, brand, mood, platform, seconds }),
-    }),
-
-    template_list: tool({
-      description: "List the 10 professional templates with their beats and variants.",
-      inputSchema: z.object({}),
-      execute: async () => ({
-        templates: TEMPLATES.map((t) => ({ id: t.id, name: t.name, variants: t.variants })),
-      }),
-    }),
-
     quick_start: tool({
       description:
-        "FAST PATH: plan + write + validate a proven golden composition in ONE model call. " +
-        "Use this FIRST on every new brief that matches a template (product reveal, logo sting, " +
-        "quote card, ad, promo, intro) — it publishes a rendering cut immediately, and follow-up " +
-        "edits refine it. Costs 1 paced call instead of 6 (template + plan + presets + write + " +
-        "validate + fix). Pass the brief's product/brand/headline words; the golden file already " +
-        "has spring landings, bezier easing, clamps, stagger, Fonts.* and the Lucide namespace.",
+        "FAST PATH: plan + write + validate the proven golden composition in ONE model call. " +
+        "Use this FIRST on every new brief — it publishes a rendering cut immediately, and " +
+        "follow-up edits refine it. Pass the brief's product/brand/headline words; the golden " +
+        "file already has spring landings, bezier easing, clamps, stagger, Fonts.* and the " +
+        "Lucide namespace.",
       inputSchema: z.object({
-        template: z.string().describe("Template id, e.g. 'product-reveal'. Any id falls back to the product-reveal golden."),
         product: z.string().optional().describe("Product or hero word shown large."),
-        brand: z.string().optional().describe("Brand word for the logo sting."),
+        brand: z.string().optional().describe("Brand word shown in the hero lockup."),
         headline: z.string().max(120).optional().describe("Headline cascaded per word."),
       }),
-      execute: async ({ template, product, brand, headline }) => {
-        const golden = goldenStarter(template, { product, brand, headline })
+      execute: async ({ product, brand, headline }) => {
+        const golden = goldenStarter({ product, brand, headline })
         const repaired = autoRepairInline(golden.code)
         const checks = checkComposition(repaired.code)
         const errors = checks.filter((c) => c.level === "error")
@@ -2106,18 +2109,6 @@ async function batchExecute(
       const { code, version } = store.current()
       if (!code) throw new Error("Nothing to audit yet.")
       return { version, ...accessibilityAudit(code) }
-    }
-    case "template_list":
-      return { templates: TEMPLATES.map((t) => ({ id: t.id, name: t.name, variants: t.variants })) }
-    case "template_apply_intelligent": {
-      const ctx = args as { product?: string; brand?: string; mood?: string; platform?: string; seconds?: number }
-      return applyTemplate(str(args.template), {
-        product: ctx.product,
-        brand: ctx.brand,
-        mood: ctx.mood,
-        platform: ctx.platform,
-        seconds: typeof ctx.seconds === "number" ? ctx.seconds : undefined,
-      })
     }
     case "validate_composition": {
       // NEVER cached: the source changed since the last call by definition.

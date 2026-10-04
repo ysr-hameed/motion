@@ -75,9 +75,11 @@ export async function handleResources(
       await touchUser(ctx);
       const rows = await db
         .prepare(
-          `SELECT DISTINCT p.* FROM projects p
+          `SELECT p.*, COUNT(c.id) AS cuts FROM projects p
            LEFT JOIN team_members m ON m.team_id = p.team_id
+           LEFT JOIN compositions c ON c.project_id = p.id
            WHERE p.user_id = ? OR m.user_id = ?
+           GROUP BY p.id
            ORDER BY p.updated_at DESC LIMIT 100`,
         )
         .bind(uid, uid)
@@ -149,20 +151,33 @@ export async function handleResources(
     // The browser calls attach once per chat session so the D1 row carries
     // the correct owner; the DO later PATCHes fields via /api/internal/*.
     if (req.method === "POST" && path === "/api/compositions/attach") {
-      const body = (await req.json().catch(() => null)) as { sessionId?: string } | null;
+      const body = (await req.json().catch(() => null)) as { sessionId?: string; projectId?: string } | null;
       const sessionId = body?.sessionId?.trim();
       if (!sessionId || sessionId.length > 80) {
         throw new ApiError(400, "invalid_request", "sessionId is required.");
       }
       await touchUser(ctx);
+      // Optional project link — verified to belong to this user first, so a
+      // session can never claim another user's project.
+      let projectId: string | null = null;
+      const want = body?.projectId?.trim();
+      if (want) {
+        const own = await db
+          .prepare(`SELECT id FROM projects WHERE id = ? AND user_id = ?`)
+          .bind(want, uid)
+          .first();
+        if (own) projectId = want;
+      }
       const now = nowMs();
       await db
         .prepare(
-          `INSERT INTO compositions (id, user_id, status, created_at, updated_at)
-           VALUES (?, ?, 'draft', ?, ?)
-           ON CONFLICT(id) DO NOTHING`,
+          `INSERT INTO compositions (id, user_id, project_id, status, created_at, updated_at)
+           VALUES (?, ?, ?, 'draft', ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             project_id = COALESCE(excluded.project_id, compositions.project_id),
+             updated_at = excluded.updated_at`,
         )
-        .bind(sessionId, uid, now, now)
+        .bind(sessionId, uid, projectId, now, now)
         .run();
       return Response.json({ ok: true, id: sessionId });
     }

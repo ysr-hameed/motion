@@ -11,6 +11,7 @@ interface Project {
   description: string | null;
   status: string;
   updated_at: number;
+  cuts?: number;
 }
 
 export default function Projects() {
@@ -87,14 +88,37 @@ export default function Projects() {
         </div>
       ) : null}
       {creating ? (
-        <form onSubmit={create} className="panel-lift mb-4 flex gap-2 p-3">
-          <div className="flex-1">
-            <Field label="Project name" value={name} onChange={(e) => setName(e.target.value)} required />
-          </div>
-          <Button type="submit" className="mt-6" disabled={!name.trim()}>
-            Create
-          </Button>
-        </form>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setCreating(false)}
+          role="presentation"
+        >
+          <form
+            onSubmit={create}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setCreating(false);
+            }}
+            className="panel-lift w-full max-w-sm p-5"
+            role="dialog"
+            aria-modal="true"
+            aria-label="New project"
+          >
+            <p className="text-base font-bold tracking-tight">New project</p>
+            <p className="mt-1 text-xs text-muted">Group cuts for a campaign or client.</p>
+            <div className="mt-4">
+              <Field label="Project name" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setCreating(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!name.trim()}>
+                Create project
+              </Button>
+            </div>
+          </form>
+        </div>
       ) : null}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="relative">
@@ -166,6 +190,7 @@ export default function Projects() {
               <div className="p-4">
                 <p className="truncate text-[15px] font-semibold">{p.name}</p>
                 <p className="mt-1  text-[11px] text-dim">
+                  {typeof p.cuts === "number" ? `${p.cuts} cut${p.cuts === 1 ? "" : "s"} · ` : null}
                   updated {new Date(p.updated_at).toLocaleDateString()}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">

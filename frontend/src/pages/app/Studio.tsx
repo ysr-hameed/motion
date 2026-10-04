@@ -1,7 +1,7 @@
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { useAgent } from "agents/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, Download, Film } from "lucide-react";
+import { ChevronDown, Download, Film, Plus } from "lucide-react";
 import { Conversation } from "~/components/Conversation";
 import { ExportDialog } from "~/components/ExportDialog";
 import { Stage } from "~/components/Stage";
@@ -144,15 +144,22 @@ export default function Studio() {
         kind?: string;
         text?: string;
         project?: string | null;
-        template?: string;
+        projectId?: string | null;
         headline?: string;
       };
       if (p.kind === "brief" && p.text) {
         if (p.project) setProjectName(p.project);
+        // Link this fresh session's cut to the chosen project (idempotent).
+        if (p.projectId && token) {
+          motionApi(token, "/api/compositions/attach", {
+            method: "POST",
+            body: JSON.stringify({ sessionId, projectId: p.projectId }),
+          }).catch(() => undefined);
+        }
         window.dispatchEvent(new CustomEvent("motion:suggest", { detail: p.text }));
         setMobileView("direct");
-      } else if (p.kind === "instant" && p.template) {
-        void publishStarter(sessionId, p.template, p.headline ? { headline: p.headline } : {})
+      } else if (p.kind === "instant") {
+        void publishStarter(sessionId, p.headline ? { headline: p.headline } : {})
           .then(() => reload())
           .catch(() => undefined);
       }
@@ -178,6 +185,22 @@ export default function Studio() {
           </span>
         ) : null}
         {loadError ? <span className="text-xs text-bad">· offline</span> : null}
+        <button
+          type="button"
+          onClick={() => {
+            try {
+              localStorage.setItem("motion.session", crypto.randomUUID());
+            } catch {
+              /* ignore */
+            }
+            window.location.reload();
+          }}
+          title="Start a fresh cut in a new session"
+          className="ml-auto inline-flex h-9 items-center gap-1 rounded-xl border border-line px-3 text-xs font-bold text-muted transition-all hover:border-tungsten hover:text-paper"
+        >
+          <Plus size={13} aria-hidden />
+          New cut
+        </button>
         <button
           type="button"
           onClick={openExport}

@@ -50,19 +50,18 @@ export async function fetchComposition(
 }
 
 /**
- * Instant starter: publishes a golden composition with zero model calls.
+ * Instant starter: publishes the golden composition with zero model calls.
  * The player renders it immediately; the agent refines it from there.
  */
 export async function publishStarter(
   instance: string,
-  template: string,
   context: { product?: string; brand?: string; headline?: string } = {},
   signal?: AbortSignal
 ): Promise<{ ok: boolean; version: number; title?: string }> {
   const res = await fetch(agentUrl(instance, "starter"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ template, ...context }),
+    body: JSON.stringify(context),
     signal,
   })
   if (!res.ok) throw new Error(`starter ${res.status}`)
@@ -85,31 +84,69 @@ export async function fetchVersions(
   return (await res.json()) as { current: number; versions: VersionSummary[] }
 }
 
+export type ThinkingLevel = "off" | "low" | "high"
+
 export interface ModelOption {
   id: string
   label: string
   blurb: string
+  free: boolean
   textOnly: boolean
+  supportsEffort?: ThinkingLevel[]
 }
 
-export async function fetchChatModel(
-  instance: string,
-  signal?: AbortSignal
-): Promise<{ model: string; available: ModelOption[] }> {
+export interface ChatModelState {
+  model: string
+  thinking: ThinkingLevel
+  available: ModelOption[]
+}
+
+export async function fetchChatModel(instance: string, signal?: AbortSignal): Promise<ChatModelState> {
   const res = await fetch(agentUrl(instance, "model"), { signal })
   if (!res.ok) throw new Error(`model ${res.status}`)
-  return (await res.json()) as { model: string; available: ModelOption[] }
+  const data = (await res.json()) as Partial<ChatModelState>
+  return {
+    model: data.model ?? "",
+    thinking: data.thinking ?? "low",
+    available: data.available ?? [],
+  }
 }
 
-export async function setChatModel(instance: string, model: string): Promise<{ model: string }> {
+async function postModel(
+  instance: string,
+  body: { model?: string; thinking?: ThinkingLevel }
+): Promise<{ model: string; thinking: ThinkingLevel }> {
   const res = await fetch(agentUrl(instance, "model"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model }),
+    body: JSON.stringify(body),
   })
   if (!res.ok) {
     const detail = await res.json().catch(() => null)
     throw new Error((detail as { error?: string } | null)?.error ?? `model ${res.status}`)
   }
-  return (await res.json()) as { model: string }
+  return (await res.json()) as { model: string; thinking: ThinkingLevel }
+}
+
+export async function setChatModel(instance: string, model: string) {
+  return postModel(instance, { model })
+}
+
+export async function setChatThinking(instance: string, thinking: ThinkingLevel) {
+  return postModel(instance, { thinking })
+}
+
+export interface LiveModelStatus {
+  id: string
+  live: boolean
+}
+
+/** Which configured models the gateway serves right now. No spend, read-only. */
+export async function fetchLiveModels(
+  instance: string,
+  signal?: AbortSignal
+): Promise<{ count: number; status: LiveModelStatus[] }> {
+  const res = await fetch(agentUrl(instance, "models-live"), { signal })
+  if (!res.ok) throw new Error(`models-live ${res.status}`)
+  return (await res.json()) as { count: number; status: LiveModelStatus[] }
 }

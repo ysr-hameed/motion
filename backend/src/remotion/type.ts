@@ -55,7 +55,6 @@ export const DISPLAY_FACES = [
   "fraunces",
   "instrumentSerif",
   "bodoni",
-  "newsreader",
 ] as const
 
 /** Neutral and mono faces, for UI-ish overlays and data. */

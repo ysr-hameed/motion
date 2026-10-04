@@ -274,16 +274,14 @@ describe("Layout Engine", () => {
   })
 })
 
-describe("Golden Starters + Inline Repair (fast path)", () => {
-  it("every golden validates with zero errors and real motion", () => {
-    for (const id of ["product-reveal", "logo-animation", "quote-card", "social-ad", "no-such-template"]) {
-      const g = goldenStarter(id, { product: "Acme", headline: "Motion that lands" })
-      const errs = errors(g.code)
-      assert.equal(errs.length, 0, `${id} errors: ${errs.map((e) => e.message).join(" | ")}`)
-      assert.ok(g.plan.beats.length >= 2, `${id} needs at least two beats`)
-      for (const re of [/\bspring\(/, /Easing\.bezier/, /extrapolateRight: "clamp"/, /export default/]) {
-        assert.ok(re.test(g.code), `${id} missing ${re}`)
-      }
+describe("Golden Starter + Inline Repair (fast path)", () => {
+  it("the golden validates with zero errors and real motion", () => {
+    const g = goldenStarter({ product: "Acme", headline: "Motion that lands" })
+    const errs = errors(g.code)
+    assert.equal(errs.length, 0, `errors: ${errs.map((e) => e.message).join(" | ")}`)
+    assert.ok(g.plan.beats.length >= 2, "needs at least two beats")
+    for (const re of [/\bspring\(/, /Easing\.bezier/, /extrapolateRight: "clamp"/, /export default/]) {
+      assert.ok(re.test(g.code), `missing ${re}`)
     }
   })
 

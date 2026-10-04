@@ -369,6 +369,38 @@ export function checkComposition(code: string): Check[] {
     })
   }
 
+  // Remotion docs: never animate fontSize — it re-lays-out text every frame
+  // and reads as jitter. Animate translate/scale/opacity + letterSpacing.
+  if (/fontSize:\s*(interpolate\s*\(|spring\s*\()/i.test(src)) {
+    out.push({
+      level: "error",
+      message:
+        "fontSize is driven by interpolate()/spring(). Never animate fontSize — " +
+        "animate translate/scale/opacity (and letterSpacing for tracking punches) instead.",
+    })
+  }
+
+  // Series positions its clips itself — a from= on Series.Sequence fights it.
+  // Overlap with offset={-15}, the same 10-15f handoff beats use.
+  if (/<Series\.Sequence[^>]*\bfrom\s*=/i.test(src)) {
+    out.push({
+      level: "error",
+      message:
+        "<Series.Sequence> takes no from= — Series positions clips back-to-back itself. " +
+        "Overlap beats with offset={-15} instead.",
+    })
+  }
+
+  // Docs: always premount a Sequence, or the first frames render unready.
+  if (/<Sequence[\s>]/i.test(src) && !/premountFor\s*=/i.test(src)) {
+    out.push({
+      level: "warn",
+      message:
+        "A <Sequence> without premountFor — add premountFor={1 * fps} so the first " +
+        "frames never render before the scene is ready.",
+    })
+  }
+
   if (/\bMath\.random\s*\(/.test(src)) {
     out.push({
       level: "error",
@@ -864,7 +896,7 @@ export function preValidatePlan(
       fixes.push(`Clamp beat ${i} to a positive window inside 0-${maxFrames}.`)
     }
     if (b.to > maxFrames) {
-      issues.push(`Beat ${oteric(i, b.to, maxFrames)}`)
+      issues.push(`Beat ${beatEndsPastLimit(i, b.to, maxFrames)}`)
       fixes.push(`Tighten beat ${i} to end at or before frame ${maxFrames} (30s).`)
     }
     if (!b.what || b.what.trim().length < 12) {
@@ -887,7 +919,7 @@ export function preValidatePlan(
   return { ok: issues.length === 0, issues, fixes }
 }
 
-function oteric(i: number, to: number, max: number): string {
+function beatEndsPastLimit(i: number, to: number, max: number): string {
   return `Beat ${i} ends at frame ${to}, past the ${max}-frame (30s) limit.`
 }
 
