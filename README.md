@@ -205,9 +205,9 @@ because this login can see six accounts and wrangler will not guess.
   on the gateway key, not in the code — see above.
 - A full workflow turn takes ~2 minutes because of that pacing. The UI says
   "working" and shows the tool log, so it reads as progress rather than a hang.
-- `MAX_STEPS` is 12. Enough for skills, plan, write, validate, review and one
-  preview plus the closing sentence; a rejected write that needs re-issuing is
-  what pushes a turn near it.
+- `MAX_STEPS` is 14. Enough for skills, plan, write, validate, two edit rounds,
+  verify, one preview, one report, plus the closing sentence; loop caps
+  (pending-report ×2, code-dump guard) stop runaways instead of the step count.
 
 ## Recovery from the pre-rewrite state
 

@@ -216,8 +216,14 @@ export const DEFAULT_MODEL = "alibaba/qwen3.7-flash"
  * and a closing sentence is eight steps, and a rejected write that has to be
  * re-issued pushes it past ten. Setting this lower silently truncated turns
  * before the agent ever spoke, which read as a crash.
+ *
+ * Observed live: a healthy full-path turn (batch, creative_direct, 2× skill,
+ * plan, write, validate, 2× edit, verify, preview, report) fills 12 steps and
+ * dies with no closing sentence. 14 gives the turn room to speak. Runaway
+ * protection comes from the loop caps (pending-report ×2, code-dump guard),
+ * not from this number, so the headroom is safe.
  */
-const MAX_STEPS = 12
+const MAX_STEPS = 14
 
 const FRAME_RANGE = `frames 0 to ${CANVAS.maxFrames - 1}`
 
