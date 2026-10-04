@@ -40,9 +40,17 @@ export interface ModelOption {
  */
 export const MODELS: ModelOption[] = [
   {
+    id: "alibaba/qwen3.7-flash",
+    label: "Qwen 3.7 Flash",
+    blurb: "Default · best coder · vision · 991K ctx",
+    free: true,
+    textOnly: false,
+    supportsEffort: ["off", "low", "high"],
+  },
+  {
     id: "inclusionai/ling-3.1-flash",
     label: "Ling 3.1 Flash",
-    blurb: "Default · free · text only",
+    blurb: "Free · text only",
     free: true,
     textOnly: true,
   },
@@ -61,53 +69,31 @@ export const MODELS: ModelOption[] = [
     textOnly: true,
   },
   {
-    id: "poolside/laguna-s-2.1-free",
-    label: "Laguna S 2.1",
+    id: "inclusionai/ling-3.0-flash-sante-free",
+    label: "Ling 3.0 Sante (free tier)",
+    blurb: "Free routing · text only",
+    free: true,
+    textOnly: true,
+  },
+  {
+    id: "inclusionai/ling-3.0-flash",
+    label: "Ling 3.0 Flash",
     blurb: "Free · text only",
     free: true,
     textOnly: true,
   },
   {
-    id: "alibaba/qwen3.7-flash",
-    label: "Qwen 3.7 Flash",
-    blurb: "$0.03/1M · vision · 991K ctx",
-    free: false,
-    textOnly: false,
-    supportsEffort: ["off", "low", "high"],
-  },
-  {
-    id: "alibaba/qwen3.8-27b",
-    label: "Qwen 3.8 27B",
-    blurb: "$0.02/1M · vision · 1M ctx",
-    free: false,
-    textOnly: false,
-  },
-  {
-    id: "inclusionai/ling-3.0-flash",
-    label: "Ling 3.0 Flash",
-    blurb: "$0.02/1M · text only",
-    free: false,
+    id: "poolside/laguna-s-2.1-free",
+    label: "Laguna S 2.1",
+    blurb: "Free · text only · slow",
+    free: true,
     textOnly: true,
-  },
-  {
-    id: "deepseek/deepseek-v4-flash-0731",
-    label: "DeepSeek V4 Flash",
-    blurb: "$0.01/1M · text only · 1M ctx",
-    free: false,
-    textOnly: true,
-  },
-  {
-    id: "zai/glm-5.3-flash",
-    label: "GLM 5.3 Flash",
-    blurb: "$0.04/1M · vision · 1M ctx",
-    free: false,
-    textOnly: false,
   },
   {
     id: "mistral/mistral-nemo",
     label: "Mistral Nemo",
-    blurb: "$0.02/1M · ultra-cheap · simple chats",
-    free: false,
+    blurb: "Free · text only · simple chats",
+    free: true,
     textOnly: true,
   },
 ]
@@ -521,6 +507,37 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       })
     }
 
+    // Single-model generation probe: one tiny text completion (16 tokens,
+    // no tools) to prove the gateway serves this id end-to-end. POST only,
+    // id must look like a gateway model id. Spend is ~a hundredth of a cent
+    // per probe on flash pricing — this is how new ids earn a MODELS entry.
+    if (path.endsWith("/model-probe") && request.method === "POST") {
+      try {
+        const body = (await request.json()) as { id?: unknown }
+        const id = String(body.id ?? "")
+        if (!/^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/i.test(id) || id.length > 120) {
+          return Response.json({ ok: false, error: "bad model id" }, { status: 400 })
+        }
+        const { generateText } = await import("ai")
+        const openai = createOpenAICompatible({
+          name: "gateway",
+          baseURL: GATEWAY_BASE,
+          apiKey: this.env.AI_GATEWAY_API_KEY,
+          fetch: createPacedFetch() as typeof fetch,
+        })
+        const started = Date.now()
+        const out = await generateText({
+          model: openai(id),
+          prompt: "Reply with exactly: OK",
+          maxTokens: 16,
+          maxRetries: 0,
+        })
+        return Response.json({ ok: true, id, text: out.text.slice(0, 60), ms: Date.now() - started })
+      } catch (err) {
+        return Response.json({ ok: false, error: String(err).slice(0, 300) }, { status: 502 })
+      }
+    }
+
     // Live gateway catalogue probe: which configured model ids the gateway
     // actually serves right now. Read-only, no generation, no spend — the
     // picker uses it for its "Test all" status, and it is how new free-tier
@@ -533,13 +550,15 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         if (!res.ok) {
           return Response.json({ ok: false, error: `gateway ${res.status}` }, { status: 502 })
         }
-        const data = (await res.json()) as { data?: Array<{ id?: string }> }
-        const ids = (data.data ?? []).map((m) => String(m.id ?? "")).filter(Boolean)
+        const data = (await res.json()) as { data?: Array<Record<string, unknown>> }
+        const ids = (data.data ?? []).map((m) => String((m as { id?: string }).id ?? "")).filter(Boolean)
         const set = new Set(ids)
+        const full = new URL(request.url).searchParams.get("full") === "1"
         return Response.json({
           ok: true,
           count: ids.length,
           status: MODELS.map((m) => ({ id: m.id, live: set.has(m.id) })),
+          ...(full ? { catalog: data.data ?? [] } : {}),
         })
       } catch (err) {
         return Response.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, { status: 502 })
