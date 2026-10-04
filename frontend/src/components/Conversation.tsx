@@ -11,6 +11,7 @@ import {
   type ModelOption,
   type ThinkingLevel,
 } from "~/lib/composition"
+import { PendingView, ToolVisual } from "~/components/ToolViews"
 
 const TOOL_LABEL: Record<string, string> = {
   load_skill: "load skill",
@@ -326,13 +327,9 @@ function parseMarkdown(text: string): React.ReactNode[] {
 }
 
 /**
- * A tool call row. Shows:
- * - category icon (scannable at a glance)
- * - label (human-readable name)
- * - input breadcrumb (what it was asked, truncated)
- * - result chip (ok/warn/err + value) once complete
- * - inline plan beats if this is plan_motion
- * - inline validation errors if this is validate_composition
+ * A tool call row: status rail + label + hint, then a rich per-tool visual
+ * (code, diff, beat bars, palette, layout map, verdict banner — see
+ * ToolViews). In-flight calls show a skeleton with a per-tool verb.
  */
 function ToolCall({ part }: { part: Part }) {
   const state = String(part.state ?? "pending")
@@ -343,37 +340,12 @@ function ToolCall({ part }: { part: Part }) {
   const hint = toolInput(part)
   const result = done ? toolOutput(part) : null
 
-  // Special expansions for information-rich tool outputs
   const rawName = toolRawName(part)
   const output = part.output as Record<string, unknown> | undefined
   const input = part.input as Record<string, unknown> | undefined
 
-  // plan_motion → show beat list inline
-  const beats = rawName === "plan_motion" && output?.beats && Array.isArray(output.beats)
-    ? (output.beats as Array<{ from: number; to: number; what: string }>)
-    : null
-
-  // validate_composition → show errors/warnings inline
-  const validationErrors =
-    rawName === "validate_composition" && output?.errors && Array.isArray(output.errors)
-      ? (output.errors as string[])
-      : null
-  const validationWarnings =
-    rawName === "validate_composition" && output?.warnings && Array.isArray(output.warnings)
-      ? (output.warnings as string[])
-      : null
-
-  // review_motion → show findings inline
-  const findings =
-    rawName === "review_motion" && output?.findings && Array.isArray(output.findings)
-      ? (output.findings as string[])
-      : null
-
   // load_skill → show skill name as pill
   const skillName = rawName === "load_skill" && input?.skill ? String(input.skill) : null
-
-  const hasDetail = beats || (validationErrors && validationErrors.length > 0) ||
-    (validationWarnings && validationWarnings.length > 0) || findings
 
   return (
     <div className="tick-in my-0.5">
@@ -407,50 +379,12 @@ function ToolCall({ part }: { part: Part }) {
         )}
       </div>
 
-      {/* Beat list — shown inline when plan_motion completes */}
-      {beats && (
-        <div className="ml-[22px] mt-1 space-y-px">
-          {beats.slice(0, 8).map((b, i) => (
-            <div key={i} className="flex items-baseline gap-2  text-[10px] text-dim">
-              <span className="w-14 shrink-0 tabular-nums text-right text-[9px]">{b.from}–{b.to}f</span>
-              <span className="truncate text-muted">{b.what}</span>
-            </div>
-          ))}
-          {beats.length > 8 && (
-            <div className=" text-[10px] text-dim ml-16">+{beats.length - 8} more</div>
-          )}
-        </div>
-      )}
-
-      {/* Validation errors/warnings */}
-      {hasDetail && (validationErrors || validationWarnings) && (
-        <div className="ml-[22px] mt-1 space-y-px">
-          {(validationErrors ?? []).map((e, i) => (
-            <div key={`e${i}`} className="flex items-start gap-1.5  text-[10px]">
-              <span className="text-bad shrink-0">✕</span>
-              <span className="text-bad/80">{e}</span>
-            </div>
-          ))}
-          {(validationWarnings ?? []).map((w, i) => (
-            <div key={`w${i}`} className="flex items-start gap-1.5  text-[10px]">
-              <span className="text-tungsten shrink-0">△</span>
-              <span className="text-muted">{w}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Review findings */}
-      {findings && findings.length > 0 && (
-        <div className="ml-[22px] mt-1 space-y-px">
-          {findings.map((f, i) => (
-            <div key={i} className="flex items-start gap-1.5  text-[10px]">
-              <span className="text-tungsten shrink-0">→</span>
-              <span className="text-muted">{f}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Rich visual: skeleton while running, designed card when done */}
+      {!done ? (
+        <PendingView tool={rawName} />
+      ) : output ? (
+        <ToolVisual tool={rawName} input={input ?? {}} output={output} />
+      ) : null}
     </div>
   )
 }
