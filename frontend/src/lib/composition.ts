@@ -86,11 +86,13 @@ export async function fetchVersions(
 
 export type ThinkingLevel = "off" | "low" | "high"
 
+export type ModelTier = "auto" | "free" | "balanced" | "advance"
+
 export interface ModelOption {
   id: string
   label: string
   blurb: string
-  free: boolean
+  tier: ModelTier
   textOnly: boolean
   supportsEffort?: ThinkingLevel[]
 }

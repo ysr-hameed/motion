@@ -170,8 +170,10 @@ export default function Studio() {
 
   return (
     <div className="flex h-[calc(100dvh-3rem)] min-h-0 flex-col bg-ink lg:h-full">
-      {/* slim header: status left, export right */}
-      <div className="flex shrink-0 items-center gap-2.5 border-b border-line px-4 py-2.5">
+      {/* slim header (desktop): status left, actions right. On mobile this
+          whole bar merges with the view tabs below into one compact bar, so
+          the chat keeps every pixel. */}
+      <div className="hidden shrink-0 items-center gap-2.5 border-b border-line px-4 py-2.5 lg:flex">
         <span className="flex items-center gap-2 text-sm font-semibold tracking-tight">
           <span
             className={`h-2 w-2 rounded-full ${busy ? "live-dot bg-tungsten" : hasCut ? "bg-ok" : "bg-dim"}`}
@@ -213,21 +215,53 @@ export default function Studio() {
         </button>
       </div>
 
-      {/* mobile switch */}
-      <div className="flex shrink-0 gap-1 border-b border-line p-2 lg:hidden" role="tablist" aria-label="Studio views">
-        {(["preview", "direct"] as const).map((v) => (
-          <button
-            key={v}
-            role="tab"
-            aria-selected={mobileView === v}
-            onClick={() => setMobileView(v)}
-            className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium capitalize transition-colors ${
-              mobileView === v ? "bg-paper font-bold text-ink" : "text-muted hover:text-paper"
-            }`}
-          >
-            {v === "preview" ? "Preview" : `Direct${busy ? " •" : ""}`}
-          </button>
-        ))}
+      {/* mobile bar: view switch + status + actions in ONE row */}
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-2 py-1.5 lg:hidden" role="tablist" aria-label="Studio views">
+        <span
+          className={`h-2 w-2 shrink-0 rounded-full ${busy ? "live-dot bg-tungsten" : hasCut ? "bg-ok" : "bg-dim"}`}
+          aria-hidden
+        />
+        <div className="flex min-w-0 flex-1 gap-1 rounded-xl bg-ink p-0.5">
+          {(["preview", "direct"] as const).map((v) => (
+            <button
+              key={v}
+              role="tab"
+              aria-selected={mobileView === v}
+              onClick={() => setMobileView(v)}
+              className={`min-w-0 flex-1 truncate rounded-lg px-2 py-1 text-xs font-medium capitalize transition-colors ${
+                mobileView === v ? "bg-paper font-bold text-ink" : "text-muted hover:text-paper"
+              }`}
+            >
+              {v === "preview" ? "Preview" : `Direct${busy ? " •" : ""}`}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            try {
+              localStorage.setItem("motion.session", crypto.randomUUID());
+            } catch {
+              /* ignore */
+            }
+            window.location.reload();
+          }}
+          title="New cut"
+          aria-label="New cut"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-dim transition-colors hover:bg-white/10 hover:text-paper"
+        >
+          <Plus size={15} aria-hidden />
+        </button>
+        <button
+          type="button"
+          onClick={openExport}
+          disabled={!hasCut}
+          title={hasCut ? "Export this cut" : "Export unlocks once your cut renders"}
+          aria-label="Export"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-paper text-ink transition-all hover:bg-tungsten hover:text-white disabled:bg-panel-2 disabled:text-dim"
+        >
+          <Download size={14} aria-hidden />
+        </button>
       </div>
 
       {chunkStale ? (

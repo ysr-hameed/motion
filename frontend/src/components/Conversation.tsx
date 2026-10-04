@@ -652,8 +652,12 @@ function ModelPicker({
 }) {
   const active = models.find((m) => m.id === activeModel)
   const liveById = new Map((live ?? []).map((s) => [s.id, s.live]))
-  const free = models.filter((m) => m.free)
-  const paid = models.filter((m) => !m.free)
+  const groups: Array<{ tier: string; title: string; items: ModelOption[] }> = [
+    { tier: "auto", title: "Auto", items: models.filter((m) => m.tier === "auto") },
+    { tier: "advance", title: "Advance", items: models.filter((m) => m.tier === "advance") },
+    { tier: "balanced", title: "Balanced", items: models.filter((m) => m.tier === "balanced") },
+    { tier: "free", title: "Free", items: models.filter((m) => m.tier === "free") },
+  ].filter((g) => g.items.length > 0)
 
   const row = (m: ModelOption) => {
     const isActive = m.id === activeModel
@@ -712,14 +716,12 @@ function ModelPicker({
           <button type="button" aria-label="Close" onClick={onClose} className="fixed inset-0 z-40 cursor-default bg-transparent" />
           <div className="absolute bottom-10 left-0 z-50 w-72 overflow-hidden rounded-2xl border border-line bg-panel-2 shadow-[0_16px_48px_-12px_rgb(0_0_0/0.8)]">
             <div className="scroll-thin max-h-64 overflow-y-auto p-1.5">
-              <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-widest text-dim">Free</p>
-              {free.map(row)}
-              {paid.length > 0 ? (
-                <>
-                  <p className="px-2.5 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-dim">Paid</p>
-                  {paid.map(row)}
-                </>
-              ) : null}
+              {groups.map((g) => (
+                <div key={g.tier}>
+                  <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-widest text-dim">{g.title}</p>
+                  {g.items.map(row)}
+                </div>
+              ))}
             </div>
             <div className="border-t border-line-soft p-2.5">
               <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-dim">
@@ -955,7 +957,10 @@ export function Conversation({ chat, sessionId }: Props) {
 
   return (
     <aside className="flex min-h-0 flex-1 flex-col bg-panel/40" aria-label="Conversation">
-      <header className="flex shrink-0 items-center gap-3 border-b border-line bg-panel/60 px-4 py-3">
+      {/* Hidden on mobile: the Studio tab bar already says "Direct", and the
+          status + New-cut actions live in the Studio header — a third header
+          here steals ~65px from the chat. Desktop keeps the full header. */}
+      <header className="hidden shrink-0 items-center gap-3 border-b border-line bg-panel/60 px-4 py-3 md:flex">
         <span className="sticker flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-tungsten text-white">
           <Sparkles size={16} aria-hidden />
         </span>

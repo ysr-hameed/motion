@@ -21,12 +21,14 @@ const GATEWAY_BASE = "https://ai-gateway.vercel.sh/v1"
 
 export type ThinkingLevel = "off" | "low" | "high"
 
+export type ModelTier = "auto" | "free" | "balanced" | "advance"
+
 export interface ModelOption {
   id: string
   label: string
   blurb: string
-  /** True for gateway free-tier models (no spend). */
-  free: boolean
+  /** Shelf: auto router, free tier, cheap balanced, or strongest (output ≤ $0.30/1M). */
+  tier: ModelTier
   /** True when the gateway serves this model text-only (image/file parts 400). */
   textOnly: boolean
   /** Effort levels this model accepts via the gateway reasoning option. */
@@ -38,65 +40,152 @@ export interface ModelOption {
  * IDs — adding one here is all it takes for the UI to offer it.
  * Free ones first, then the cheapest paid ones with tool-use.
  */
+/**
+ * Every entry below answered a live generation probe ("Reply with exactly:
+ * OK") on this gateway key. Removed after probing: qwen3.8-27b,
+ * deepseek-v4-flash-0731, glm-5.3-flash, deepseek-v4.1-flash-fast and
+ * qwen3.8-flash (free-tier key: "no access"), plus laya-free (not an LLM).
+ */
 export const MODELS: ModelOption[] = [
+  {
+    id: "auto",
+    label: "Auto",
+    blurb: "Picks per turn: vision/cuts → Qwen 3.7, plain chat → Ling 3.1",
+    tier: "auto",
+    textOnly: false,
+  },
   {
     id: "alibaba/qwen3.7-flash",
     label: "Qwen 3.7 Flash",
     blurb: "Default · best coder · vision · 991K ctx",
-    free: true,
+    tier: "advance",
     textOnly: false,
     supportsEffort: ["off", "low", "high"],
+  },
+  {
+    id: "alibaba/qwen3-coder-30b-a3b",
+    label: "Qwen 3 Coder 30B",
+    blurb: "Code specialist · text only",
+    tier: "advance",
+    textOnly: true,
+  },
+  {
+    id: "mistral/mistral-small",
+    label: "Mistral Small",
+    blurb: "Strong all-rounder · text only",
+    tier: "advance",
+    textOnly: true,
+  },
+  {
+    id: "alibaba/qwen3.5-flash",
+    label: "Qwen 3.5 Flash",
+    blurb: "Fast · text only",
+    tier: "balanced",
+    textOnly: true,
+  },
+  {
+    id: "zai/glm-4.7-flash",
+    label: "GLM 4.7 Flash",
+    blurb: "Fast · text only",
+    tier: "balanced",
+    textOnly: true,
+  },
+  {
+    id: "google/gemini-2.5-flash-lite",
+    label: "Gemini 2.5 Flash-Lite",
+    blurb: "Fast · text only",
+    tier: "balanced",
+    textOnly: true,
+  },
+  {
+    id: "mistral/ministral-8b",
+    label: "Ministral 8B",
+    blurb: "Small · text only",
+    tier: "balanced",
+    textOnly: true,
+  },
+  {
+    id: "stepfun/step-3.5-flash",
+    label: "Step 3.5 Flash",
+    blurb: "Fast · text only",
+    tier: "balanced",
+    textOnly: true,
+  },
+  {
+    id: "mistral/mistral-nemo",
+    label: "Mistral Nemo",
+    blurb: "Simple chats · text only",
+    tier: "balanced",
+    textOnly: true,
   },
   {
     id: "inclusionai/ling-3.1-flash",
     label: "Ling 3.1 Flash",
     blurb: "Free · text only",
-    free: true,
+    tier: "free",
     textOnly: true,
   },
   {
     id: "inclusionai/ling-3.1-flash-free",
     label: "Ling 3.1 Flash (free tier)",
     blurb: "Free routing · text only",
-    free: true,
+    tier: "free",
     textOnly: true,
   },
   {
     id: "inclusionai/ling-3.0-flash-sante",
     label: "Ling 3.0 Sante",
     blurb: "Free · text only",
-    free: true,
+    tier: "free",
     textOnly: true,
   },
   {
     id: "inclusionai/ling-3.0-flash-sante-free",
     label: "Ling 3.0 Sante (free tier)",
     blurb: "Free routing · text only",
-    free: true,
+    tier: "free",
     textOnly: true,
   },
   {
     id: "inclusionai/ling-3.0-flash",
     label: "Ling 3.0 Flash",
     blurb: "Free · text only",
-    free: true,
+    tier: "free",
     textOnly: true,
   },
   {
     id: "poolside/laguna-s-2.1-free",
     label: "Laguna S 2.1",
     blurb: "Free · text only · slow",
-    free: true,
-    textOnly: true,
-  },
-  {
-    id: "mistral/mistral-nemo",
-    label: "Mistral Nemo",
-    blurb: "Free · text only · simple chats",
-    free: true,
+    tier: "free",
     textOnly: true,
   },
 ]
+
+/**
+ * Auto routing: vision attachments or an in-progress cut need the strongest
+ * coder (Qwen 3.7); motion-brief words do too; everything else gets the
+ * fastest free chat model. Deterministic per turn — no extra model call.
+ */
+export function resolveAuto(messages: Array<{ content?: unknown }>, hasCut: boolean): string {
+  const motionWords = /video|motion|reveal|animat|logo|intro|sting|headline|kinetic|lower.?third|clip|cut\b|scene|beat/i
+  let briefLike = false
+  let hasFiles = false
+  for (const m of messages) {
+    const c = (m as { content?: unknown }).content
+    if (typeof c === "string") {
+      if (motionWords.test(c)) briefLike = true
+      continue
+    }
+    if (!Array.isArray(c)) continue
+    for (const part of c as Array<{ type?: string; text?: string }>) {
+      if (part?.type === "image" || part?.type === "file") hasFiles = true
+      if (part?.type === "text" && typeof part.text === "string" && motionWords.test(part.text)) briefLike = true
+    }
+  }
+  if (hasFiles || hasCut || briefLike) return DEFAULT_MODEL
+  return "inclusionai/ling-3.1-flash"
+}
 
 /**
  * The model a new chat session starts on.
@@ -529,7 +618,7 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         const out = await generateText({
           model: openai(id),
           prompt: "Reply with exactly: OK",
-          maxTokens: 16,
+          maxOutputTokens: 16,
           maxRetries: 0,
         })
         return Response.json({ ok: true, id, text: out.text.slice(0, 60), ms: Date.now() - started })
@@ -668,9 +757,15 @@ export class Chat extends AIChatAgent<Env, ChatState> {
     // The switcher stores the session's pick in DO state; a session that
     // never picked gets the default. Model quirks below are keyed off the
     // spec, not the id, so adding a MODELS entry is enough to support it.
-    const activeModel = this.state?.model ?? DEFAULT_MODEL
-    const spec = MODELS.find((m) => m.id === activeModel) ?? MODELS[0]
     const modelMessages = (await convertToModelMessages(this.messages)) as Array<any>
+    const picked = this.state?.model ?? DEFAULT_MODEL
+    const activeModel =
+      picked === "auto"
+        ? resolveAuto(modelMessages, store.current().code.length > 0)
+        : picked
+    const spec = MODELS.find((m) => m.id === activeModel)
+      ?? MODELS.find((m) => m.id === DEFAULT_MODEL)
+      ?? MODELS[0]
 
     const result = streamText({
       model: openai(activeModel),
