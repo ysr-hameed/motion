@@ -285,6 +285,37 @@ describe("Golden Starter + Inline Repair (fast path)", () => {
     }
   })
 
+  it("every mood × duration starter is warning-free and visually distinct", () => {
+    const moods = ["cinematic", "energetic", "playful", "minimal", "elegant", "tech", "romantic"]
+    const seen = new Set<string>()
+    for (const mood of moods) {
+      for (const seconds of [5, 15]) {
+        const g = goldenStarter({ product: "Acme", headline: "Motion that lands everywhere", mood, seconds })
+        const errs = errors(g.code)
+        assert.equal(errs.length, 0, `${mood}/${seconds}s errors: ${errs.map((e) => e.message).join(" | ")}`)
+        const warn = warns(g.code)
+        assert.equal(warn.length, 0, `${mood}/${seconds}s warnings: ${warn.map((w) => w.message).join(" | ")}`)
+        // Timing scales with the requested length.
+        const last = g.plan.beats[g.plan.beats.length - 1]!
+        assert.equal(last.to, Math.min(900, Math.max(90, seconds * 30)), `${mood}/${seconds}s mistimed plan`)
+        seen.add(g.code)
+      }
+    }
+    // No two moods open the same way — first paint is never identical.
+    assert.ok(seen.size >= moods.length, `starters repeat: ${seen.size} distinct for ${moods.length} moods`)
+  })
+
+  it("long copy shrinks type instead of overflowing", () => {
+    const short = goldenStarter({ product: "Acme", headline: "Go" })
+    const long = goldenStarter({ product: "Acme Corporation International", headline: "Motion that lands everywhere all at once today" })
+    const sizeOf = (code: string) => {
+      const m = code.match(/fontSize: (\d+), lineHeight: 1, fontWeight: 800/)
+      return m ? Number(m[1]) : -1
+    }
+    assert.ok(sizeOf(short.code) > sizeOf(long.code), `no adaptive shrink: ${sizeOf(short.code)} vs ${sizeOf(long.code)}`)
+    assert.equal(errors(long.code).length, 0, "long copy breaks validation")
+  })
+
   it("flags bare CSS keywords that would throw at runtime", () => {
     const bad = wrap(`<div style={{ display: flex, position: absolute }} />`)
     const msgs = errors(bad).map((e) => e.message)

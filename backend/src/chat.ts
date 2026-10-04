@@ -168,22 +168,31 @@ export const MODELS: ModelOption[] = [
  * fastest free chat model. Deterministic per turn — no extra model call.
  */
 export function resolveAuto(messages: Array<{ content?: unknown }>, hasCut: boolean): string {
-  const motionWords = /video|motion|reveal|animat|logo|intro|sting|headline|kinetic|lower.?third|clip|cut\b|scene|beat/i
+  // Code-writing quality decides the cut, so the bias is strongly toward the
+  // strongest coder: attachments, an in-progress cut, a design-word brief, or
+  // simply a long message (briefs are long, chit-chat is short) all route to
+  // Qwen. Only short plain chat gets the fastest free model.
+  const motionWords = /video|motion|reveal|animat|logo|intro|sting|headline|kinetic|lower.?third|clip|scene|beat|compose|brief|typewrit|countdown|waveform|ticker|promo|product|brand|title|typogra|font|cinematic|trailer|teaser|launch|poster|mask|movie|film|slideshow|ad\b|ads\b|cut\b/i
   let briefLike = false
   let hasFiles = false
+  let longest = 0
+  const scan = (text: string) => {
+    if (text.length > longest) longest = text.length
+    if (motionWords.test(text)) briefLike = true
+  }
   for (const m of messages) {
     const c = (m as { content?: unknown }).content
     if (typeof c === "string") {
-      if (motionWords.test(c)) briefLike = true
+      scan(c)
       continue
     }
     if (!Array.isArray(c)) continue
     for (const part of c as Array<{ type?: string; text?: string }>) {
       if (part?.type === "image" || part?.type === "file") hasFiles = true
-      if (part?.type === "text" && typeof part.text === "string" && motionWords.test(part.text)) briefLike = true
+      if (part?.type === "text" && typeof part.text === "string") scan(part.text)
     }
   }
-  if (hasFiles || hasCut || briefLike) return DEFAULT_MODEL
+  if (hasFiles || hasCut || briefLike || longest > 140) return DEFAULT_MODEL
   return "inclusionai/ling-3.1-flash"
 }
 
@@ -292,11 +301,12 @@ NARRATIVE: frame 1 has a focal element. Info arrives in order of importance.
 WORKFLOW — every tool call costs ~12s. 12 steps total. Be economical.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────
 NEW BRIEF — FAST PATH (default, 3 calls):
-1. quick_start(product, headline) — plans+writes+validates the golden file.
-   One golden starter for every brief — no template menu.
+1. quick_start(product, headline, mood, seconds) — plans+writes+validates a
+   DESIGNED cut in one call: palette + font pair + layout are picked from
+   the mood, timing from seconds. Always pass mood (one word) and seconds.
    SKIP quick_start when the brief names a specific mechanic (typewriter,
-   countdown, waveform, ticker, lower-third, kinetic mask): the product
-   golden is the wrong shape and you will rewrite it anyway — go FULL PATH.
+   countdown, waveform, ticker, lower-third, kinetic mask): the starter is
+   the wrong shape and you will rewrite it anyway — go FULL PATH.
    SKIP prefetch_tools, intent_deep_analyze, layout_plan, load_motion_preset, plan_motion.
 2. preview_composition() — only after quick_start ok:true
 3. read_render_report() — waits for browser compile+mount
@@ -332,6 +342,9 @@ QUALITY GATES ★ NON-NEGOTIABLE
   stagger (index×4-6f) in every .map(), clamps on every interpolate(),
   no system-ui/sans-serif/Arial/Helvetica fontFamily (validator error).
 ★ review_motion findings are fix instructions, not advisory. Fix before verify.
+★ Browser-measured overlap/overflow (read_render_report findings) describe REAL
+  pixels on a real render — fix them with edit_file before the closing sentence.
+  Only entrances/exits passing through off-canvas are exempt.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TYPOGRAPHY (load_skill("typography") for full catalogue)
@@ -516,11 +529,15 @@ export class Chat extends AIChatAgent<Env, ChatState> {
           product?: string
           brand?: string
           headline?: string
+          mood?: string
+          seconds?: number
         }
         const golden = goldenStarter({
           ...(body.product ? { product: body.product.slice(0, 60) } : {}),
           ...(body.brand ? { brand: body.brand.slice(0, 60) } : {}),
-          ...(body.headline ? { headline: body.headline.slice(0, 120) } : {}),
+          ...(body.headline ? { headline: body.headline.slice(0, 140) } : {}),
+          ...(body.mood ? { mood: body.mood.slice(0, 30) } : {}),
+          ...(typeof body.seconds === "number" ? { seconds: Math.min(30, Math.max(2, Math.round(body.seconds))) } : {}),
         })
         store.setPlan(golden.plan)
         const n = store.write(golden.code, { bumpVersion: true })

@@ -487,14 +487,18 @@ export function checkComposition(code: string): Check[] {
 
   // Two absolutely-positioned elements at the exact same spot: always a bug,
   // never a design — one of them was meant to move. Advisory, one warning.
+  // Layers without an explicit left+top (full-bleed fills, inset layers) are
+  // skipped: with no coordinates there is no spot to compare, and counting
+  // them flagged every intentional backdrop as an overlap.
   {
     const posRe = /position:\s*['"]absolute['"]/g
     const seen = new Map<string, number>()
     let m: RegExpExecArray | null
     while ((m = posRe.exec(src)) !== null) {
       const window = src.slice(m.index, m.index + 500)
-      const left = /left:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0] ?? "?"
-      const top = /top:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0] ?? "?"
+      const left = /left:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0]
+      const top = /top:\s*(?:"([^"]+)"|'([^']+)'|(-?\d+(?:\.\d+)?))/.exec(window)?.[0]
+      if (!left || !top) continue
       const key = `${left} | ${top}`
       seen.set(key, (seen.get(key) ?? 0) + 1)
     }
@@ -546,7 +550,10 @@ export function checkComposition(code: string): Check[] {
         message: `Display type (≥64px) with lineHeight under 0.9 — glyphs collide. Display wants 0.95-1.05; body wants 1.3-1.5.`,
       })
     }
-    if (hasBody && leadings.some((l) => l < 1.2)) {
+    // Tight leading is only suspicious when there is NO display type: a hero
+    // legitimately uses 0.95-1.05, and flagging it alongside body copy made
+    // every hero+body composition warn — including the starter itself.
+    if (hasBody && !hasDisplay && leadings.some((l) => l < 1.2)) {
       out.push({
         level: "warn",
         message: `Body/small type with lineHeight under 1.2 — lines crush together on video. Body wants 1.3-1.5.`,

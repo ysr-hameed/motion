@@ -165,7 +165,11 @@ export default function Create() {
     setInstantBusy("starter");
     setInstantError(null);
     const headline = prompt.trim() || undefined;
-    publishStarter(freshSession(), headline ? { headline } : {})
+    publishStarter(freshSession(), {
+      ...(headline ? { headline } : {}),
+      mood: mood.toLowerCase(),
+      seconds,
+    })
       .then(() => navigate("/studio"))
       .catch((e: unknown) => setInstantError(e instanceof Error ? e.message : String(e)))
       .finally(() => setInstantBusy(null));

@@ -55,7 +55,7 @@ export async function fetchComposition(
  */
 export async function publishStarter(
   instance: string,
-  context: { product?: string; brand?: string; headline?: string } = {},
+  context: { product?: string; brand?: string; headline?: string; mood?: string; seconds?: number } = {},
   signal?: AbortSignal
 ): Promise<{ ok: boolean; version: number; title?: string }> {
   const res = await fetch(agentUrl(instance, "starter"), {

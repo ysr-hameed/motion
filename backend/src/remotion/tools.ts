@@ -988,18 +988,22 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 
     quick_start: tool({
       description:
-        "FAST PATH: plan + write + validate the proven golden composition in ONE model call. " +
-        "Use this FIRST on every new brief — it publishes a rendering cut immediately, and " +
-        "follow-up edits refine it. Pass the brief's product/brand/headline words; the golden " +
-        "file already has spring landings, bezier easing, clamps, stagger, Fonts.* and the " +
-        "Lucide namespace.",
+        "FAST PATH: plan + write + validate a DESIGNED composition in ONE model call. " +
+        "Use this FIRST on every new brief — it publishes an art-directed cut immediately " +
+        "(palette + font pair + layout picked from the brief's mood), and follow-up " +
+        "edits refine it. Pass the brief's product/brand/headline words PLUS its mood " +
+        "and length: mood drives the stage, seconds drives the timing. Skip this when " +
+        "the brief names a specific mechanic (typewriter, countdown, waveform) — those " +
+        "need the full path from scratch.",
       inputSchema: z.object({
         product: z.string().optional().describe("Product or hero word shown large."),
         brand: z.string().optional().describe("Brand word shown in the hero lockup."),
-        headline: z.string().max(120).optional().describe("Headline cascaded per word."),
+        headline: z.string().max(140).optional().describe("Headline cascaded per word."),
+        mood: z.string().optional().describe("Brief mood in one word: playful, cinematic, bold, minimal, elegant, tech, romantic."),
+        seconds: z.number().min(2).max(30).optional().describe("Cut length in seconds — timing scales to it."),
       }),
-      execute: async ({ product, brand, headline }) => {
-        const golden = goldenStarter({ product, brand, headline })
+      execute: async ({ product, brand, headline, mood, seconds }) => {
+        const golden = goldenStarter({ product, brand, headline, mood, seconds })
         const repaired = autoRepairInline(golden.code)
         const checks = checkComposition(repaired.code)
         const errors = checks.filter((c) => c.level === "error")
