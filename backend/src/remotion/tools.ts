@@ -25,7 +25,7 @@ import {
   performanceProfile,
   preferenceApply,
 } from "./intelligence"
-import { goldenStarter } from "./templates"
+import { goldenStarter, minimalStarter } from "./templates"
 import { cacheGet, cacheSet, predictTools, TTL } from "./cache"
 import {
   backgroundGenerate,
@@ -1227,11 +1227,35 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         seconds: z.number().min(2).max(30).optional().describe("Cut length in seconds — timing scales to it."),
       }),
       execute: async ({ product, brand, headline, mood, seconds }) => {
+        // Designed golden first, minimal fallback second: a new brief can
+        // never dead-end on "write manually instead" because of a starter bug.
         const golden = goldenStarter({ product, brand, headline, mood, seconds })
-        const repaired = autoRepairBundle(parseBundle(golden.code).bundle!)
-        const code = serializeBundle(repaired.bundle)
-        const checks = checkComposition(code)
-        const errors = checks.filter((c) => c.level === "error")
+        let repaired = autoRepairBundle(parseBundle(golden.code).bundle!)
+        let code = serializeBundle(repaired.bundle)
+        let checks = checkComposition(code)
+        let errors = checks.filter((c) => c.level === "error")
+        if (errors.length > 0) {
+          const mini = minimalStarter({ product, brand, headline, seconds })
+          const miniRepaired = autoRepairBundle(parseBundle(mini.code).bundle!)
+          const miniCode = serializeBundle(miniRepaired.bundle)
+          const miniChecks = checkComposition(miniCode)
+          if (!miniChecks.some((c) => c.level === "error")) {
+            store.setPlan(mini.plan)
+            const n = store.write(miniCode, { bumpVersion: true })
+            return {
+              ok: true,
+              version: n,
+              plan: mini.plan,
+              parts: partSummary(miniRepaired.bundle),
+              snippet: jsSnippet(miniRepaired.bundle, 12),
+              warnings: miniChecks.filter((c) => c.level === "warn").map((w) => w.message),
+              fallback: true,
+              note: "Designed starter misfired — shipped the minimal fallback instead. Refine it with edit_file.",
+              next: "Call preview_composition, then read_render_report, then ONE sentence.",
+            }
+          }
+          // Even the minimal starter failed: report the ORIGINAL errors.
+        }
         if (errors.length > 0) {
           return {
             ok: false,

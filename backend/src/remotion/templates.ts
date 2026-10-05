@@ -671,6 +671,66 @@ function buildOverlay(t: Tokens, hero: string, headline: string, total: number, 
   }
 }
 
+/**
+ * Minimal fallback starter — deliberately tiny so it cannot fail validation.
+ * quick_start uses this when (unexpectedly) the designed golden does not
+ * validate, so a new brief can never dead-end on "write manually instead".
+ */
+export function minimalStarter(context: StarterContext = {}): GoldenStarter {
+  const hero = (context.product ?? context.brand ?? "SlyxUp").slice(0, 40) || "SlyxUp"
+  const headline = (context.headline ?? "Motion that lands").slice(0, 140) || "Motion that lands"
+  const seconds = Math.min(30, Math.max(2, Math.round(context.seconds ?? 5)))
+  const total = Math.min(900, Math.max(90, seconds * 30))
+  const e1 = Math.min(60, Math.round(total * 0.4))
+  const html = [
+    `<div class="hero" id="hero">${esc(hero)}</div>`,
+    `<div class="sub" id="sub">${esc(headline)}</div>`,
+    chromeHtml(),
+  ].join("\n")
+  const css = [
+    `#wm-stage{background:#0B0C10;overflow:hidden}`,
+    `.hero{position:absolute;left:50%;top:40%;font-size:140px;line-height:1;font-weight:800;font-family:'Unbounded',sans-serif;color:#F2F3F7;white-space:nowrap}`,
+    `.sub{position:absolute;left:50%;top:58%;font-size:38px;font-family:'Manrope',sans-serif;color:#F2F3F7;white-space:nowrap}`,
+    `.progress{position:absolute;bottom:0;left:0;height:6px;background:#FFB340;z-index:30}`,
+    `.vignette{position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 45%,transparent 55%,rgba(0,0,0,0.42) 100%);z-index:15;pointer-events:none}`,
+  ].join("\n")
+  const js = [
+    `function render(t, ctx) {`,
+    `  var f = ctx.frame;`,
+    `  var rise = ctx.interpolate(f, [10, ${e1}], [54, 0], { easing: ctx.Easing.easeOut });`,
+    `  var fade = ctx.interpolate(f, [10, 28], [0, 1], { easing: ctx.Easing.easeOut });`,
+    `  var land = ctx.spring(t - 10 / 30, { damping: 18, mass: 0.8, stiffness: 130 });`,
+    `  var subIn = ctx.interpolate(f, [22, ${e1 + 12}], [30, 0], { easing: ctx.Easing.easeOut });`,
+    `  var hero = ctx.el("hero");`,
+    `  hero.style.translate = "-50% " + rise + "px";`,
+    `  hero.style.scale = String(0.94 + land * 0.06);`,
+    `  hero.style.opacity = fade;`,
+    `  var sub = ctx.el("sub");`,
+    `  sub.style.translate = "-50% " + subIn + "px";`,
+    `  sub.style.opacity = ctx.interpolate(f, [22, 40], [0, 1], { easing: ctx.Easing.easeOut });`,
+    `  ctx.el("progress").style.width = (ctx.interpolate(f, [0, ${total}], [0, 1]) * 100) + "%";`,
+    `}`,
+  ].join("\n")
+  return {
+    code: serializeBundle({
+      version: 1,
+      html,
+      css,
+      js,
+      meta: { title: hero, duration: seconds, fps: 30, width: 1920, height: 1080, fonts: ["Unbounded", "Manrope"] },
+    }),
+    plan: {
+      title: `${hero} — minimal resolve`,
+      intent: `Fallback starter: spring hero landing with staggered sub, resolved hold.`,
+      beats: [
+        { from: 10, to: e1, what: "hero entrance translateY 54→0 + spring settle" },
+        { from: 22, to: total, what: "sub cascade overlapping the settle, resolved hold" },
+      ],
+      ending: "Hero and sub resolved.",
+    },
+  }
+}
+
 /** Designed starter: palette + fonts + layout from the brief, zero errors by construction. */
 export function goldenStarter(context: StarterContext = {}): GoldenStarter {
   const product = (context.product ?? context.brand ?? "SlyxUp").slice(0, 40) || "SlyxUp"

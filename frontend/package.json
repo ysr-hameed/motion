@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm run typecheck && pnpm run build",
+    "check:runtime": "node scripts/check-runtime.mjs",
+    "check": "pnpm run typecheck && pnpm run check:runtime && pnpm run build",
     "deploy": "CLOUDFLARE_ACCOUNT_ID=ed01399ae5f7a46697e0802e4eaef6a9 wrangler pages deploy dist --project-name motion-frontend --commit-dirty=true"
   },
   "dependencies": {

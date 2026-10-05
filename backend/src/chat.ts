@@ -219,16 +219,14 @@ export const DEFAULT_MODEL = "alibaba/qwen3.7-flash"
 /**
  * Ceiling on model round trips per turn.
  *
- * No client-side pacing (see rate-limit.ts): steps stream back-to-back as
- * fast as the model responds, slowing only when the gateway's own headers
- * say the bucket is dry. So this is headroom, not a time budget: skills, plan,
- * write, validate, preview and a closing sentence is ~7 steps, and a
- * rejected write that has to be re-issued pushes it past ten. Setting this
- * lower silently truncated turns before the agent ever spoke, which read as
- * a crash. 12 keeps the headroom while capping runaway cost; loop caps
- * (pending-report ×2, code-dump guard) stop runaways instead of this number.
+ * Deliberately generous: the turn ends on a REAL limit (gateway 429s,
+ * abort, or a verified/failed render verdict) — never on an artificial
+ * step budget. A full path with two repair rounds is ~12 steps; SylxUp-side
+ * loop caps (pending-report ×2, code-dump guard) stop runaways instead of
+ * this number, so 25 is headroom against stall-induced retries, not a cost
+ * control.
  */
-const MAX_STEPS = 12
+const MAX_STEPS = 25
 
 const FRAME_RANGE = `frames 0 to ${CANVAS.maxFrames - 1}`
 

@@ -300,12 +300,57 @@ describe("Agent simulation — scripted turns through real tools", () => {
     assert.equal(placement.length, 0, `placement warnings: ${placement.join(" | ")}`)
   })
 
+  it("S10 terminal brief: quick_start code path verifies and previews", async () => {
+    const store = new FakeStore()
+    const call = toolsFor(store, null)
+    const q = await call("S10", "quick_start", {
+      product: "React",
+      headline: "create a react app in terminal",
+      mood: "tech",
+      seconds: 5,
+    })
+    assert.equal(q.ok, true, `terminal quick_start failed: ${JSON.stringify(q.errors ?? q.error)}`)
+    const qr = q as { plan?: { title?: string } }
+    assert.ok(/terminal/i.test(qr.plan?.title ?? ""), `wrong starter: ${qr.plan?.title}`)
+    const v = await call("S10", "verify_no_errors")
+    assert.equal(v.ok, true, `terminal golden blocked: ${JSON.stringify(v)}`)
+    const p = await call("S10", "preview_composition")
+    assert.equal(p.ok, true)
+    const call2 = toolsFor(store, { version: 1, ok: true, phase: "mount", findings: [], at: Date.now() })
+    const r = await call2("S10", "read_render_report")
+    assert.equal((r as { status: string }).status, "verified")
+  })
+
+  it("S11 broken-write loop always ends in a verdict, never a stall", async () => {
+    const store = new FakeStore()
+    const call = toolsFor(store, null)
+    // A syntactically broken bundle must be REFUSED at write with a line
+    // number — never stored, never previewed, never pending forever.
+    const w = await call("S11", "write_composition", {
+      html: `<div id="a">Hi</div>`,
+      css: `#a{font-size:64px}`,
+      js: `function render(t, ctx) {\n  var f = ctx.frame;\n  ctx.el("a").style.opacity = ctx.interpolate(f, [0, 60], [0, 1];\n}`,
+      title: "broken",
+    })
+    assert.equal(w.ok, false)
+    assert.ok(
+      ((w as { errors: string[] }).errors ?? []).some((e) => /syntax|line \d+/i.test(e)),
+      `no actionable syntax error: ${JSON.stringify(w)}`
+    )
+    assert.equal(store.current().version, 0, "broken write must not bump the version")
+  })
+
   it("prints the tracked report", () => {
     printReport()
     const fails = LEDGER.filter((r) => r.ok === false)
-    // S4's blocked gate + refused write are the only expected non-oks.
+    // Expected non-oks only: S4's blocked gate + refused write (recovery
+    // path), and S11's intentionally refused broken write (validator gate).
     assert.ok(
-      fails.every((f) => f.scenario === "S4" && (f.tool === "verify_no_errors" || f.tool === "write_composition")),
+      fails.every(
+        (f) =>
+          (f.scenario === "S4" && (f.tool === "verify_no_errors" || f.tool === "write_composition")) ||
+          (f.scenario === "S11" && f.tool === "write_composition")
+      ),
       `unexpected tool failures: ${fails.map((f) => `${f.scenario}/${f.tool}`).join(", ")}`
     )
   })

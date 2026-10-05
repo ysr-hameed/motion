@@ -58,6 +58,7 @@ interface IframeMsg {
   phase?: string
   svg?: string
   error?: string
+  message?: string
   t?: number
   frame?: number
 }
@@ -92,12 +93,19 @@ async function renderSnapshots(
     if (e.source !== win) return
     const m = (e.data ?? {}) as IframeMsg
     if (m.ns !== "wm") return
-    if (m.ev === "report" && (m.phase === "mount" || m.phase === "compile")) {
+    if (m.ev === "report" && (m.phase === "mount" || m.phase === "compile" || m.phase === "runtime")) {
       if (m.phase === "mount" && m.ok) {
         mountOk = true
         notifyReady?.()
-      } else if (m.phase === "compile" && m.ok === false && !mountOk) {
-        mountErr = typeof m.error === "string" ? m.error : "bundle failed to evaluate"
+      } else if (m.ok === false && !mountOk) {
+        // Compile AND first-frame runtime failures both mean frame 0 never
+        // renders — surface the real message instead of "did not boot".
+        mountErr =
+          typeof m.message === "string" && m.message
+            ? m.message
+            : typeof m.error === "string"
+              ? m.error
+              : "bundle failed to render frame 0"
         notifyReady?.()
       }
       return

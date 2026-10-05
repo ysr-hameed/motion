@@ -6,7 +6,7 @@
  */
 import { describe, it } from "node:test"
 import * as assert from "node:assert/strict"
-import { checkComposition, preValidatePlan } from "../validate"
+import { checkComposition, checkJsSyntax, preValidatePlan } from "../validate"
 import { parseBundle, serializeBundle } from "../bundle"
 import {
   autoRepairBundle,
@@ -15,7 +15,7 @@ import {
   gateVerification,
   suggestCloseMatch,
 } from "../tools"
-import { goldenStarter } from "../templates"
+import { goldenStarter, minimalStarter } from "../templates"
 import {
   MotionPatterns,
   SpringPresets,
@@ -124,6 +124,27 @@ describe("Bundle contract", () => {
     assert.ok(e.some((x) => /syntax/i.test(x.message)), JSON.stringify(e))
   })
 
+  it("checkJsSyntax passes tricky-but-valid JS", () => {
+    const ok = [
+      `function render(t, ctx) { var re = /ab+c[xy]*\\d+\\/ef/g; return re.test("abbbcx1/ef"); }`,
+      "function render(t, ctx) { var q = `a${`b${1 + (2 * 3)}c`}d`; var x = a / b / c; }",
+      `function render(t, ctx) { // parens (unclosed [bracket {brace\n/* comment ( ] } */ var o = { a: [1, (2)] }; }`,
+      `function render(t, ctx) { var s = "don't stop"; var d = "a)b]c}"; }`,
+      `function render(t, ctx) { if (a < b && c > d) { x--; } }`,
+    ]
+    for (const js of ok) {
+      assert.equal(checkJsSyntax(js), null, `false positive: ${checkJsSyntax(js)} :: ${js.slice(0, 80)}`)
+    }
+  })
+
+  it("checkJsSyntax names the line of real breakage", () => {
+    assert.match(checkJsSyntax(`var a = 1;\nvar b = (2 + 3;\nvar c = 4;`) ?? "", /line 2/)
+    assert.match(checkJsSyntax(`var s = "oops;\nvar b = 1;`) ?? "", /unterminated string/)
+    assert.match(checkJsSyntax(`var a = 1; }`) ?? "", /unexpected/)
+    assert.match(checkJsSyntax(`function r() {\n var x = 1;`) ?? "", /unclosed/)
+    assert.equal(checkJsSyntax(`function render(t, ctx) { return 1; }`), null)
+  })
+
   it("warns (not errors) on <!-- sequences in JS", () => {
     const code = bundle(RENDER(`// <!-- divider -->\nctx.el("a").style.opacity = 1;`))
     assert.equal(errors(code).length, 0, JSON.stringify(errors(code)))
@@ -173,6 +194,14 @@ describe("Golden starters", () => {
       const api = factory({}) as { render?: unknown }
       assert.equal(typeof api.render, "function", `${mood}: no render()`)
     }
+  })
+
+  it("minimal fallback starter validates with zero errors", () => {
+    const m = minimalStarter({ product: "Acme", headline: "Hello", seconds: 5 })
+    assert.equal(errors(m.code).length, 0)
+    const p = parseBundle(m.code)
+    assert.ok(p.ok && p.bundle)
+    new Function("WM", `${p.bundle!.js}\nreturn {};`)
   })
 
   it("code and overlay briefs pick their starter", () => {

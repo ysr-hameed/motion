@@ -46,6 +46,185 @@ export function basicMotionBlocks(checks: Array<{ level: string; message: string
   return [...new Set(blocks)]
 }
 
+/**
+ * Eval-free JS syntax check: bracket/paren/brace balance plus unterminated
+ * strings, templates, and comments — the failures that kill the sandbox
+ * driver at parse time. Single pass, aware of strings (all three quotes),
+ * template `${}` nesting, regex literals (heuristic start detection), and
+ * both comment styles. Returns a message with a line number, or null.
+ *
+ * Deliberately narrow: it cannot catch every SyntaxError (a full parser
+ * would need code generation, which Workers forbid), but unbalanced
+ * delimiters are what truncated model output actually produces.
+ */
+export function checkJsSyntax(js: string): string | null {
+  const lineOf = (idx: number) => js.slice(0, idx).split("\n").length
+  type Frame = { ch: "(" | "[" | "{"; line: number }
+  const stack: Array<Frame | { tpl: true; line: number }> = []
+  let str: { q: "'" | '"' | "`"; line: number } | null = null
+  let lineComment = false
+  let blockComment = false
+  let escaped = false
+  // Previous significant char, for regex-vs-division. Empty at start.
+  let prev = ""
+  const REGEX_AFTER = "=(:,[!&|?{};~^<>+-*%"
+
+  const isTpl = (f: Frame | { tpl: true; line: number }): f is { tpl: true; line: number } =>
+    (f as { tpl: true }).tpl === true
+
+  let i = 0
+  const n = js.length
+  while (i < n) {
+    const ch = js[i]!
+    const next = i + 1 < n ? js[i + 1]! : ""
+
+    if (lineComment) {
+      if (ch === "\n") lineComment = false
+      i++
+      continue
+    }
+    if (blockComment) {
+      if (ch === "*" && next === "/") {
+        blockComment = false
+        i += 2
+        continue
+      }
+      i++
+      continue
+    }
+    if (str) {
+      if (escaped) {
+        escaped = false
+        i++
+        continue
+      }
+      if (ch === "\\") {
+        escaped = true
+        i++
+        continue
+      }
+      if (ch === str.q) {
+        str = null
+        i++
+        prev = "s"
+        continue
+      }
+      // Template interpolation opens code mode.
+      if (str.q === "`" && ch === "$" && next === "{") {
+        stack.push({ tpl: true, line: lineOf(i) })
+        str = null
+        i += 2
+        continue
+      }
+      // A raw newline inside a single/double-quoted string ends it illegally.
+      if ((str.q === "'" || str.q === '"') && ch === "\n") {
+        return `unterminated string starting at line ${str.line} — close the quote before the line break.`
+      }
+      i++
+      continue
+    }
+
+    // Code mode.
+    if (ch === "/" && next === "/") {
+      lineComment = true
+      i += 2
+      continue
+    }
+    if (ch === "/" && next === "*") {
+      blockComment = true
+      i += 2
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      str = { q: ch, line: lineOf(i) }
+      i++
+      continue
+    }
+    // Regex literal vs division: a `/` opens a regex when the previous
+    // significant token cannot end an expression.
+    if (ch === "/") {
+      const tail = js.slice(Math.max(0, i - 12), i)
+      const wordBefore = /(?:^|[^A-Za-z0-9_$])(return|typeof|instanceof|in|of|do|else|new|delete|void|yield|await)\s*$/.test(tail)
+      if (prev === "" || wordBefore || REGEX_AFTER.includes(prev)) {
+        // Skip to the closing unescaped `/` outside `[]`, then flags.
+        let k = i + 1
+        let inClass = false
+        let esc = false
+        while (k < n) {
+          const c = js[k]!
+          if (esc) esc = false
+          else if (c === "\\") esc = true
+          else if (c === "[") inClass = true
+          else if (c === "]") inClass = false
+          else if (c === "/" && !inClass) break
+          else if (c === "\n") break
+          k++
+        }
+        if (k < n && js[k] === "/") {
+          let e = k + 1
+          while (e < n && /[a-z]/i.test(js[e]!)) e++
+          i = e
+          prev = "s"
+          continue
+        }
+        return `unterminated regex starting at line ${lineOf(i)} — close the / before the line break.`
+      }
+      i++
+      prev = "/"
+      continue
+    }
+    if (ch === "(" || ch === "[" || ch === "{") {
+      stack.push({ ch, line: lineOf(i) })
+      i++
+      prev = ch
+      continue
+    }
+    if (ch === ")" || ch === "]" || ch === "}") {
+      const want = ch === ")" ? "(" : ch === "]" ? "[" : "{"
+      const top = stack[stack.length - 1]
+      if (!top) {
+        return `unexpected "${ch}" at line ${lineOf(i)} with nothing open — delete it or open ${want} first.`
+      }
+      if (isTpl(top)) {
+        if (ch !== "}") {
+          return `unexpected "${ch}" at line ${lineOf(i)} inside \${} — close the template expression with } first.`
+        }
+        stack.pop()
+        str = { q: "`", line: lineOf(i) }
+        i++
+        prev = "s"
+        continue
+      }
+      if (top.ch !== want) {
+        return `mismatched "${ch}" at line ${lineOf(i)} — closes ${top.ch} opened at line ${top.line}. Fix the nesting.`
+      }
+      stack.pop()
+      i++
+      prev = ch
+      continue
+    }
+    if (/\s/.test(ch)) {
+      i++
+      continue
+    }
+    prev = /[A-Za-z0-9_$.]/.test(ch) ? "w" : ch
+    i++
+  }
+
+  if (str) {
+    return str.q === "`"
+      ? `unterminated template literal starting at line ${str.line} — close the backtick.`
+      : `unterminated string starting at line ${str.line} — close the quote.`
+  }
+  if (blockComment) return "unterminated /* comment — close it with */."
+  const open = stack[stack.length - 1]
+  if (open) {
+    if (isTpl(open)) return `unclosed \${} expression starting at line ${open.line}.`
+    return `unclosed "${open.ch}" opened at line ${open.line} — the js part ends before it closes (truncated output: rewrite the tail).`
+  }
+  return null
+}
+
 /** Comments + string literals blanked (length-preserving) for identifier scans. */
 function stripStrings(src: string): string {
   const isWord = (c: string) => /[\w$]/.test(c)
@@ -169,20 +348,19 @@ export function checkComposition(code: string): Check[] {
   // The sandbox evaluates the js part with `new Function`. A syntax error
   // there kills the whole driver block at parse time (the classic
   // "about:srcdoc Uncaught SyntaxError"), so no audit report is ever posted
-  // and the turn stalls on pending. Catch it here instead with the exact
-  // same wrapping the driver uses (so top-level `return` parses in both),
-  // but as a validator error the model can fix in the same turn.
+  // and the turn stalls on pending. Catch it here instead — with a pure
+  // scanner, because Cloudflare Workers disallow code generation from
+  // strings (`new Function`/`eval` throw there), so the check itself must
+  // never evaluate. Reports the first mismatch with its line number.
   if (js.trim()) {
-    try {
-      new Function("WM", `${js}\nreturn {};`)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+    const syntaxError = checkJsSyntax(js)
+    if (syntaxError) {
       out.push({
         level: "error",
         message:
-          `JS syntax error — the js part does not parse (${msg}). ` +
-          `Fix the brackets/parens/quotes; keep render(t, ctx) short and simple, ` +
-          `one statement per line, no clever nesting.`,
+          `JS syntax error — ${syntaxError} ` +
+          `Fix the brackets/parens/quotes near that line; keep render(t, ctx) ` +
+          `short and simple, one statement per line, no clever nesting.`,
       })
     }
   }

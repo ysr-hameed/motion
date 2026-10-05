@@ -197,7 +197,7 @@ because this login can see six accounts and wrangler will not guess.
 
 - A full workflow turn streams steps back-to-back with no artificial delay. The UI says
   "working" and shows the tool log, so it reads as progress rather than a hang.
-- `MAX_STEPS` is 14. Enough for skills, plan, write, validate, two edit rounds,
+- `MAX_STEPS` is 25. Enough for skills, plan, write, validate, two edit rounds,
   verify, one preview, one report, plus the closing sentence; loop caps
   (pending-report ×2, code-dump guard) stop runaways instead of the step count.
 

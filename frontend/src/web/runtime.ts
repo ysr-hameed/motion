@@ -412,7 +412,16 @@ export function buildSrcdoc(bundle: WebBundle): string {
     .filter((u) => u.startsWith("https://"))
     .map((u) => `<script src="${u}"><\/script>`)
     .join("\n")
-  const userJsWrapped = `${escJs(bundle.js)}\nreturn { render: (typeof render !== "undefined" ? render : undefined), init: (typeof init !== "undefined" ? init : undefined) };`
+  // The user script is the FUNCTION BODY of new Function("WM", <string>), so
+  // it must be embedded as a JS string literal — never raw code. Raw
+  // embedding parses as `new Function("WM", function render...` and dies
+  // with "missing ) after argument list", killing the whole driver block
+  // (no boot, no audit, export "did not boot"). JSON.stringify yields a
+  // double-quoted literal; escJs already neutralized </script and <!--, and
+  // JSON introduces no new HTML-significant sequences.
+  const userJsWrapped = JSON.stringify(
+    `${escJs(bundle.js)}\nreturn { render: (typeof render !== "undefined" ? render : undefined), init: (typeof init !== "undefined" ? init : undefined) };`
+  )
   const driver = DRIVER_JS.split("__W__").join(String(W))
     .split("__H__").join(String(H))
     .split("__FPS__").join(String(fps))
@@ -420,7 +429,7 @@ export function buildSrcdoc(bundle: WebBundle): string {
     .split("__USERJS_WRAPPED__").join(userJsWrapped)
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; font-src https: data:; img-src https: data: blob:; media-src https: data: blob:; connect-src https:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline' https:; font-src https: data:; img-src https: data: blob:; media-src https: data: blob:; connect-src https:;">
 <meta name="viewport" content="width=${W}, height=${H}">
 ${links}
 ${assetStyles}
