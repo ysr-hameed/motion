@@ -324,6 +324,13 @@ const DRIVER_JS = `
     }
   });
 
+  function errText(err) {
+    var msg = err && err.message ? err.message : String(err);
+    var stack = "";
+    try { stack = err && err.stack ? String(err.stack).split("\\n").slice(0, 3).join(" | ").slice(0, 300) : ""; } catch (e) {}
+    return stack && stack.indexOf(msg) === -1 ? msg + " [" + stack + "]" : msg;
+  }
+
   window.addEventListener("error", (e) => {
     post({ ev: "report", phase: "runtime", ok: false, message: "runtime: " + (e && e.message ? e.message : "unknown error") });
   });
@@ -338,7 +345,7 @@ const DRIVER_JS = `
       userRender = api.render;
       userInit = api.init;
     } catch (err) {
-      post({ ev: "report", phase: "compile", ok: false, message: String(err && err.message ? err.message : err) });
+      post({ ev: "report", phase: "compile", ok: false, message: errText(err) });
       return;
     }
     if (typeof userRender !== "function") {
@@ -367,7 +374,13 @@ const DRIVER_JS = `
 `
 
 function escJs(s: string): string {
-  return s.replace(/<\/script/gi, "<\\/script")
+  // `</script` would close the embedding block early. `<!--` is subtler but
+  // just as fatal: inside <script> it flips the HTML parser into its escaped
+  // state, and any later `<script` string in generated code then stops the
+  // real `</script>` from closing the block — the document tail parses as JS
+  // and dies with "missing ) after argument list". Both are neutralized here;
+  // `<\!--` parses identically inside JS strings, comments, and regexes.
+  return s.replace(/<\/script/gi, "<\\/script").replace(/<!--/g, "<\\!--")
 }
 
 function escCss(s: string): string {

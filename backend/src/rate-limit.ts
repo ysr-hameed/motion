@@ -1,55 +1,38 @@
 /**
- * Gateway middleware for the Vercel AI Gateway: request pacing and 429 recovery.
+ * Gateway middleware for the Vercel AI Gateway: header-driven backoff and
+ * 429 recovery.
  *
- * The gateway key is limited to 5 requests per minute, per region, team-wide:
+ * There is NO client-side request cap: the key serves a quota the code does
+ * not assume, so model calls stream as fast as the model responds. The only
+ * thing this layer does is respect what the gateway itself reports —
+ * x-ratelimit-remaining-requests / x-ratelimit-reset (+ retry-after on 429)
+ * — plus an optional manual cap via GATEWAY_RPM if a key ever needs one.
  *
- *     x-ratelimit-limit-requests: 5
- *     x-ratelimit-limit-tokens: 1000000
- *     retry-after: 40
- *
- * Tokens are never the constraint — a million per minute against a model that
- * costs $0.03/M input. Requests are. And because a single agent turn can be
- * several model calls (one per tool-loop step), an un-paced loop burns the
- * whole minute on one user and then fails.
- *
- * So the limit is enforced here, at the only place every model call passes
- * through. `createOpenAI({ fetch })` is a documented middleware hook, which
- * means this paces the FIRST call of a turn and every step after it, without
- * the agent having to know a limit exists.
+ * It sits at the only place every model call passes through.
+ * `createOpenAI({ fetch })` is a documented middleware hook, which means
+ * this covers the FIRST call of a turn and every step after it, without
+ * the agent having to know about it.
  *
  * Sleeping costs no CPU: Durable Object wall time is unlimited and only active
- * time is billed, so pacing is free on the Workers Free plan.
+ * time is billed, so backoff is free on the Workers Free plan.
  */
 
 /**
- * Adaptive gateway pacing.
- *
- * The old code slept a fixed 12s before EVERY model call (60s / 5 req), so a
- * 10-step turn always cost 2+ minutes even when the gateway key had quota to
- * spare. That fixed sleep was the "5 minutes for a basic thing" complaint.
- *
- * Now: burst while quota remains, pace only when the gateway says we are low.
- * The gateway answers every call with x-ratelimit-remaining-requests /
- * x-ratelimit-reset (+ retry-after on 429) — trust those headers over any
- * schedule of our own. Floor spacing stays small (750ms) so tool-loop steps
- * stream back-to-back at full speed until the bucket actually runs dry.
+ * No assumed quota. The old code slept a fixed 12s before EVERY model call
+ * (60s / 5 req), then an adaptive 750ms floor — both were guesses about a
+ * key that can handle more. Now steps stream back-to-back at full speed and
+ * only wait when the gateway's own headers say the bucket is dry.
  */
-/**
- * Gateway quota default. Today's key serves 5 requests/minute (observed
- * `x-ratelimit-limit-requests: 5` + `retry-after: 40` on 429s) — that header,
- * not this file, is the limit. Raise the key's quota on the gateway
- * dashboard, set GATEWAY_RPM to match (read from Env in chat.ts), redeploy,
- * and turns stop pacing. Until then the fetch below bursts while quota
- * remains and only waits when headers say the bucket is dry.
- */
-export const REQUESTS_PER_WINDOW = 5
 export const WINDOW_MS = 60_000
 
-/** Floor between calls when quota looks healthy — lets steps stream fast. */
-const MIN_SPACING_MS = 750
+/** No floor spacing between calls — removed, the key handles full speed. */
+const MIN_SPACING_MS = 0
 
-/** When remaining quota drops to this, spread the rest of the window. */
+/** When remaining quota drops to this, back off until the bucket resets. */
 const LOW_QUOTA_THRESHOLD = 1
+
+/** Fallback wait when the bucket is dry but the gateway named no reset time. */
+const DRY_FALLBACK_MS = 5_000
 
 /** How many times a 429 is re-attempted after honouring retry-after. */
 const MAX_RATE_LIMIT_RETRIES = 3
@@ -82,8 +65,11 @@ function learnFromHeaders(headers: Headers): void {
     const remaining = remainingRaw !== null ? Number(remainingRaw) : NaN
     if (Number.isFinite(remaining) && remaining <= LOW_QUOTA_THRESHOLD) {
       // Quota nearly dry: if the gateway named a reset time, wait for it;
-      // otherwise spread one window across the remaining request.
-      let waitMs = Math.ceil(WINDOW_MS / Math.max(1, requestsPerWindow))
+      // otherwise spread one window across a manual cap when set, else a
+      // short fixed backoff (no assumed quota).
+      let waitMs = Number.isFinite(requestsPerWindow)
+        ? Math.ceil(WINDOW_MS / Math.max(1, requestsPerWindow))
+        : DRY_FALLBACK_MS
       if (resetRaw) {
         const reset = Number(resetRaw)
         if (Number.isFinite(reset) && reset > 0) {
@@ -115,15 +101,20 @@ export function resetPacing(): void {
 }
 
 /**
- * Override the 5 rpm default when the gateway key quota is raised — called
- * once per turn from chat.ts with the Env value. Takes effect for every
- * model call after it (isolate-wide, like the pacing clock itself).
+ * Optional manual cap (requests per WINDOW_MS) for a key that needs one —
+ * called once per turn from chat.ts with the Env value. Unset (the default)
+ * means uncapped: only the gateway's own headers govern pacing. Takes effect
+ * for every model call after it (isolate-wide, like the backoff clock).
  */
 export function setRequestsPerWindow(n: number): void {
+  if (n === Infinity) {
+    requestsPerWindow = Infinity
+    return
+  }
   if (Number.isFinite(n) && n > 0) requestsPerWindow = Math.floor(n)
 }
 
-let requestsPerWindow = REQUESTS_PER_WINDOW
+let requestsPerWindow = Infinity
 
 /**
  * A fetch that bursts while quota remains and only paces when headers say

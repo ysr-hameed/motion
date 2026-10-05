@@ -11,12 +11,13 @@ import {
 import { createPacedFetch, setRequestsPerWindow } from "./rate-limit"
 
 /**
- * Reads the gateway quota override (GATEWAY_RPM) so a key upgrade takes
- * effect without a code change. Missing or invalid → the 5 rpm default.
+ * Reads the optional manual gateway cap (GATEWAY_RPM, requests per minute).
+ * Missing or invalid → uncapped: the key handles full speed and only the
+ * gateway's own rate-limit headers govern backoff.
  */
 function gatewayRpm(env: Env): number {
   const raw = Number((env as unknown as Record<string, unknown>).GATEWAY_RPM)
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : Infinity
 }
 import { queueTurnSync } from "./lib/do-sync"
 import { buildTools, CANVAS } from "./remotion/tools"
@@ -218,9 +219,9 @@ export const DEFAULT_MODEL = "alibaba/qwen3.7-flash"
 /**
  * Ceiling on model round trips per turn.
  *
- * Pacing is adaptive now (see rate-limit.ts): steps stream back-to-back at
- * ~1-3s while quota remains and only slow down when the gateway says the
- * bucket is dry. So this is headroom, not a time budget: skills, plan,
+ * No client-side pacing (see rate-limit.ts): steps stream back-to-back as
+ * fast as the model responds, slowing only when the gateway's own headers
+ * say the bucket is dry. So this is headroom, not a time budget: skills, plan,
  * write, validate, preview and a closing sentence is ~7 steps, and a
  * rejected write that has to be re-issued pushes it past ten. Setting this
  * lower silently truncated turns before the agent ever spoke, which read as
@@ -232,8 +233,9 @@ const MAX_STEPS = 12
 const FRAME_RANGE = `frames 0 to ${CANVAS.maxFrames - 1}`
 
 /**
- * The model's own notes about pacing, so a wait reads as deliberate rather
- * than broken — the paced fetch can hold a turn for several seconds.
+ * The model's own notes about backoff, so a wait reads as deliberate rather
+ * than broken — gateway backoff can hold a turn for several seconds, but
+ * only when the gateway itself reports a dry bucket.
  *
  * Workflow decision tree (the prompt itself is the source of truth; this
  * comment is for the engineer, not the model):
@@ -262,9 +264,9 @@ const FRAME_RANGE = `frames 0 to ${CANVAS.maxFrames - 1}`
  *
  * Key constraints surfaced by testing:
  * - prefetch_tools wipes the blackboard — call it ONLY on a new brief.
- * - Every tool call costs ~12 s of wall time; 12 steps total per turn.
- *   Batch independent reads with execute_batch; never call a tool you will
- *   not use.
+ * - Tool calls stream back-to-back with no artificial delay; 12 steps
+ *   total per turn. Batch independent reads with execute_batch; never call
+ *   a tool you will not use.
  * - verify_no_errors is a hard gate. Never call preview_composition on
  *   ok:false or on a pending/failed prior player report.
  * - load_motion_preset is REQUIRED per beat — never write spring() or
@@ -302,6 +304,22 @@ reading logic.
 Use CSS shorthand transforms: scale / translate / rotate — NOT transform strings.
 Animate translate/scale/opacity + letterSpacing only — never fontSize.
 Beats overlap in time: next element starts 10-15f before the previous ends.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SIMPLE BY DEFAULT (read this first when the brief is simple)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Match complexity to the brief. A typing animation is 3 elements and ~40
+lines of render() — not a framework. Rules:
+- Few elements win: every extra node is a new place to break. Start with the
+  minimum that tells the story; add ONE decor layer only if the frame feels empty.
+- Plain code wins: direct style assignments per element, no registries, no
+  helper factories, no clever nesting. One statement per line. If render()
+  passes ~80 lines, cut scope instead of adding machinery.
+- The goldens show the CEILING. Simple briefs land far BELOW it.
+- When in doubt: quick_start + 1-2 small edits beats a from-scratch rewrite.
+- Banned in bundle JS: HTML-looking sequences (\`<!--\`, \`<script\`) even in
+  comments — they corrupt the preview document. Write plain \`// Section: x\`
+  comments instead.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MOTION PRINCIPLES (load_skill("cinematic-motion") for detail)
@@ -601,9 +619,9 @@ function chatCodeDumped(steps: readonly unknown[]): boolean {
 /**
  * Pending render reports since the last code change. Each read already waits
  * ~24s for the browser; looping preview→read→preview→read on an unchanged
- * cut burns paced model calls (~12s each) for nothing — observed live as
- * three identical pending rounds before the turn closed. After two, the turn
- * must end with the honest unconfirmed sentence instead of a third loop.
+ * cut burns model calls for nothing — observed live as three identical
+ * pending rounds before the turn closed. After two, the turn must end with
+ * the honest unconfirmed sentence instead of a third loop.
  * Defensive: any doubt returns 0 and the turn flows as before.
  */
 function pendingReadsSinceChange(
@@ -944,9 +962,9 @@ export class Chat extends AIChatAgent<Env, ChatState> {
       }
     })()
 
-    // One paced fetch per turn: every model call, including each tool-loop
-    // step, goes through it, so the 5-req/min gateway limit is respected
-    // without the agent having to know it exists.
+    // One gateway fetch per turn: every model call, including each tool-loop
+    // step, goes through header-driven backoff, so the gateway's own limits
+    // are respected without the agent having to know they exist.
     /**
      * openai-compatible, not @ai-sdk/openai.
      *
@@ -1075,8 +1093,8 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         }
         return { toolChoice: "auto" }
       },
-      // A rate limit answers "Retry after 40s"; the paced fetch already waits
-      // that long, so a second layer of retrying only multiplies the delay.
+      // A 429 answers with retry-after; the gateway fetch already honours
+      // it, so a second layer of retrying only multiplies the delay.
       maxRetries: 0,
       abortSignal: options?.abortSignal,
       onFinish: (result) => {

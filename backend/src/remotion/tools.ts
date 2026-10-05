@@ -276,7 +276,10 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
         "outside this call, stop and put it here instead. " +
         "Motion contract: every move is a pure function of t (seconds) via the ctx " +
         "helpers (ctx.interpolate, ctx.Easing, ctx.spring, ctx.rand). No imports, " +
-        "no exports, no <script> tags, no wall-clock time, no event handlers.",
+        "no exports, no <script> tags, no wall-clock time, no event handlers, " +
+        "no <!-- or <script sequences even in comments. Keep it minimal: match " +
+        "complexity to the brief — a simple cut is a few elements and a short " +
+        "render(), never a framework.",
       inputSchema: z.object({
         html: z
           .string()

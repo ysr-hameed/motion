@@ -165,6 +165,28 @@ export function checkComposition(code: string): Check[] {
     }
   }
 
+  // --- JS must parse -------------------------------------------------------
+  // The sandbox evaluates the js part with `new Function`. A syntax error
+  // there kills the whole driver block at parse time (the classic
+  // "about:srcdoc Uncaught SyntaxError"), so no audit report is ever posted
+  // and the turn stalls on pending. Catch it here instead with the exact
+  // same wrapping the driver uses (so top-level `return` parses in both),
+  // but as a validator error the model can fix in the same turn.
+  if (js.trim()) {
+    try {
+      new Function("WM", `${js}\nreturn {};`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      out.push({
+        level: "error",
+        message:
+          `JS syntax error — the js part does not parse (${msg}). ` +
+          `Fix the brackets/parens/quotes; keep render(t, ctx) short and simple, ` +
+          `one statement per line, no clever nesting.`,
+      })
+    }
+  }
+
   // --- render contract ----------------------------------------------------
   const jsClean = stripStrings(js)
   if (!/function\s+render\s*\(\s*t\b/.test(jsClean) && !/\brender\s*=\s*(function\s*\(\s*t\b|\(\s*t\b[^)]*\)\s*=>)/.test(jsClean)) {
@@ -182,6 +204,17 @@ export function checkComposition(code: string): Check[] {
       message:
         "A <script> tag in the html part is stripped at build and never runs. " +
         "Put all logic in the js part as render(t, ctx) — the driver evaluates it after helpers load.",
+    })
+  }
+  // Raw-text scan (NOT the string-stripped copy): `<!--` is an HTML-parser
+  // hazard wherever it appears, including inside JS strings and comments.
+  // The runtime neutralizes it, so this is guidance, not a block.
+  if (/<!--/.test(js)) {
+    out.push({
+      level: "warn",
+      message:
+        "HTML-looking `<!--` sequence in bundle JS (advisory): write plain `// Section: x` " +
+        "comments instead — it complicates the preview document for no benefit.",
     })
   }
   if (/^\s*import\s/m.test(jsClean) || /^\s*export\s/m.test(jsClean)) {

@@ -130,29 +130,22 @@ silently dropped and the UI showed no thinking at all.
 
 Reference images and PDFs attach as real file parts, not as descriptions.
 
-### Rate limiting — this key is capped, and it is not a code problem
+### Rate limiting — no client-side cap
 
-```
-x-ratelimit-limit-requests: 5      per minute
-x-ratelimit-limit-tokens: 1000000  (tokens are never the constraint)
-retry-after: 40                    on a 429
-```
+The key handles full speed, so the code assumes no quota: model calls stream
+back-to-back as fast as the model responds. What the code does is respect what
+the gateway itself reports:
 
-Five requests a minute, per region, team-wide. A turn that runs the workflow is
-~10 model calls, so **one user's turn can spend the whole minute**.
-
-That is an account limit, not a bug, and no amount of code removes it — it has
-to be raised on the gateway key. What the code does is stop making it worse:
-
-- `rate-limit.ts` spaces calls to one per 12s via `createOpenAI({ fetch })`, a
-  documented interception point, so the first call and every tool-loop step pass
-  through it. Sleeping costs no CPU: Durable Object wall time is unlimited.
+- `rate-limit.ts` wraps `fetch` via `createOpenAI({ fetch })`, a documented
+  interception point, so the first call and every tool-loop step pass through
+  it. It backs off only when `x-ratelimit-remaining-requests` says the bucket
+  is dry (or waits for `x-ratelimit-reset` when named). Sleeping costs no CPU:
+  Durable Object wall time is unlimited.
 - A 429 is retried only after the window the gateway itself named, instead of on
-  the SDK's own backoff curve.
+  the SDK's own backoff curve (max 3 attempts).
 - `maxRetries` is 0 on the model, because that retry would compound the wait.
-- The UI shows a real stall watchdog at 150s, long enough for a paced turn.
-
-A user still watching the clock is the residual cost of a 5 rpm key.
+- The UI shows a real stall watchdog at 150s.
+- Optional manual cap: set `GATEWAY_RPM` in Env to pace a key that needs it.
 
 ## Setup
 
@@ -202,9 +195,7 @@ because this login can see six accounts and wrangler will not guess.
 
 ## Known limits
 
-- **The 5 requests/minute cap is the product constraint right now.** It belongs
-  on the gateway key, not in the code — see above.
-- A full workflow turn takes ~2 minutes because of that pacing. The UI says
+- A full workflow turn streams steps back-to-back with no artificial delay. The UI says
   "working" and shows the tool log, so it reads as progress rather than a hang.
 - `MAX_STEPS` is 14. Enough for skills, plan, write, validate, two edit rounds,
   verify, one preview, one report, plus the closing sentence; loop caps

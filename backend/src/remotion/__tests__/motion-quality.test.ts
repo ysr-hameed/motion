@@ -116,6 +116,20 @@ describe("Bundle contract", () => {
     assert.ok(!quiet.some((x) => /robotic/.test(x.message)), JSON.stringify(quiet))
   })
 
+  it("catches JS syntax errors with a clear message (not a preview SyntaxError)", () => {
+    const broken = bundle(
+      `function render(t, ctx) {\n  var f = ctx.frame;\n  ctx.el("a").style.opacity = ctx.interpolate(f, [0, 60], [0, 1];\n}`
+    )
+    const e = errors(broken)
+    assert.ok(e.some((x) => /syntax/i.test(x.message)), JSON.stringify(e))
+  })
+
+  it("warns (not errors) on <!-- sequences in JS", () => {
+    const code = bundle(RENDER(`// <!-- divider -->\nctx.el("a").style.opacity = 1;`))
+    assert.equal(errors(code).length, 0, JSON.stringify(errors(code)))
+    assert.ok(warns(code).some((x) => /<!--/.test(x.message)))
+  })
+
   it("warns on opacity-only motion and stagger-less lists", () => {
     const w = warns(
       bundle(RENDER(`ctx.el("a").style.opacity = ctx.interpolate(f, [0, 60], [0, 1], { easing: ctx.Easing.easeOut });`))
@@ -144,6 +158,22 @@ describe("Golden starters", () => {
       assert.equal(plan.ok, true, JSON.stringify(plan.issues))
     })
   }
+
+  it("every golden js part parses exactly like the driver evaluates it", () => {
+    const moods = ["cinematic", "energetic", "playful", "minimal", "elegant", "tech", "romantic"]
+    for (const mood of moods) {
+      const g = goldenStarter({ product: "Acme", headline: "Motion that lands", mood, seconds: 5 })
+      const p = parseBundle(g.code)
+      assert.ok(p.ok && p.bundle, mood)
+      // Mirror of the iframe driver: new Function("WM", js + return-shim).
+      const factory = new Function(
+        "WM",
+        `${p.bundle!.js}\nreturn { render: (typeof render !== "undefined" ? render : undefined) };`
+      )
+      const api = factory({}) as { render?: unknown }
+      assert.equal(typeof api.render, "function", `${mood}: no render()`)
+    }
+  })
 
   it("code and overlay briefs pick their starter", () => {
     const code = goldenStarter({ product: "ShipIt", headline: "npm install shipit", mood: "tech" })
