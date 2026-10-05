@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRight, Check, Clapperboard, Clock, Megaphone, Monitor, Palette,
-  Plus, RectangleHorizontal, Smartphone, Sparkles, Square, Type, Zap,
+  Plus, RectangleHorizontal, Smartphone, Sparkles, Square, Type,
 } from "lucide-react";
 import { motionApi } from "~/lib/stack";
-import { publishStarter } from "~/lib/composition";
 import { useMotionToken } from "./data";
 
 /**
@@ -94,10 +93,10 @@ interface Project {
 }
 
 /**
- * /create — the New Cut dashboard. Prompt box with shoot options, examples,
- * templates, instant starters and project picker. It never talks to the
- * agent directly: it hands a pending package to /studio, which fires it
- * into a fresh session only.
+ * /create — the New Cut dashboard. Prompt box with shoot options, examples
+ * and project picker. It never talks to the agent directly: it hands a
+ * pending package to /studio, which fires it into a fresh session only.
+ * Every cut is designed fresh from the brief — no templates, no starters.
  */
 export default function Create() {
   const navigate = useNavigate();
@@ -108,8 +107,6 @@ export default function Create() {
   const [customSec, setCustomSec] = useState("8");
   const [mood, setMood] = useState<(typeof MOODS)[number]["id"]>("Cinematic");
   const [popup, setPopup] = useState<"framing" | "duration" | "mood" | null>(null);
-  const [instantBusy, setInstantBusy] = useState<string | null>(null);
-  const [instantError, setInstantError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -158,21 +155,6 @@ export default function Create() {
     });
     freshSession();
     navigate("/studio");
-  };
-
-  const instant = () => {
-    if (instantBusy !== null) return;
-    setInstantBusy("starter");
-    setInstantError(null);
-    const headline = prompt.trim() || undefined;
-    publishStarter(freshSession(), {
-      ...(headline ? { headline } : {}),
-      mood: mood.toLowerCase(),
-      seconds,
-    })
-      .then(() => navigate("/studio"))
-      .catch((e: unknown) => setInstantError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setInstantBusy(null));
   };
 
   const toolBtn =
@@ -349,30 +331,6 @@ export default function Create() {
             </span>
           </button>
         ))}
-      </div>
-
-      {/* instant preview — one proven starter, no template menu */}
-      <div className="mt-6 rounded-2xl border border-tungsten/25 bg-tungsten/[0.04] p-4">
-        <p className="flex items-center justify-center gap-1.5 text-center text-xs font-bold uppercase tracking-widest text-tungsten">
-          <Zap size={12} aria-hidden /> skip the brief — preview instantly
-        </p>
-        <div className="mt-3 flex justify-center">
-          <button
-            type="button"
-            disabled={instantBusy !== null}
-            onClick={() => instant()}
-            className="rounded-xl border border-tungsten/40 bg-tungsten/10 px-5 py-2 text-xs font-bold text-tungsten transition-all hover:brightness-125 disabled:cursor-wait disabled:opacity-50"
-          >
-            {instantBusy !== null ? "Publishing…" : "▶ Instant preview"}
-          </button>
-        </div>
-        {instantError ? (
-          <p className="mt-2 text-center text-xs text-bad">{instantError}</p>
-        ) : (
-          <p className="mt-2 text-center text-[11px] text-dim">
-            renders immediately in the Studio — then describe the change you want
-          </p>
-        )}
       </div>
 
       {/* project-based */}

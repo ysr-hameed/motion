@@ -146,6 +146,44 @@ const CHEAP_WRITE = {
   title: "Cheap fade",
 }
 
+const TERMINAL_WRITE = {
+  html: `<div class="term" id="term"><div class="term-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span class="term-title">app.js</span></div><div class="term-body" id="termBody"></div></div><div class="badge" id="badge">Ready</div>`,
+  css: `.term{position:absolute;left:50%;top:44%;width:1400px;border-radius:20px;border:1px solid #5AC8FA44;background:rgba(0,0,0,0.38);z-index:10}\n.term-bar{display:flex;align-items:center;gap:12px;padding:0 28px;height:64px}\n.term-bar i{width:18px;height:18px;border-radius:50%}\n.term-bar .r{background:#FF5F57}.term-bar .y{background:#FEBC2E}.term-bar .g{background:#28C840}\n.term-title{margin-left:14px;font-size:24px;color:#E8EEF7;font-family:'Space Mono',monospace}\n.code-line{display:flex;height:56px;padding:0 28px;font-size:30px;font-family:'Space Mono',monospace}\n.badge{position:absolute;left:50%;bottom:96px;font-size:22px;letter-spacing:6px;color:#5AC8FA;font-family:'Space Mono',monospace;z-index:20;white-space:nowrap}`,
+  js: `var LINES = ["import { spring } from \\"webmotion\\"", "export default function App() {", "  return <Intro />;", ""];var CMD = "npx create-react-app my-app";
+function init(ctx) {
+  var body = ctx.el("termBody");
+  for (var i = 0; i < LINES.length; i++) {
+    var row = document.createElement("div"); row.className = "code-line"; row.textContent = LINES[i]; body.appendChild(row);
+  }
+  var cmd = document.createElement("div"); cmd.className = "code-line"; cmd.id = "cmdLine";
+  var pre = document.createElement("span"); pre.textContent = "$ "; cmd.appendChild(pre);
+  var text = document.createElement("span"); text.id = "cmdText"; cmd.appendChild(text);
+  var cur = document.createElement("span"); cur.id = "cursor"; cur.textContent = "|"; cmd.appendChild(cur);
+  body.appendChild(cmd);
+}
+function render(t, ctx) {
+  var f = ctx.frame;
+  var winIn = ctx.spring(t - 8 / 30, { damping: 18, mass: 0.9, stiffness: 120 });
+  var term = ctx.el("term");
+  term.style.translate = "-50% " + ctx.interpolate(f, [8, 52], [90, 0], { easing: ctx.Easing.easeOut }) + "px";
+  term.style.opacity = ctx.interpolate(f, [8, 26], [0, 1], { easing: ctx.Easing.easeOut });
+  var rows = ctx.el("termBody").children;
+  for (var i = 0; i < 4; i++) {
+    var d = 26 + i * 16;
+    var s = ctx.spring(t - d / 30, { damping: 18, mass: 0.5, stiffness: 180 });
+    rows[i].style.opacity = Math.max(0, Math.min(1, s));
+  }
+  var typedN = Math.floor(ctx.interpolate(f, [90, 150], [0, CMD.length], { easing: ctx.Easing.linear }));
+  ctx.el("cmdText").textContent = CMD.slice(0, typedN);
+  ctx.el("cursor").style.opacity = Math.floor(f / 14) % 2 === 0 ? 1 : 0;
+  var badge = ctx.el("badge");
+  badge.style.translate = "-50% 0px";
+  badge.style.opacity = ctx.interpolate(f, [150, 170], [0, 1], { easing: ctx.Easing.easeOut });
+  void winIn;
+}`,
+  title: "Terminal typewriter",
+}
+
 function printReport() {
   console.log("\n==== AGENT SIMULATION REPORT ====")
   console.log("scenario | tool | ms | ok | errors | warns | note")
@@ -162,36 +200,36 @@ function printReport() {
 }
 
 describe("Agent simulation — scripted turns through real tools", () => {
-  it("S1 fast path (product): quick_start → verify → preview → verified report", async () => {
+  it("S1 full path (product): write → verify → preview → verified report", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    const q = await call("S1", "quick_start", { product: "Acme", headline: "Motion that lands" })
-    assert.equal(q.ok, true, `quick_start failed: ${JSON.stringify(q.errors ?? q.error)}`)
+    const w = await call("S1", "write_composition", GOOD_WRITE)
+    assert.equal(w.ok, true, `write failed: ${JSON.stringify(w)}`)
     const v = await call("S1", "verify_no_errors")
-    assert.equal(v.ok, true, `gate blocked a golden: ${JSON.stringify(v)}`)
+    assert.equal(v.ok, true, `gate blocked a good cut: ${JSON.stringify(v)}`)
     const p = await call("S1", "preview_composition")
     assert.equal(p.ok, true)
     // Browser mounted the cut — the only render truth.
     const call2 = toolsFor(store, { version: 1, ok: true, phase: "mount", findings: [], at: Date.now() })
     const r = await call2("S1", "read_render_report")
     assert.equal((r as { status: string }).status, "verified")
-    const d = await call("S1", "design_analyze")
-    assert.ok(((d as { score: number }).score ?? 0) >= 90, `golden score too low: ${JSON.stringify(d)}`)
+    const rev = (await call("S1", "review_motion")) as { findings: string[] }
+    assert.ok(rev.findings.length <= 1, `good cut drew critique: ${JSON.stringify(rev.findings)}`)
   })
 
-  it("S2 golden verifies clean with brand-only context", async () => {
+  it("S2 written cut verifies clean", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    const q = await call("S2", "quick_start", { brand: "Acme" })
-    assert.equal(q.ok, true, `golden failed: ${JSON.stringify(q.errors ?? q.error)}`)
+    const w = await call("S2", "write_composition", { ...GOOD_WRITE, title: "Acme cut" })
+    assert.equal(w.ok, true, `write failed: ${JSON.stringify(w)}`)
     const v = await call("S2", "verify_no_errors")
-    assert.equal(v.ok, true, `golden blocked: ${JSON.stringify(v)}`)
+    assert.equal(v.ok, true, `good cut blocked: ${JSON.stringify(v)}`)
   })
 
   it("S4 browser failure blocks preview, names the fix, auto-fix recovers", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    await call("S4", "quick_start", { product: "Acme" })
+    await call("S4", "write_composition", GOOD_WRITE)
     // v1 shipped wall-clock randomness: inline repair would normally fix it
     // at write, so force the broken row the way a pre-validator turn would
     // have stored it — then prove the gate + auto-fix recovery path.
@@ -269,51 +307,62 @@ describe("Agent simulation — scripted turns through real tools", () => {
   it("S7 edit path: retitle without rewrite, still clean", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    await call("S7", "quick_start", { product: "Acme", headline: "Motion that lands" })
+    await call("S7", "write_composition", GOOD_WRITE)
     const e = await call("S7", "edit_file", {
-      ops: [{ part: "js", find: "Motion that lands", replace: "Motion that truly lands" }],
+      ops: [{ part: "html", find: "Fast", replace: "Quick" }],
     })
     assert.equal(e.ok, true, `edit failed: ${JSON.stringify(e)}`)
-    assert.ok(store.current().code.includes("truly"), "edit did not apply")
+    assert.ok(store.current().code.includes("Quick"), "edit did not apply")
     const v = await call("S7", "verify_no_errors")
     assert.equal(v.ok, true)
   })
 
-  it("S8 golden motion outscores a cheap fade by 15+ points", async () => {
+  it("S8 designed motion draws fewer review findings than a cheap fade", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    await call("S8", "quick_start", { product: "Acme" })
-    const gold = (await call("S8", "design_analyze")) as { score: number }
+    await call("S8", "write_composition", GOOD_WRITE)
+    const good = (await call("S8", "review_motion")) as { findings: string[] }
     const w = await call("S8", "write_composition", CHEAP_WRITE)
     assert.equal(w.ok, true, `cheap fade refused: ${JSON.stringify(w)}`)
-    const cheap = (await call("S8", "design_analyze")) as { score: number; findings: string[] }
-    assert.ok(gold.score - cheap.score >= 15, `gold ${gold.score} vs cheap ${cheap.score}`)
-    assert.ok(cheap.findings.join(" ").length > 20, "cheap fade must produce actionable findings")
+    const cheap = (await call("S8", "review_motion")) as { findings: string[] }
+    assert.ok(cheap.findings.length >= 2, `cheap fade must produce findings: ${JSON.stringify(cheap.findings)}`)
+    assert.ok(
+      good.findings.length < cheap.findings.length,
+      `good ${good.findings.length} vs cheap ${cheap.findings.length}`
+    )
   })
 
-  it("S9 placement: the golden carries no overlap/overflow/safe-margin findings", async () => {
+  it("S9 placement: a clean cut carries no overlap/overflow/safe-margin findings", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    await call("S9", "quick_start", { product: "Acme" })
+    await call("S9", "write_composition", GOOD_WRITE)
     const v = (await call("S9", "validate_composition")) as { warnings: string[] }
     const placement = v.warnings.filter((m) => /share the spot|outside|overlap|cropped|safe margin|off-canvas/i.test(m))
     assert.equal(placement.length, 0, `placement warnings: ${placement.join(" | ")}`)
   })
 
-  it("S10 terminal brief: quick_start code path verifies and previews", async () => {
+  it("S10 terminal brief: full path (direct → plan → write → verify → preview)", async () => {
     const store = new FakeStore()
     const call = toolsFor(store, null)
-    const q = await call("S10", "quick_start", {
-      product: "React",
-      headline: "create a react app in terminal",
-      mood: "tech",
-      seconds: 5,
+    const cd = await call("S10", "creative_direct", { brief: "terminal typing npx create-react-app my-app" })
+    const cdr = cd as { beats: Array<{ beat: string }> }
+    assert.ok(cdr.beats.length >= 4, "terminal direction too thin")
+    const pm = await call("S10", "plan_motion", {
+      title: "Terminal create-react-app typewriter",
+      intent: "Terminal springs in, command types itself, cursor blinks, badge resolves",
+      beats: [
+        { from: 8, to: 52, what: "terminal window spring entrance scale 0.92→1 + rise 90→0" },
+        { from: 26, to: 106, what: "code line cascade per-line spring stagger 16f" },
+        { from: 90, to: 150, what: "command typing via slice + deterministic cursor blink" },
+        { from: 150, to: 170, what: "badge resolve, idle breathing hold" },
+      ],
+      ending: "Command typed, cursor blinking, badge held.",
     })
-    assert.equal(q.ok, true, `terminal quick_start failed: ${JSON.stringify(q.errors ?? q.error)}`)
-    const qr = q as { plan?: { title?: string } }
-    assert.ok(/terminal/i.test(qr.plan?.title ?? ""), `wrong starter: ${qr.plan?.title}`)
+    assert.equal(pm.ok, true)
+    const w = await call("S10", "write_composition", TERMINAL_WRITE)
+    assert.equal(w.ok, true, `terminal bundle rejected: ${JSON.stringify(w)}`)
     const v = await call("S10", "verify_no_errors")
-    assert.equal(v.ok, true, `terminal golden blocked: ${JSON.stringify(v)}`)
+    assert.equal(v.ok, true, `terminal bundle blocked: ${JSON.stringify(v)}`)
     const p = await call("S10", "preview_composition")
     assert.equal(p.ok, true)
     const call2 = toolsFor(store, { version: 1, ok: true, phase: "mount", findings: [], at: Date.now() })

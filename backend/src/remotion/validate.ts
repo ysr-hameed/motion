@@ -405,6 +405,53 @@ export function checkComposition(code: string): Check[] {
     })
   }
 
+  // --- vanilla only: no React/JSX/TSX/framework code -------------------------
+  // Scanned on the string-stripped copy, so HTML inside JS strings (innerHTML
+  // templates) never counts — only real code does.
+  if (/<[A-Za-z][\w$]*(?:\s[^<>]*)?\/?>/.test(jsClean)) {
+    out.push({
+      level: "error",
+      message:
+        "JSX detected in bundle JS (`<div>`, `<span>`, ...). This engine is vanilla " +
+        "HTML/CSS/JS only — no React, no components, no JSX. Build nodes with " +
+        "document.createElement in init() and set inline styles in render(t, ctx).",
+    })
+  }
+  const frameworkName = /\bReact\b|useState|useEffect|useRef|useMemo|useCallback|useCurrentFrame|useVideoConfig|AbsoluteFill|TransitionSeries/.exec(jsClean)?.[0]
+  if (frameworkName) {
+    out.push({
+      level: "error",
+      message:
+        `"${frameworkName}" is framework code (React/Remotion) — banned in bundles. ` +
+        `There are no hooks or components here: markup lives in the html part, ` +
+        `motion lives in render(t, ctx) with the ctx helpers.`,
+    })
+  }
+  // Bare `className` (JSX attribute / style-object key) is React. Member
+  // assignment (`el.className = "x"`) is plain DOM and stays allowed.
+  if (/(?<![.\w$])className\b/.test(jsClean)) {
+    out.push({
+      level: "error",
+      message:
+        "Bare `className` is React/JSX — in vanilla JS use `class` in the html " +
+        "part, or element member access (`el.classList.add(...)`, `el.className = \"...\"`).",
+    })
+  }
+  if (/from\s*["']react["']|from\s*["']remotion["']/.test(jsClean)) {
+    out.push({
+      level: "error",
+      message:
+        'Framework imports ("react", "remotion") do not exist in the sandbox. ' +
+        "Delete the import — helpers arrive on ctx, libs via meta.assets.",
+    })
+  }
+  if (/\bclassName\s*=/.test(html)) {
+    out.push({
+      level: "error",
+      message: "`className=` in bundle HTML — this is not React. Use `class=`.",
+    })
+  }
+
   // --- determinism: the clock is t, nothing else ---------------------------
   if (/\bDate\.now\s*\(/.test(jsClean) || /\bperformance\.now\s*\(/.test(jsClean)) {
     out.push({

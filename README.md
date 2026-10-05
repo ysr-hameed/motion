@@ -66,32 +66,30 @@ account is on Free, which rejects it, and it is not needed.
 
 ## Tools
 
-Sixty-four, all scoped to a single composition — none of them take a project or
+Twenty-seven, all scoped to a single composition — none of them take a project or
 file id, because there is exactly one cut per conversation and an id the model
-could get wrong was a reliable source of mistakes.
-
-Fast path (a new brief costs 3 calls, not 11):
-
-| Tool | Purpose |
-|---|---|
-| `quick_start` | Plans + writes + validates a golden composition in ONE call |
-| `preview_composition` | Publishes to the player; only when it validates |
-| `read_render_report` | Browser compile+mount verdict — the only render truth |
-
-Full path and refinement:
+could get wrong was a reliable source of mistakes. No templates, no shortcuts:
+every cut is designed fresh through the full path below.
 
 | Tool | Purpose |
 |---|---|
 | `creative_direct` | Art direction in one call: intent + palette + fonts + beat→preset map |
-| `load_skill` | One of 41 vendored skills (web runtime + 9 working examples + 8 design skills), on demand |
+| `load_skill` | One of 41 vendored skills (web runtime + 9 working examples + 8 design skills) — creative-direction + cinematic-motion mandatory every cut, plus beat-matched skills |
 | `plan_motion` | Records the beat sheet; the player draws it as a timeline |
+| `load_motion_preset` | Timing + easing numbers per beat — copy, never invent curves |
+| `layout_plan` | Element placement with conflict detection |
+| `font_suggest` / `font_resolve` | Pairings + ground truth for user-named fonts |
+| `asset_search` / `asset_optimize` | Placeholders + sizing guidance |
+| `copy_generate` / `subtitle_generate` / `icon_generate` / `background_generate` | Content specs (copy decks, caption windows, inline-SVG icons, CSS backgrounds) |
 | `read_file` | Current bundle parts (html/css/js), verbatim |
-| `write_composition` | The whole bundle in one call; auto-repairs inline, refuses invalid source |
+| `write_composition` | The whole bundle in one call, vanilla only; auto-repairs inline, refuses invalid source |
 | `edit_file` / `bulk_edit` | Exact-string ops per part (html/css/js) for small / batched changes |
 | `validate_composition` | Errors that stop a render, warnings that mean a blank frame |
 | `verify_no_errors` | Blocking gate before preview (errors + failed player report) |
-| `auto_fix_code` / `auto_enhance_motion` | Mechanical repairs, max 2 rounds |
+| `auto_fix_code` | Mechanical repairs, max 2 rounds |
 | `review_motion` | Motion critique — see below |
+| `preview_composition` | Publishes to the player; only when it validates |
+| `read_render_report` | Browser compile+mount verdict — the only render truth |
 | `list_versions` / `restore_version` | Roll back without losing history |
 
 `validate_composition` catches the failures that are expensive to discover late:

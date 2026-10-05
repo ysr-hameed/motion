@@ -15,7 +15,7 @@ import {
   gateVerification,
   suggestCloseMatch,
 } from "../tools"
-import { goldenStarter, minimalStarter } from "../templates"
+
 import {
   MotionPatterns,
   SpringPresets,
@@ -165,50 +165,40 @@ describe("Bundle contract", () => {
   })
 })
 
-describe("Golden starters", () => {
-  for (const mood of ["cinematic", "energetic", "playful", "minimal", "elegant", "tech", "romantic"]) {
-    it(`golden (${mood}) validates with zero errors`, () => {
-      const g = goldenStarter({ product: "Acme", headline: "Motion that lands", mood, seconds: 5 })
-      const e = errors(g.code)
-      assert.equal(e.length, 0, `${mood}: ${e.map((x) => x.message).join(" | ")}`)
-      const p = parseBundle(g.code)
-      assert.ok(p.ok && p.bundle)
-      assert.match(p.bundle!.js, /function render\(t, ctx\)/)
-      assert.match(p.bundle!.js, /function init\(ctx\)/)
-      const plan = preValidatePlan(g.plan.beats)
-      assert.equal(plan.ok, true, JSON.stringify(plan.issues))
-    })
-  }
+describe("Vanilla enforcement", () => {
+  it("refuses React/JSX/framework code in bundle JS", () => {
+    const jsx = bundle(
+      `function render(t, ctx) {\n  return <div>Hello</div>;\n}`,
+      `<div id="a"></div>`
+    )
+    assert.ok(errors(jsx).some((e) => /JSX/.test(e.message)), "JSX must be refused")
+    const hooks = bundle(
+      `function render(t, ctx) {\n  var f = ctx.frame;\n  var x = useCurrentFrame();\n}`
+    )
+    assert.ok(errors(hooks).some((e) => /framework/i.test(e.message)), "hooks must be refused")
+    const cn = bundle(`function render(t, ctx) { var f = ctx.frame; var s = { className: "x" }; }`)
+    assert.ok(errors(cn).some((e) => /className/.test(e.message)), "bare className must be refused")
+    const member = bundle(
+      `function render(t, ctx) { var f = ctx.frame; ctx.el("a").className = "x"; ctx.el("a").style.opacity = ctx.interpolate(f, [0, 30], [0, 1], { easing: ctx.Easing.easeOut }); }`
+    )
+    assert.ok(!errors(member).some((e) => /className/.test(e.message)), "member assignment is vanilla and must pass")
+    const imp = `import { x } from "react";\n` + `function render(t, ctx) { var f = ctx.frame; }`
+    assert.ok(errors(bundle(imp)).length > 0, "react imports must be refused")
+  })
 
-  it("every golden js part parses exactly like the driver evaluates it", () => {
-    const moods = ["cinematic", "energetic", "playful", "minimal", "elegant", "tech", "romantic"]
-    for (const mood of moods) {
-      const g = goldenStarter({ product: "Acme", headline: "Motion that lands", mood, seconds: 5 })
-      const p = parseBundle(g.code)
-      assert.ok(p.ok && p.bundle, mood)
-      // Mirror of the iframe driver: new Function("WM", js + return-shim).
-      const factory = new Function(
-        "WM",
-        `${p.bundle!.js}\nreturn { render: (typeof render !== "undefined" ? render : undefined) };`
+  it("refuses className in bundle HTML", () => {
+    assert.ok(
+      errors(bundle(`function render(t, ctx) { var f = ctx.frame; }`, `<div className="a"></div>`)).some((e) =>
+        /class=/.test(e.message)
       )
-      const api = factory({}) as { render?: unknown }
-      assert.equal(typeof api.render, "function", `${mood}: no render()`)
-    }
+    )
   })
 
-  it("minimal fallback starter validates with zero errors", () => {
-    const m = minimalStarter({ product: "Acme", headline: "Hello", seconds: 5 })
-    assert.equal(errors(m.code).length, 0)
-    const p = parseBundle(m.code)
-    assert.ok(p.ok && p.bundle)
-    new Function("WM", `${p.bundle!.js}\nreturn {};`)
-  })
-
-  it("code and overlay briefs pick their starter", () => {
-    const code = goldenStarter({ product: "ShipIt", headline: "npm install shipit", mood: "tech" })
-    assert.match(code.plan.title, /terminal/)
-    const lower = goldenStarter({ product: "Jane Doe", headline: "Keynote speaker", mood: "minimal" })
-    assert.ok(/lower third|overlay/i.test(lower.plan.title + lower.plan.intent), lower.plan.title)
+  it("still accepts plain vanilla JS with HTML strings", () => {
+    const okCode = bundle(
+      `function render(t, ctx) {\n  var f = ctx.frame;\n  var el = document.createElement("span");\n  el.textContent = "<b>hi</b>";\n  el.style.opacity = ctx.interpolate(f, [0, 30], [0, 1], { easing: ctx.Easing.easeOut });\n}`
+    )
+    assert.equal(errors(okCode).length, 0, JSON.stringify(errors(okCode)))
   })
 })
 

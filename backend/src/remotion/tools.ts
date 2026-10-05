@@ -13,32 +13,15 @@ import {
   type BundlePart,
   type WebBundle,
 } from "./bundle"
-import { basicMotionBlocks, checkComposition, constraintSolve, dependencyResolve, preValidatePlan } from "./validate"
+import { basicMotionBlocks, checkComposition, preValidatePlan } from "./validate"
 import { optimizeAsset, resolveFont, suggestAssets, suggestFonts } from "./assets"
-import {
-  accessibilityAudit,
-  brandLearn,
-  decisionMake,
-  designAnalyze,
-  intentDeepAnalyze,
-  intentQuestionnaire,
-  performanceProfile,
-  preferenceApply,
-} from "./intelligence"
-import { goldenStarter, minimalStarter } from "./templates"
-import { cacheGet, cacheSet, predictTools, TTL } from "./cache"
+import { intentDeepAnalyze } from "./intelligence"
 import {
   backgroundGenerate,
   copyGenerate,
   iconGenerate,
-  musicSearch,
-  soundEffects,
   subtitleGenerate,
-  voiceoverGenerate,
 } from "./content"
-import { cdnPublish, exportBundle, exportPreset, EXPORT_PRESETS, thumbnailSpec, watermarkSpec } from "./export"
-import { feedbackRequest, shareCreate, teamInvite } from "./collab"
-import { threeCameraPath, threeModelAnimate, threeSceneCreate } from "./motion3d"
 import { keyframeSnippet, presetForBeat, presetSnippet, textAnimationSnippet } from "./motion-library"
 import { LayoutEngine, buildCompositionHints } from "./layout-engine"
 import type { ElementType, LayoutStrategy } from "./layout-engine"
@@ -81,11 +64,11 @@ function requireBundle(store: CompositionStore):
       ok: false,
       error:
         "Legacy Remotion TSX is on stage — the player no longer mounts it. " +
-        "Regenerate with quick_start (or write_composition); do not edit the TSX.",
+        "Start a fresh cut with write_composition (html/css/js); do not edit the TSX.",
     }
   }
   if (!p.ok || !p.bundle) {
-    return { ok: false, error: `Stored bundle is corrupt (${p.error}). Regenerate with quick_start.` }
+    return { ok: false, error: `Stored bundle is corrupt (${p.error}). Rewrite it with write_composition.` }
   }
   return { ok: true, bundle: p.bundle }
 }
@@ -791,31 +774,19 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       }),
       execute: async ({ beats, totalFrames }) => {
         const check = preValidatePlan(beats, CANVAS.maxFrames)
-        const solved = constraintSolve(totalFrames ?? beats.at(-1)?.to ?? 0, beats, CANVAS.maxFrames)
-        return { ...check, budget: solved.note, suggestedBeats: solved.beats }
+        const last = beats.at(-1)?.to ?? 0
+        const want = totalFrames ?? last
+        return {
+          ...check,
+          budget:
+            want > CANVAS.maxFrames
+              ? `Over the ${CANVAS.maxFrames}f cap — tighten the last beat to end at or before it.`
+              : `Fits the ${CANVAS.maxFrames}f cap with room to spare.`,
+        }
       },
     }),
 
-    constraint_solve: tool({
-      description:
-        "Solve timing/duration/frame-budget constraints: total frames plus beats. " +
-        "Returns a valid retiming or an impossibility report.",
-      inputSchema: z.object({
-        totalFrames: z.number().int().min(1),
-        beats: z.array(
-          z.object({ from: z.number().int().min(0), to: z.number().int().min(1), what: z.string() })
-        ),
-      }),
-      execute: async ({ totalFrames, beats }) => constraintSolve(totalFrames, beats, CANVAS.maxFrames),
-    }),
 
-    dependency_resolve: tool({
-      description:
-        "Map imports to the browser scope before writing code. Reports which " +
-        "sources are available and what to use instead for the rest.",
-      inputSchema: z.object({ imports: z.array(z.string()).min(1) }),
-      execute: async ({ imports }) => dependencyResolve(imports),
-    }),
 
     auto_fix_code: tool({
       description:
@@ -1058,24 +1029,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       execute: async ({ name }) => resolveFont(name),
     }),
 
-    intent_deep_analyze: tool({
-      description:
-        "Four-pass intent extraction: goal + tone + length, industry/audience/" +
-        "platform inference, proactive gap-fill, and the only questions worth " +
-        "asking. Call first on a new brief, before planning.",
-      inputSchema: z.object({
-        request: z.string().describe("The user's brief, verbatim."),
-      }),
-      execute: async ({ request }) => intentDeepAnalyze(request),
-    }),
 
-    intent_questionnaire: tool({
-      description:
-        "What is already known, what was inferred, and the critical gaps as " +
-        "quick picks (not free-text interrogation). Present the choices to the user.",
-      inputSchema: z.object({ brief: z.string() }),
-      execute: async ({ brief }) => intentQuestionnaire(brief),
-    }),
 
     creative_direct: tool({
       description:
@@ -1140,224 +1094,18 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       },
     }),
 
-    decision_make: tool({
-      description:
-        "Score explicit design options on weighted criteria and return the " +
-        "winner with reasoning. Decide yourself instead of asking the user.",
-      inputSchema: z.object({
-        options: z.array(z.string()).min(2),
-        criteria: z.record(z.string(), z.number()).optional(),
-        signals: z.record(z.string(), z.record(z.string(), z.number())).optional(),
-      }),
-      execute: async ({ options, criteria, signals }) => decisionMake(options, criteria, signals),
-    }),
 
-    preference_apply: tool({
-      description:
-        "Apply the session's learned style preferences to a fresh decision so " +
-        "cuts stay consistent across the conversation.",
-      inputSchema: z.object({
-        decision: z.string(),
-        profile: z.record(z.string(), z.string()).optional(),
-      }),
-      execute: async ({ decision, profile }) => preferenceApply(decision, profile ?? {}),
-    }),
 
-    brand_learn: tool({
-      description:
-        "Extract a reusable brand profile (palette, moods) from example " +
-        "descriptions. Save the profile wording and reuse it for every cut.",
-      inputSchema: z.object({ examples: z.array(z.string()).min(1) }),
-      execute: async ({ examples }) => brandLearn(examples),
-    }),
 
-    design_analyze: tool({
-      description:
-        "Structured motion-quality audit of the current source: 0-100 score " +
-        "plus up to three specific findings. Deeper than review_motion — " +
-        "call it when you need a number, e.g. for the quality panel.",
-      inputSchema: z.object({}),
-      execute: async () => {
-        const { code, version } = store.current()
-        if (!code) return { error: "Nothing to analyze yet." }
-        return { version, ...designAnalyze(analysisSource(code)) }
-      },
-    }),
 
-    performance_profile: tool({
-      description:
-        "Frame-budget estimate for the current source: score, bottlenecks, " +
-        "and optimization recommendations.",
-      inputSchema: z.object({}),
-      execute: async () => {
-        const { code, version } = store.current()
-        if (!code) return { error: "Nothing to profile yet." }
-        return { version, ...performanceProfile(analysisSource(code)) }
-      },
-    }),
 
-    accessibility_audit: tool({
-      description:
-        "WCAG-oriented audit of the current source: flash risk, reduced-motion " +
-        "path, contrast and caption guidance.",
-      inputSchema: z.object({}),
-      execute: async () => {
-        const { code, version } = store.current()
-        if (!code) return { error: "Nothing to audit yet." }
-        return { version, ...accessibilityAudit(analysisSource(code)) }
-      },
-    }),
 
-    quick_start: tool({
-      description:
-        "FAST PATH: plan + write + validate a DESIGNED composition in ONE model call. " +
-        "Use this FIRST on every new brief — it publishes an art-directed cut immediately " +
-        "(palette + font pair + layout picked from the brief's mood), and follow-up " +
-        "edits refine it. Pass the brief's product/brand/headline words PLUS its mood " +
-        "and length: mood drives the stage, seconds drives the timing. Code, coding, " +
-        "terminal and typewriter briefs automatically get a syntax-highlighted " +
-        "terminal cut — pass the language or command as the headline. Skip this when " +
-        "the brief names a specific mechanic (countdown, waveform, ticker, chart) — " +
-        "those need the full path from scratch.",
-      inputSchema: z.object({
-        product: z.string().optional().describe("Product or hero word shown large."),
-        brand: z.string().optional().describe("Brand word shown in the hero lockup."),
-        headline: z.string().max(140).optional().describe("Headline cascaded per word."),
-        mood: z.string().optional().describe("Brief mood in one word: playful, cinematic, bold, minimal, elegant, tech, romantic."),
-        seconds: z.number().min(2).max(30).optional().describe("Cut length in seconds — timing scales to it."),
-      }),
-      execute: async ({ product, brand, headline, mood, seconds }) => {
-        // Designed golden first, minimal fallback second: a new brief can
-        // never dead-end on "write manually instead" because of a starter bug.
-        const golden = goldenStarter({ product, brand, headline, mood, seconds })
-        let repaired = autoRepairBundle(parseBundle(golden.code).bundle!)
-        let code = serializeBundle(repaired.bundle)
-        let checks = checkComposition(code)
-        let errors = checks.filter((c) => c.level === "error")
-        if (errors.length > 0) {
-          const mini = minimalStarter({ product, brand, headline, seconds })
-          const miniRepaired = autoRepairBundle(parseBundle(mini.code).bundle!)
-          const miniCode = serializeBundle(miniRepaired.bundle)
-          const miniChecks = checkComposition(miniCode)
-          if (!miniChecks.some((c) => c.level === "error")) {
-            store.setPlan(mini.plan)
-            const n = store.write(miniCode, { bumpVersion: true })
-            return {
-              ok: true,
-              version: n,
-              plan: mini.plan,
-              parts: partSummary(miniRepaired.bundle),
-              snippet: jsSnippet(miniRepaired.bundle, 12),
-              warnings: miniChecks.filter((c) => c.level === "warn").map((w) => w.message),
-              fallback: true,
-              note: "Designed starter misfired — shipped the minimal fallback instead. Refine it with edit_file.",
-              next: "Call preview_composition, then read_render_report, then ONE sentence.",
-            }
-          }
-          // Even the minimal starter failed: report the ORIGINAL errors.
-        }
-        if (errors.length > 0) {
-          return {
-            ok: false,
-            error: "Golden starter failed validation — write manually with write_composition instead.",
-            errors: errors.map((e) => e.message),
-          }
-        }
-        store.setPlan(golden.plan)
-        const n = store.write(code, { bumpVersion: true })
-        return {
-          ok: true,
-          version: n,
-          plan: golden.plan,
-          parts: partSummary(repaired.bundle),
-          snippet: jsSnippet(repaired.bundle, 12),
-          warnings: checks.filter((c) => c.level === "warn").map((w) => w.message),
-          ...(repaired.applied.length > 0 ? { autoRepaired: repaired.applied } : {}),
-          next: "Call preview_composition, then read_render_report, then ONE sentence. Do not rewrite what quick_start published — refine it with edit_file.",
-        }
-      },
-    }),
 
     // --- Phase 3: orchestration (§1.2, §5) ---------------------------------
-    blackboard_write: tool({
-      description:
-        "Post one workstream result to the shared blackboard (key + short value) " +
-        "so parallel workstreams coordinate without restating everything through " +
-        "the transcript. Keys like 'design:palette', 'content:assets', 'tech:plan'.",
-      inputSchema: z.object({
-        key: z.string().min(1).max(120),
-        value: z.string().min(1).max(8000),
-      }),
-      execute: async ({ key, value }) => {
-        store.blackboardWrite(key, value)
-        return { ok: true, key }
-      },
-    }),
 
-    blackboard_read: tool({
-      description: "Read one blackboard entry posted by this or another workstream.",
-      inputSchema: z.object({ key: z.string().min(1) }),
-      execute: async ({ key }) => {
-        const value = store.blackboardRead(key)
-        return value === null ? { ok: false, error: `No entry "${key}".` } : { ok: true, key, value }
-      },
-    }),
 
-    blackboard_list: tool({
-      description: "List all blackboard keys with their update order.",
-      inputSchema: z.object({}),
-      execute: async () => ({ keys: store.blackboardList() }),
-    }),
 
-    execute_batch: tool({
-      description:
-        "Run several independent reads/computes in ONE model request instead of " +
-        "one request each: skill loads, canvas, pre-validation, asset/font/intent " +
-        "lookups, audits, template specs. Writes (plan_motion, write_composition, " +
-        "edit_file, preview_composition) are NOT batchable — they stay sequential. " +
-        "This is how a turn drops from 10-12 calls toward 8.",
-      inputSchema: z.object({
-        operations: z
-          .array(z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()).default({}) }))
-          .min(1)
-          .max(10),
-      }),
-      execute: async ({ operations }) => {
-        const results = await Promise.all(
-          operations.map(async (op) => {
-            try {
-              return { tool: op.tool, ok: true, result: await batchExecute(store, op.tool, op.args ?? {}) }
-            } catch (err) {
-              return { tool: op.tool, ok: false, error: err instanceof Error ? err.message : String(err) }
-            }
-          })
-        )
-        return { results }
-      },
-    }),
 
-    prefetch_tools: tool({
-      description:
-        "Turn-start accelerator: predict the lookups this brief will need " +
-        "(intent spec, core skills, fonts, likely assets) and warm the cache " +
-        "for them in one call. Also clears the blackboard for the new turn. " +
-        "Call FIRST on a new brief, then use the returned results directly.",
-      inputSchema: z.object({ brief: z.string().min(1) }),
-      execute: async ({ brief }) => {
-        store.blackboardClear()
-        const predicted = predictTools(brief)
-        const results = await Promise.all(
-          predicted.map(async (op) => {
-            try {
-              return { tool: op.tool, ok: true, result: await batchExecute(store, op.tool, op.args) }
-            } catch (err) {
-              return { tool: op.tool, ok: false, error: err instanceof Error ? err.message : String(err) }
-            }
-          })
-        )
-        return { predicted: predicted.length, results }
-      },
-    }),
 
     // --- Phase 4: content generation (§2.4) --------------------------------
     copy_generate: tool({
@@ -1372,36 +1120,8 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       execute: async ({ brief, tone, length }) => copyGenerate(brief, tone, length),
     }),
 
-    voiceover_generate: tool({
-      description:
-        "Time a voiceover script to the cut: word count, duration fit, and " +
-        "frame cues for beat sync. ElevenLabs is not connected — synthesize " +
-        "externally, sync here.",
-      inputSchema: z.object({
-        script: z.string().min(1),
-        seconds: z.number().min(2).max(30),
-        language: z.string().default("en"),
-      }),
-      execute: async ({ script, seconds, language }) => voiceoverGenerate(script, seconds, language),
-    }),
 
-    music_search: tool({
-      description:
-        "BPM-matched royalty-free bed suggestions with trim/loop math. Offline " +
-        "placeholders — license before publishing.",
-      inputSchema: z.object({
-        mood: z.string(),
-        duration: z.number().min(2).max(900),
-        bpm: z.number().min(40).max(220).optional(),
-      }),
-      execute: async ({ mood, duration, bpm }) => musicSearch(mood, duration, bpm),
-    }),
 
-    sound_effects_library: tool({
-      description: "Contextual SFX suggestion for an action, with timing + level notes.",
-      inputSchema: z.object({ action: z.string().describe("e.g. 'logo pop entrance'") }),
-      execute: async ({ action }) => soundEffects(action),
-    }),
 
     subtitle_generate: tool({
       description:
@@ -1434,192 +1154,23 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
     }),
 
     // --- Phase 4: export & distribution (§2.5) ------------------------------
-    export_preset: tool({
-      description:
-        "Exact render spec for one platform preset (dims, fps, duration, cap " +
-        "check, reframe math). Presets: ig-story, ig-feed, ig-reel, tiktok, " +
-        "youtube, twitter, linkedin, web-hero, png-seq.",
-      inputSchema: z.object({
-        preset: z.string(),
-        totalFrames: z.number().int().min(1).max(CANVAS.maxFrames),
-      }),
-      execute: async ({ preset, totalFrames }) => exportPreset(preset, totalFrames, CANVAS.fps),
-    }),
 
-    export_bundle: tool({
-      description: "The 9-preset bundle plan: render the native master once, reframe per preset.",
-      inputSchema: z.object({
-        totalFrames: z.number().int().min(1).max(CANVAS.maxFrames),
-      }),
-      execute: async ({ totalFrames }) => ({
-        ...exportBundle(totalFrames),
-        presets: EXPORT_PRESETS.map((p) => ({ id: p.id, name: p.name, format: p.format })),
-      }),
-    }),
 
-    cdn_publish: tool({
-      description:
-        "Publish spec: URL scheme, embed code, and the exact R2 binding to add. " +
-        "Honest stub — R2 is not wired, so no file is uploaded.",
-      inputSchema: z.object({ title: z.string().min(1) }),
-      execute: async ({ title }) => cdnPublish(title),
-    }),
 
-    thumbnail_generate: tool({
-      description: "Which frame to capture for the thumbnail (+2 variations) and how.",
-      inputSchema: z.object({
-        frame: z.number().int().min(0),
-        totalFrames: z.number().int().min(1).max(CANVAS.maxFrames),
-      }),
-      execute: async ({ frame, totalFrames }) => thumbnailSpec(frame, totalFrames),
-    }),
 
-    watermark_apply: tool({
-      description: "Watermark Img snippet at a safe-margin position with level guidance.",
-      inputSchema: z.object({
-        position: z.string().default("bottom-right"),
-      }),
-      execute: async ({ position }) => watermarkSpec(position),
-    }),
 
-    analytics_track: tool({
-      description: "Record an advisory event (view, export, share) to composition_analytics.",
-      inputSchema: z.object({
-        event: z.string(),
-        detail: z.string().default(""),
-      }),
-      execute: async ({ event, detail }) => {
-        store.trackEvent(event, detail)
-        return { ok: true, event }
-      },
-    }),
 
-    version_tag: tool({
-      description: "Tag the current version (semver + release notes) for rollback reference.",
-      inputSchema: z.object({
-        tag: z.string().min(1).max(40).describe("e.g. 'v1.0-ig-story'"),
-        notes: z.string().max(1000).default(""),
-      }),
-      execute: async ({ tag, notes }) => {
-        const { version } = store.current()
-        store.tagVersion(version, tag, notes)
-        return { ok: true, version, tag }
-      },
-    }),
 
-    template_save: tool({
-      description:
-        "Save the current plan as a reusable parameterized template on the " +
-        "blackboard for this conversation.",
-      inputSchema: z.object({
-        name: z.string().min(1).max(80),
-      }),
-      execute: async ({ name }) => {
-        const { plan, version } = store.current()
-        if (!plan) return { ok: false, error: "No plan to save — run plan_motion first." }
-        const key = `template:${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
-        store.blackboardWrite(key, JSON.stringify({ name, version, plan }))
-        return { ok: true, key, version, note: "Parameterized by beats — swap assets/palette/copy per use." }
-      },
-    }),
 
     // --- Phase 4: collaboration (§2.6) --------------------------------------
-    share_create: tool({
-      description: "Shareable review link scheme with permission level and expiry.",
-      inputSchema: z.object({
-        permission: z.enum(["view", "comment", "edit"]).default("view"),
-        daysValid: z.number().int().min(1).max(90).default(7),
-      }),
-      execute: async ({ permission, daysValid }) => {
-        // Session id is the DO name; the model does not carry it, so the link
-        // is completed client-side. Track the share event regardless.
-        store.trackEvent("share", permission)
-        return { ...shareCreate("<session>", permission, daysValid), note: "Replace <session> with the conversation id from the URL." }
-      },
-    }),
 
-    comment_add: tool({
-      description: "Add a frame-anchored review comment to this cut's thread.",
-      inputSchema: z.object({
-        frame: z.number().int().min(0),
-        text: z.string().min(1).max(2000),
-      }),
-      execute: async ({ frame, text }) => {
-        const id = store.commentAdd(frame, text, "reviewer")
-        return { ok: true, id, frame }
-      },
-    }),
 
-    feedback_request: tool({
-      description:
-        "Review-invite spec: validated invite list + synthesis format. Email " +
-        "sending is not wired — share the link manually.",
-      inputSchema: z.object({ emails: z.array(z.string()).min(1) }),
-      execute: async ({ emails }) => feedbackRequest(emails),
-    }),
 
-    team_invite: tool({
-      description: "Team role spec for an email. Quotas/SSO are enterprise scope.",
-      inputSchema: z.object({
-        email: z.string(),
-        role: z.enum(["viewer", "editor", "admin"]).default("viewer"),
-      }),
-      execute: async ({ email, role }) => teamInvite(email, role),
-    }),
 
-    activity_log: tool({
-      description:
-        "Full collaboration timeline for this cut: versions, tags, comments.",
-      inputSchema: z.object({}),
-      execute: async () => ({
-        versions: store.versions().map((v) => ({ n: v.n, title: v.plan?.title ?? null })),
-        tags: store.tags(),
-        comments: store.comments(),
-      }),
-    }),
 
     // --- Phase 4: 3D foundation (§7.1) --------------------------------------
-    three_scene_create: tool({
-      description:
-        "Real 3D scene via pinned Three.js CDN in a bundle <canvas>: init() builds " +
-        "the scene, render(t, ctx) drives a t-computed camera rig (orbit/dolly/pan/static). " +
-        "Never requestAnimationFrame inside the bundle — the driver owns the clock.",
-      inputSchema: z.object({
-        kind: z.enum(["orbit", "dolly", "pan", "static"]).default("orbit"),
-        seconds: z.number().min(2).max(30).default(5),
-      }),
-      execute: async ({ kind, seconds }) => threeSceneCreate(kind, seconds),
-    }),
 
-    three_camera_path: tool({
-      description: "Camera keyframe path with per-segment easing, synced to beats.",
-      inputSchema: z.object({
-        type: z.enum(["dolly", "pan", "orbit", "fly-through"]).default("orbit"),
-        // NOTE: no z.tuple here — tuple schemas emit draft-07 `items: [...]`
-        // + `additionalItems`, which OpenAI-compatible providers (novita via
-        // the Vercel gateway) reject with 400 and fail EVERY turn, since all
-        // tools ship on every model call. An [x, y, z] triple is expressed as
-        // a length-3 number array instead; the runtime shape is unchanged.
-        keyframes: z
-          .array(z.array(z.number()).min(3).max(3).describe("One [x, y, z] camera position"))
-          .default([]),
-      }),
-      execute: async ({ type, keyframes }) =>
-        threeCameraPath(type, keyframes as Array<[number, number, number]>),
-    }),
 
-    three_model_animate: tool({
-      description:
-        "3D object animation (rotate/float/entrance), t-driven. " +
-        "Includes a torus-knot fallback that renders with no hosted model; " +
-        ".glb models need an https host with CORS first.",
-      inputSchema: z.object({
-        model: z.string(),
-        animation: z.enum(["rotate", "float", "entrance"]).default("entrance"),
-        seconds: z.number().min(2).max(30).default(5),
-      }),
-      execute: async ({ model, animation, seconds }) => threeModelAnimate(model, animation, seconds),
-    }),
 
     // --- Agent upgrade: motion design system (AGENT_UPGRADE_PLAN Phases 2-3) --
     load_motion_preset: tool({
@@ -1730,71 +1281,6 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
       },
     }),
 
-    auto_enhance_motion: tool({
-      description:
-        "Upgrade linear animations in the current composition to designed motion. " +
-        "Applies three tiers of enhancement: " +
-        "(1) EASING — naked interpolate() calls get Easing.bezier(0.16, 1, 0.3, 1), " +
-        "(2) CLAMPING — interpolate() calls on opacity or scale without extrapolateRight:\"clamp\" " +
-        "get clamped so values never run past 0/1 after the animation ends (most common blank-frame bug), " +
-        "(3) STAGGER REPORT — mapped lists without stagger are reported with the exact fix. " +
-        "Re-validates after; saves only when no new errors appear.",
-      inputSchema: z.object({}),
-      execute: async () => {
-        const loaded = requireBundle(store)
-        if (!loaded.ok) return { ok: false, error: loaded.error }
-        const bundle = { ...loaded.bundle, meta: { ...loaded.bundle.meta } }
-        const src = combinedSource(bundle)
-
-        const enhancements: string[] = []
-
-        // Tier 1: easing on naked ctx.interpolate() calls (clamping is default).
-        const { upgraded: eased, count: easingCount } = applyNakedEasing(bundle.js)
-        if (easingCount > 0) {
-          bundle.js = eased
-          enhancements.push(`Added { easing: ctx.Easing.easeOut } to ${easingCount} linear interpolate() call(s)`)
-        }
-
-        // Tier 2: nothing to clamp — the runtime clamps every interpolate by
-        // default. Report the win instead of rewriting.
-        enhancements.push("Clamping is runtime-default — every interpolate already holds past its window.")
-
-        // Tier 3: report unstaggered lists (loops building elements, no stagger).
-        const staggerSites = findUnstaggeredMaps(src)
-        if (staggerSites > 0) {
-          enhancements.push(
-            `${staggerSites} list(s) still need a stagger — offset each item in time: ` +
-            `ctx.spring(t - (start + i * 0.12), { damping: 18, mass: 0.5, stiffness: 180 })`
-          )
-        }
-
-        if (easingCount === 0 && staggerSites === 0) {
-          return {
-            ok: true,
-            version: store.current().version,
-            enhancements: ["Already designed — every interpolation has easing and stagger."],
-          }
-        }
-
-        if (easingCount > 0) {
-          const code = serializeBundle(bundle)
-          const checks = checkComposition(code)
-          const errors = checks.filter((c) => c.level === "error")
-          if (errors.length > 0) {
-            return {
-              ok: false,
-              error: "Auto-enhance would break the bundle — fix manually instead.",
-              errors: errors.map((e) => e.message),
-            }
-          }
-          const n = store.write(code, { bumpVersion: true })
-          return { ok: true, version: n, parts: partSummary(bundle), enhancements }
-        }
-
-        // Stagger sites need manual intervention — just report
-        return { ok: true, version: store.current().version, enhancements }
-      },
-    }),
 
     verify_no_errors: tool({
       description:
@@ -1838,7 +1324,7 @@ export function buildTools(store: CompositionStore, agent?: Chat): ToolSet {
 }
 
 /**
- * Mechanical repairs applied inline on every write_composition / quick_start,
+ * Mechanical repairs applied inline on every write_composition,
  * so the model never spends a paced round-trip on what is deterministic.
  * Operates per bundle part; same helpers auto_fix_code uses — no drift.
  */
@@ -2131,8 +1617,8 @@ function escapeRegExp(s: string): string {
 }
 
 /**
- * High-confidence easing repair shared by auto_fix_code and
- * auto_enhance_motion. Only touches ctx.interpolate() calls with exactly
+ * High-confidence easing repair shared by auto_fix_code and the inline
+ * write path. Only touches ctx.interpolate() calls with exactly
  * two array args and NO options object (they end in `])`) — anything else
  * is left for the model. The runtime clamps by default, so only easing
  * is added.
@@ -2154,261 +1640,4 @@ function findUnstaggeredMaps(code: string): number {
   const maps = code.match(/\.map\(/g) ?? []
   if (maps.length === 0) return 0
   return /delay|stagger|index\s*[\*\+\-]/.test(code) ? 0 : maps.length
-}
-
-/**
- * Phase 3 batch dispatcher (§5.1.1). Single-implementation rule: every
- * batchable op calls the SAME pure helper as its standalone tool, so batch
- * and solo results can never drift apart. Writes are refused here — batching
- * a mutation would hide its ordering, which is exactly the failure mode the
- * single-cut store exists to prevent.
- */
-async function batchExecute(
-  store: CompositionStore,
-  tool: string,
-  args: Record<string, unknown>
-): Promise<unknown> {
-  const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback)
-  const num = (v: unknown, fallback = 0) => (typeof v === "number" && Number.isFinite(v) ? v : fallback)
-
-  switch (tool) {
-    case "load_skill": {
-      const id = str(args.id)
-      const cached = cacheGet<{ id: string; content: string }>(`skill:${id}`)
-      if (cached) return { ...cached, cached: true }
-      const skill = findSkill(id)
-      if (!skill) throw new Error(`Unknown skill "${id}". Available: ${SKILL_IDS.join(", ")}`)
-      const out = { id: skill.id, content: skill.content.slice(0, skill.id.startsWith("example-") ? 10_000 : 24_000) }
-      cacheSet(`skill:${id}`, out, TTL.skill)
-      return { ...out, cached: false }
-    }
-    case "get_canvas":
-      return { ...CANVAS, currentVersion: store.current().version, hasComposition: store.current().code.length > 0 }
-    case "pre_validate_plan": {
-      const beats = (args.beats as Array<{ from: number; to: number; what: string }>) ?? []
-      const check = preValidatePlan(beats, CANVAS.maxFrames)
-      const solved = constraintSolve(num(args.totalFrames, beats.at(-1)?.to ?? 0), beats, CANVAS.maxFrames)
-      return { ...check, budget: solved.note, suggestedBeats: solved.beats }
-    }
-    case "constraint_solve":
-      return constraintSolve(
-        num(args.totalFrames, 0),
-        (args.beats as Array<{ from: number; to: number; what: string }>) ?? [],
-        CANVAS.maxFrames
-      )
-    case "dependency_resolve":
-      return dependencyResolve((args.imports as string[]) ?? [])
-    case "asset_search": {
-      const key = `asset:${str(args.query)}:${str(args.type, "image")}`
-      const cached = cacheGet<unknown>(key)
-      if (cached) return { ...(cached as object), cached: true }
-      const out = suggestAssets(str(args.query), (args.type as "image" | "video" | "audio") ?? "image")
-      cacheSet(key, out, TTL.asset)
-      return { ...out, cached: false }
-    }
-    case "asset_optimize": {
-      const key = `opt:${str(args.url)}:${str(args.format, "webp")}:${num(args.quality, 80)}`
-      const cached = cacheGet<unknown>(key)
-      if (cached) return { ...(cached as object), cached: true }
-      const out = optimizeAsset(
-        str(args.url),
-        (args.format as "webp" | "avif" | "mp4" | "original") ?? "webp",
-        num(args.quality, 80)
-      )
-      cacheSet(key, out, TTL.asset)
-      return { ...out, cached: false }
-    }
-    case "font_suggest": {
-      const key = `font:${str(args.mood, "modern")}:${str(args.brand)}:${str(args.style)}`
-      const cached = cacheGet<unknown>(key)
-      if (cached) return { ...(cached as object), cached: true }
-      const out = suggestFonts(str(args.mood, "modern"), str(args.brand) || undefined, str(args.style) || undefined)
-      cacheSet(key, out, TTL.asset)
-      return { ...out, cached: false }
-    }
-    case "intent_deep_analyze": {
-      const key = `intent:${str(args.request).slice(0, 200)}`
-      const cached = cacheGet<unknown>(key)
-      if (cached) return { ...(cached as object), cached: true }
-      const out = intentDeepAnalyze(str(args.request))
-      cacheSet(key, out, TTL.intent)
-      return { ...out, cached: false }
-    }
-    case "intent_questionnaire":
-      return intentQuestionnaire(str(args.brief))
-    case "decision_make":
-      return decisionMake(
-        (args.options as string[]) ?? [],
-        (args.criteria as Record<string, number>) ?? undefined,
-        (args.signals as Record<string, Record<string, number>>) ?? undefined
-      )
-    case "preference_apply":
-      return preferenceApply(str(args.decision), (args.profile as Record<string, string>) ?? {})
-    case "brand_learn":
-      return brandLearn((args.examples as string[]) ?? [])
-    case "design_analyze": {
-      const { code, version } = store.current()
-      if (!code) throw new Error("Nothing to analyze yet.")
-      return { version, ...designAnalyze(analysisSource(code)) }
-    }
-    case "performance_profile": {
-      const { code, version } = store.current()
-      if (!code) throw new Error("Nothing to profile yet.")
-      return { version, ...performanceProfile(analysisSource(code)) }
-    }
-    case "accessibility_audit": {
-      const { code, version } = store.current()
-      if (!code) throw new Error("Nothing to audit yet.")
-      return { version, ...accessibilityAudit(analysisSource(code)) }
-    }
-    case "validate_composition": {
-      // NEVER cached: the source changed since the last call by definition.
-      const { code, version } = store.current()
-      if (!code) return { ok: false, errors: ["No composition to validate."], warnings: [] }
-      const checks = checkComposition(code)
-      return {
-        ok: !checks.some((c) => c.level === "error"),
-        version,
-        errors: checks.filter((c) => c.level === "error").map((c) => c.message),
-        warnings: checks.filter((c) => c.level === "warn").map((c) => c.message),
-      }
-    }
-    case "list_versions": {
-      const versions = store.versions()
-      return {
-        current: store.current().version,
-        versions: versions.map((v) => ({
-          n: v.n,
-          lines: v.code.split("\n").length,
-          bytes: v.code.length,
-          title: v.plan?.title ?? null,
-        })),
-      }
-    }
-    case "blackboard_read": {
-      const value = store.blackboardRead(str(args.key))
-      return value === null ? { ok: false, error: `No entry "${str(args.key)}".` } : { ok: true, value }
-    }
-    case "blackboard_list":
-      return { keys: store.blackboardList() }
-    case "copy_generate":
-      return copyGenerate(str(args.brief), str(args.tone, "modern"), num(args.length, 3))
-    case "voiceover_generate":
-      return voiceoverGenerate(str(args.script), num(args.seconds, 15), str(args.language, "en"))
-    case "music_search":
-      return musicSearch(
-        str(args.mood, "modern"),
-        num(args.duration, 30),
-        typeof args.bpm === "number" ? args.bpm : undefined
-      )
-    case "sound_effects_library":
-      return soundEffects(str(args.action, "pop"))
-    case "subtitle_generate":
-      return subtitleGenerate(
-        (args.cues as Array<{ at: number; text: string }>) ?? [],
-        str(args.language, "en")
-      )
-    case "icon_generate":
-      return iconGenerate(str(args.concept, "spark"))
-    case "background_generate":
-      return backgroundGenerate(str(args.style, "gradient"), (args.colors as string[]) ?? undefined)
-    case "export_preset":
-      return exportPreset(str(args.preset, "youtube"), num(args.totalFrames, 150), CANVAS.fps)
-    case "export_bundle":
-      return exportBundle(num(args.totalFrames, 150))
-    case "cdn_publish":
-      return cdnPublish(str(args.title, "cut"))
-    case "thumbnail_generate":
-      return thumbnailSpec(num(args.frame, 0), num(args.totalFrames, 150))
-    case "watermark_apply":
-      return watermarkSpec(str(args.position, "bottom-right"))
-    case "activity_log":
-      return {
-        versions: store.versions().map((v) => ({ n: v.n, title: v.plan?.title ?? null })),
-        tags: store.tags(),
-        comments: store.comments(),
-      }
-    case "three_scene_create":
-      return threeSceneCreate(
-        (args.kind as "orbit" | "dolly" | "pan" | "static") ?? "orbit",
-        num(args.seconds, 5)
-      )
-    case "three_camera_path":
-      return threeCameraPath(
-        (args.type as "dolly" | "pan" | "orbit" | "fly-through") ?? "orbit",
-        (args.keyframes as Array<[number, number, number]>) ?? []
-      )
-    case "three_model_animate":
-      return threeModelAnimate(
-        str(args.model, "model.glb"),
-        (args.animation as "rotate" | "float" | "entrance") ?? "entrance",
-        num(args.seconds, 5)
-      )
-    case "load_motion_preset": {
-      // 50x fix: the batch path allowlisted only the original five beats, so
-      // reveal/cascade/parallax/etc silently fell back to entrance — the batch
-      // and solo results drifted. Accept the full 16-beat vocabulary.
-      const ALL_BEATS = [
-        "entrance", "transition", "settle", "exit", "emphasis",
-        "reveal", "anticipation", "cascade", "text-cascade",
-        "counter", "counter-motion", "hold", "pause", "parallax", "morph", "blend",
-      ]
-      const beat = ALL_BEATS.includes(str(args.beatType)) ? str(args.beatType) : "entrance"
-      const { id, preset } = presetForBeat(beat)
-      const start = num(args.startFrame, 0)
-      const text = str(args.text)
-      const textStyle = (["charByChar", "wordByWord", "maskReveal", "counter"].includes(str(args.textStyle))
-        ? args.textStyle
-        : "charByChar") as "charByChar" | "wordByWord" | "maskReveal" | "counter"
-      return {
-        id,
-        preset,
-        snippet: presetSnippet(id, start),
-        textSnippet: text ? textAnimationSnippet(textStyle, text, start) : null,
-        timing: { duration: preset.duration, easing: preset.easing },
-      }
-    }
-    case "layout_plan": {
-      const engine = new LayoutEngine()
-      const raw = (args.elements as Array<{
-        id?: string
-        type?: string
-        approximate_size?: { width?: number; height?: number }
-      }>) ?? []
-      const els = raw.map((e) => ({
-        id: str(e.id, "element"),
-        type: (["text", "image", "shape", "video"].includes(e.type ?? "") ? e.type : "shape") as ElementType,
-        width: Math.max(1, Math.round(num(e.approximate_size?.width, 100))),
-        height: Math.max(1, Math.round(num(e.approximate_size?.height, 100))),
-      }))
-      const strategy = (["hierarchy", "grid", "stack"].includes(str(args.strategy)) ? args.strategy : "hierarchy") as LayoutStrategy
-      const plan = engine.autoLayout(els, strategy)
-      return { layout: plan.elements, conflicts: plan.conflicts, code_hints: plan.codeHints }
-    }
-    case "verify_no_errors": {
-      // Read-only gate — safe to batch; NEVER cached (the source just changed).
-      const { code, version } = store.current()
-      if (!code) return { ok: false, blocking: true, errors: ["No composition yet."], warnings: [] }
-      const checks = checkComposition(code)
-      const errors = checks.filter((c) => c.level === "error").map((c) => c.message)
-      const layoutWarnings = checks
-        .filter((c) => c.level === "warn" && /overflow|overlap|z-index|zIndex|off-canvas/i.test(c.message))
-        .map((c) => c.message)
-      if (errors.length > 0 || layoutWarnings.length > 0) {
-        return {
-          ok: false,
-          blocking: true,
-          errors,
-          warnings: layoutWarnings,
-          instruction: "DO NOT PREVIEW. Fix these issues with edit_file or write_composition first.",
-        }
-      }
-      return { ok: true, version, ready: true }
-    }
-    default:
-      throw new Error(
-        `"${tool}" is not batchable. Batch reads/computes; keep writes ` +
-          `(plan_motion, write_composition, edit_file, preview_composition, restore_version, auto_fix_code) sequential.`
-      )
-  }
 }

@@ -6,7 +6,7 @@ import { Conversation } from "~/components/Conversation";
 import { ExportDialog } from "~/components/ExportDialog";
 import { Stage } from "~/components/Stage";
 import { suggest } from "~/components/Timeline";
-import { fetchComposition, publishStarter, type MotionPlan } from "~/lib/composition";
+import { fetchComposition, type MotionPlan } from "~/lib/composition";
 import { DEMO_CODE, DEMO_PLAN } from "~/lib/demo";
 import { openExport } from "~/lib/exportPresets";
 import { motionApi } from "~/lib/stack";
@@ -119,8 +119,8 @@ export default function Studio() {
 
   // Handoff from /create: a pending package fires exactly once, and only
   // into a provably fresh session — never into ongoing work. Briefs land
-  // in the Direct draft for one last look; instant starters publish right
-  // away since the user already picked them.
+  // in the Direct draft for one last look; the agent designs every cut
+  // fresh from the brief (no templates, no starters).
   const consumed = useRef(false);
   useEffect(() => {
     if (DEMO || consumed.current || !booted || busy || hasCut) return;
@@ -157,10 +157,11 @@ export default function Studio() {
         }
         window.dispatchEvent(new CustomEvent("motion:suggest", { detail: p.text }));
         setMobileView("direct");
-      } else if (p.kind === "instant") {
-        void publishStarter(sessionId, p.headline ? { headline: p.headline } : {})
-          .then(() => reload())
-          .catch(() => undefined);
+      } else if (p.kind === "instant" && p.headline) {
+        // Legacy package from before starters were removed: treat the
+        // headline as a brief so nothing is lost.
+        window.dispatchEvent(new CustomEvent("motion:suggest", { detail: p.headline }));
+        setMobileView("direct");
       }
     } catch {
       /* malformed package — ignore */

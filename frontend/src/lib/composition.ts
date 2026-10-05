@@ -49,25 +49,6 @@ export async function fetchComposition(
   return { code: data.code ?? "", plan: data.plan ?? null, version: data.version ?? 0 }
 }
 
-/**
- * Instant starter: publishes the golden composition with zero model calls.
- * The player renders it immediately; the agent refines it from there.
- */
-export async function publishStarter(
-  instance: string,
-  context: { product?: string; brand?: string; headline?: string; mood?: string; seconds?: number } = {},
-  signal?: AbortSignal
-): Promise<{ ok: boolean; version: number; title?: string }> {
-  const res = await fetch(agentUrl(instance, "starter"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(context),
-    signal,
-  })
-  if (!res.ok) throw new Error(`starter ${res.status}`)
-  return (await res.json()) as { ok: boolean; version: number; title?: string }
-}
-
 export interface VersionSummary {
   n: number
   lines: number

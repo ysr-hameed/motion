@@ -21,7 +21,6 @@ function gatewayRpm(env: Env): number {
 }
 import { queueTurnSync } from "./lib/do-sync"
 import { buildTools, CANVAS } from "./remotion/tools"
-import { goldenStarter } from "./remotion/templates"
 import { SKILL_IDS } from "./remotion/skills.generated"
 import { DISPLAY_FACES, MAX_FONT, MIN_FONT, SAFE_MARGIN, TEXT_FACES, TYPE_SCALE } from "./remotion/type"
 import { CompositionStore } from "./remotion/store"
@@ -238,14 +237,13 @@ const FRAME_RANGE = `frames 0 to ${CANVAS.maxFrames - 1}`
  * Workflow decision tree (the prompt itself is the source of truth; this
  * comment is for the engineer, not the model):
  *
- *   NEW BRIEF (FAST PATH — default)
-  *     quick_start → preview_composition → read_render_report
- *     → ONE SENTENCE   (3 tool calls; golden file already has spring,
- *     easing, clamps, stagger, Fonts.*, Lucide namespace)
- *     Refine AFTER the verified preview with edit_file — never rewrite.
+ *   NEW BRIEF (FULL PATH — the only path, no templates)
+ *     creative_direct → skills (creative-direction + cinematic-motion + beats)
+ *     → plan_motion → write_composition → verify → preview → report
+ *     → ONE SENTENCE. Refine AFTER the verified preview with edit_file.
  *
- *   NEW BRIEF (FULL PATH — only when no template fits)
- *     intent_deep_analyze → layout_plan (2+ elements)
+ *   FULL PATH details
+ *     layout_plan (2+ elements)
  *     → load_motion_preset per beat → plan_motion
  *     → write_composition (auto-repairs inline) → verify_no_errors [BLOCKING]
  *     → preview_composition → read_render_report → ONE SENTENCE
@@ -292,6 +290,12 @@ Wall-clock (Date.now, performance.now, setInterval), Math.random(), event
 handlers, and CSS keyframes on their own clock all break scrub and export —
 the validator refuses them. In render(), start with \`var f = ctx.frame;\`
 and read windows in frames, springs in seconds: ctx.spring(t - startSec, {...}).
+VANILLA ONLY — plain browser JavaScript (document, getElementById, style,
+Math). NEVER React/JSX/TSX: no <div> in JS, no className (use class in html),
+no hooks, no components, no export/import, no framework code of any kind.
+If it would not run pasted into a blank <script> tag, it does not belong.
+The validator refuses framework code — write vanilla the first time, not
+after a rejection round.
 Fonts: cite Google families by name in CSS (font-family: 'Unbounded') — the
 runtime auto-loads them. NEVER system-ui/sans-serif/Arial/Helvetica/Inter/Roboto.
 Icons: inline <svg> ONLY (24×24, stroke=currentColor). No icon packages exist
@@ -314,7 +318,7 @@ lines of render() — not a framework. Rules:
   helper factories, no clever nesting. One statement per line. If render()
   passes ~80 lines, cut scope instead of adding machinery.
 - The goldens show the CEILING. Simple briefs land far BELOW it.
-- When in doubt: quick_start + 1-2 small edits beats a from-scratch rewrite.
+- When in doubt: write the smallest cut that tells the story, then 1-2 small edits — never a from-scratch rewrite of a verified cut.
 - Banned in bundle JS: HTML-looking sequences (\`<!--\`, \`<script\`) even in
   comments — they corrupt the preview document. Write plain \`// Section: x\`
   comments instead.
@@ -338,44 +342,33 @@ NARRATIVE: frame 1 has a focal element. Info arrives in order of importance.
   Final frame resolves — never a hard stop mid-motion.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WORKFLOW — be economical. FAST PATH is 3 calls: quick_start → preview → report.
+WORKFLOW — ONE PATH, every brief, every time. No templates, no shortcuts:
+every cut is designed fresh from the brief or it reads generic.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────
 ANOTHER VARIANT ("make this another type", "different style", "try X"):
-quick_start with a DIFFERENT mood word + same product/headline/seconds,
-then preview → report. NEVER the full path — new skills, presets and plans
-for a restyle burn minutes for what one call already does. The starter
-picks palette + fonts + layout FROM THE MOOD, so a new mood IS a new cut.
-Only go full path when the user names a new MECHANIC (typewriter,
-countdown, ticker, chart) the current shape cannot do.
+full path below with a DIFFERENT mood word + same product/headline/seconds.
+A new mood IS a new cut — new direction, new plan, new code. Never restyle
+by editing colors alone; re-direct from step 1.
 
-NEW BRIEF — FAST PATH (default, 3 calls):
-1. quick_start(product, headline, mood, seconds) — plans+writes+validates a
-   DESIGNED cut in one call: palette + font pair + layout are picked from
-   the mood, timing from seconds. Always pass mood (one word) and seconds.
-   SKIP quick_start when the brief names a specific mechanic (countdown,
-   waveform, ticker, chart): the starter is the wrong shape and you will
-   rewrite it anyway — go FULL PATH. Lower-thirds, typewriter and kinetic
-   masks HAVE starters (overlay / terminal / mask variants) — use them.
-   SKIP prefetch_tools, intent_deep_analyze, layout_plan, load_motion_preset, plan_motion.
-2. preview_composition() — only after quick_start ok:true
-3. read_render_report() — waits for browser compile+mount
-4. ONE SENTENCE — state the verified result and stop.
-Refine AFTER verified preview with edit_file. NEVER rewrite a verified cut.
-
-NEW BRIEF — FULL PATH (only when no template fits):
+NEW BRIEF — FULL PATH (the only path):
 1. creative_direct(brief) — intent+palette+fonts+beat→preset map in ONE call.
    Then layout_plan(...) when 2+ elements share the frame.
-   Load the FIRST example skill it names before writing — imitate its
-   structure/timing/easing, converted to bundle scope (markup + CSS + render(t, ctx)).
-   NEVER write ctx.spring()/ctx.Easing.bezier() values from memory — copy from presets.
-   load_skill("creative-direction") once; "kinetic-typography" when type-led;
-   "cinematic-motion" for aliveness; "layout-composition" for 3+ elements.
-2. plan_motion(beats) — real frame numbers, real props, real easing
-3. write_composition(html, css, js, duration, title) — WHOLE bundle; mechanical repairs apply inline.
-4. verify_no_errors — ★ BLOCKING GATE
-5. preview_composition() — only after verify_no_errors ok:true
-6. read_render_report()
-7. ONE SENTENCE
+2. SKILLS — MANDATORY, same turn, before writing. Load ALL of these every cut:
+   load_skill("creative-direction") + load_skill("cinematic-motion"), PLUS every
+   beat-matched skill creative_direct names ("kinetic-typography" when type-led,
+   "code-syntax" for terminal, "charts-data-viz" for data, "captions" for dialogue,
+   "layout-composition" for 3+ elements, "web-3d" for 3D, "typography" for font
+   decisions). Skills are the taste — a cut written without them reads generic.
+   NEVER write ctx.spring()/ctx.Easing.bezier()/timing values from memory — copy
+   numbers from load_motion_preset + skills, per beat.
+3. plan_motion(beats) — real frame numbers, real props, real easing
+4. write_composition(html, css, js, duration, title) — WHOLE bundle, vanilla ONLY
+   (markup + CSS + render(t, ctx)); mechanical repairs apply inline.
+5. verify_no_errors — ★ BLOCKING GATE
+6. preview_composition() — only after verify_no_errors ok:true
+7. read_render_report()
+8. ONE SENTENCE
+Refine AFTER verified preview with edit_file. NEVER rewrite a verified cut.
 
 FOLLOW-UP EDIT: read_file → edit_file/bulk_edit → validate_composition →
   verify_no_errors [BLOCKING] → preview_composition → read_render_report → ONE SENTENCE
@@ -388,7 +381,7 @@ QUALITY GATES ★ NON-NEGOTIABLE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ★ verify_no_errors ok:true REQUIRED before preview_composition. Blocks on errors
   AND failed player report. Layout warnings are advisory — fix only if cheap.
-★ Auto-fix: validate → auto_fix_code/auto_enhance → verify_no_errors. Max TWO rounds.
+★ Auto-fix: validate → auto_fix_code → verify_no_errors. Max TWO rounds.
 ★ Must contain: ≥1 ctx.spring(), easing on every animated element,
   stagger (start + i×4-6f) in every generated list, no
   system-ui/sans-serif/Arial/Helvetica/Inter/Roboto font-family (validator error).
@@ -635,8 +628,7 @@ function pendingReadsSinceChange(
         if (
           call?.toolName === "write_composition" ||
           call?.toolName === "edit_file" ||
-          call?.toolName === "bulk_edit" ||
-          call?.toolName === "quick_start"
+          call?.toolName === "bulk_edit"
         ) {
           pending = 0
         }
@@ -691,34 +683,6 @@ export class Chat extends AIChatAgent<Env, ChatState> {
     if (path.endsWith("/composition")) {
       const { code, plan, version } = store.current()
       return Response.json({ code, plan, version })
-    }
-
-    // Instant starter: publish a golden composition with ZERO model calls, so
-    // the user sees designed motion in under 2s while the agent refines it.
-    // Goldens are pre-validated files (spring, easing, clamps, stagger), the
-    // same ones quick_start publishes — the agent then edits, never rewrites.
-    if (path.endsWith("/starter") && request.method === "POST") {
-      try {
-        const body = (await request.json()) as {
-          product?: string
-          brand?: string
-          headline?: string
-          mood?: string
-          seconds?: number
-        }
-        const golden = goldenStarter({
-          ...(body.product ? { product: body.product.slice(0, 60) } : {}),
-          ...(body.brand ? { brand: body.brand.slice(0, 60) } : {}),
-          ...(body.headline ? { headline: body.headline.slice(0, 140) } : {}),
-          ...(body.mood ? { mood: body.mood.slice(0, 30) } : {}),
-          ...(typeof body.seconds === "number" ? { seconds: Math.min(30, Math.max(2, Math.round(body.seconds))) } : {}),
-        })
-        store.setPlan(golden.plan)
-        const n = store.write(golden.code, { bumpVersion: true })
-        return Response.json({ ok: true, version: n, title: golden.plan.title })
-      } catch {
-        return Response.json({ ok: false, error: "bad starter request" }, { status: 400 })
-      }
     }
 
     // The browser posts render reports for every published version: compile
@@ -1068,18 +1032,17 @@ export class Chat extends AIChatAgent<Env, ChatState> {
         if (
           chatCodeDumped(steps) &&
           !calls.includes("write_composition") &&
-          !calls.includes("quick_start") &&
           !calls.includes("edit_file") &&
           !calls.includes("bulk_edit")
         ) {
           return { toolChoice: { type: "tool", toolName: "write_composition" } }
         }
-        // Speed fix: NO forced review_motion. write_composition already
-        // refuses basic motion (linear-only, stagger-less maps) and runs
-        // mechanical repairs inline — forcing a review after every write
-        // cost a full extra model round-trip for little signal. The model
-        // can still call review_motion when a cut feels flat, but the fast
-        // path (quick_start → preview → report) stays at 3 calls.
+        // NO forced review_motion. write_composition already refuses basic
+        // motion (linear-only, stagger-less lists) and runs mechanical
+        // repairs inline — forcing a review after every write cost a full
+        // extra model round-trip for little signal. The model still calls
+        // review_motion when a cut feels flat, and the workflow REQUIRES the
+        // skill loads before writing.
         if (!calls.includes("preview_composition")) return { toolChoice: "auto" }
         const read = lastReadStatus(steps)
         if (read === null) {
