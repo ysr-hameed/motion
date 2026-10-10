@@ -24,8 +24,8 @@ importers:
         specifier: ^0.12.0
         version: 0.12.0(@ai-sdk/react@4.0.130(react@19.3.0)(zod@4.6.5))(agents@0.24.0(@ai-sdk/react@4.0.130(react@19.3.0)(zod@4.6.5))(@babel/core@8.0.6)(@babel/runtime@7.29.7)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(ai@7.0.127(zod@4.6.5))(react@19.3.0)(rolldown@1.2.12)(vite@8.3.2(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.5))(ai@7.0.127(zod@4.6.5))(react@19.3.0)
       '@slyxup/core':
-        specifier: 3.0.1
-        version: 3.0.1
+        specifier: 3.2.0
+        version: 3.2.0
       agents:
         specifier: ^0.24.0
         version: 0.24.0(@ai-sdk/react@4.0.130(react@19.3.0)(zod@4.6.5))(@babel/core@8.0.6)(@babel/runtime@7.29.7)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(ai@7.0.127(zod@4.6.5))(react@19.3.0)(rolldown@1.2.12)(vite@8.3.2(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.5)
@@ -55,11 +55,11 @@ importers:
         specifier: ^0.12.0
         version: 0.12.0(@ai-sdk/react@4.0.130(react@19.3.0)(zod@4.6.5))(agents@0.24.0(@ai-sdk/react@4.0.130(react@19.3.0)(zod@4.6.5))(@babel/core@8.0.6)(@babel/runtime@7.29.7)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(ai@7.0.127(zod@4.6.5))(react@19.3.0)(rolldown@1.2.12)(vite@8.3.2(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.5))(ai@7.0.127(zod@4.6.5))(react@19.3.0)
       '@slyxup/core':
-        specifier: 3.0.1
-        version: 3.0.1
+        specifier: 3.2.0
+        version: 3.2.0
       '@slyxup/ui':
-        specifier: 3.0.1
-        version: 3.0.1(react@19.3.0)
+        specifier: 3.2.0
+        version: 3.2.0(react@19.3.0)
       agents:
         specifier: ^0.24.0
         version: 0.24.0(@ai-sdk/react@4.0.130(react@19.3.0)(zod@4.6.5))(@babel/core@8.0.6)(@babel/runtime@7.29.7)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.5))(@modelcontextprotocol/server@2.0.0)(ai@7.0.127(zod@4.6.5))(react@19.3.0)(rolldown@1.2.12)(vite@8.3.2(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.5)
@@ -1065,11 +1065,11 @@ packages:
     resolution: {integrity: sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw==}
     engines: {node: '>=18'}
 
-  '@slyxup/core@3.0.1':
-    resolution: {integrity: sha512-Ri7RXGXyOT5PiJi3UwcpXd5M2l9rpcu9DZoB4fwImZVaiumMuWEU2jBZZBqVPZdasCy1BtKdCZ42EtyjFO/UAQ==}
+  '@slyxup/core@3.2.0':
+    resolution: {integrity: sha512-3l9bIx6UAM4gsZE0XjkrEYEmk3ef7CAPFVNb6MwgDOitr8A1w2fGx7JD1qLLiUm6s3nbDwydUBZ2NxUImCNACw==}
 
-  '@slyxup/ui@3.0.1':
-    resolution: {integrity: sha512-bfwT2E+R6yCzY76iqqxneYwe5g5wv2Yr24uX3Ar+PlQKdLR0umg3OOClgzqUxdVwg8/Rh5hdfJbVFqDLTy9KLQ==}
+  '@slyxup/ui@3.2.0':
+    resolution: {integrity: sha512-ftJRxm+5D+7yLIoYeapOdD9xhRkcyBDf/fubbYTAY2tA4/T9aF7xxduhnJI/eccEtaxK4EzAumRl47G6Ulg4dA==}
     peerDependencies:
       react: ^18 || ^19
 
@@ -3029,11 +3029,11 @@ snapshots:
 
   '@sindresorhus/is@7.2.0': {}
 
-  '@slyxup/core@3.0.1': {}
+  '@slyxup/core@3.2.0': {}
 
-  '@slyxup/ui@3.0.1(react@19.3.0)':
+  '@slyxup/ui@3.2.0(react@19.3.0)':
     dependencies:
-      '@slyxup/core': 3.0.1
+      '@slyxup/core': 3.2.0
       react: 19.3.0
 
   '@speed-highlight/core@1.2.24': {}

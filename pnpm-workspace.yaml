@@ -15,4 +15,6 @@ minimumReleaseAgeExclude:
   - "@ai-sdk/react@4.0.130"
   - "ai@7.0.127"
   - "vite@8.3.2"
+  - '@slyxup/core@3.2.0'
+  - '@slyxup/ui@3.2.0'
 minimumReleaseAgeStrict: false
